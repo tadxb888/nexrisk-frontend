@@ -1,0 +1,358 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   NEXRISK INSTITUTIONAL THEME
+   Bloomberg-style dark terminal aesthetic
+   ============================================ */
+
+@layer base {
+  :root {
+    /* CSS Variables for JS access */
+    --bg-primary: #0d0d0e;
+    --bg-secondary: #141416;
+    --bg-tertiary: #1a1a1c;
+    --surface: #1e1e21;
+    --border: #2d2d32;
+    --text-primary: #e6e6e6;
+    --text-secondary: #a0a0a8;
+    --accent: #2d7a7a;
+    --risk-critical: #8b4444;
+    --risk-high: #8b6644;
+    --risk-medium: #8b8644;
+    --risk-low: #448b55;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  body {
+    @apply bg-background text-text-primary font-sans;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-background-secondary;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-muted;
+  }
+}
+
+@layer components {
+  /* Panel/Card styling */
+  .panel {
+    @apply bg-surface border border-border rounded;
+  }
+
+  .panel-header {
+    @apply px-4 py-3 border-b border-border flex items-center justify-between;
+  }
+
+  .panel-body {
+    @apply p-4;
+  }
+
+  /* Button variants */
+  .btn {
+    @apply px-3 py-1.5 rounded text-sm font-medium transition-colors;
+    @apply focus:outline-none focus:ring-2 focus:ring-border-focus focus:ring-offset-1 focus:ring-offset-background;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-text-primary hover:bg-accent-hover;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-text-secondary hover:bg-surface-hover hover:text-text-primary;
+  }
+
+  .btn-icon {
+    @apply p-2 rounded hover:bg-surface-hover transition-colors;
+  }
+
+  /* Risk badges - text based, no excessive styling */
+  .badge {
+    @apply px-2 py-0.5 rounded text-xs font-medium;
+  }
+
+  .badge-critical {
+    @apply bg-risk-critical-bg text-risk-critical border border-risk-critical-border;
+  }
+
+  .badge-high {
+    @apply bg-risk-high-bg text-risk-high border border-risk-high-border;
+  }
+
+  .badge-medium {
+    @apply bg-risk-medium-bg text-risk-medium border border-risk-medium-border;
+  }
+
+  .badge-low {
+    @apply bg-risk-low-bg text-risk-low border border-risk-low-border;
+  }
+
+  /* Status dots */
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  .status-dot-critical {
+    @apply bg-risk-critical;
+  }
+
+  .status-dot-high {
+    @apply bg-risk-high;
+  }
+
+  .status-dot-medium {
+    @apply bg-risk-medium;
+  }
+
+  .status-dot-low {
+    @apply bg-risk-low;
+  }
+
+  .status-dot-neutral {
+    @apply bg-text-muted;
+  }
+
+  /* Nav item styling */
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2 rounded text-sm text-text-secondary;
+    @apply hover:bg-surface-hover hover:text-text-primary transition-colors;
+  }
+
+  .nav-item-active {
+    @apply bg-accent-subtle text-accent border-l-2 border-accent;
+  }
+
+  /* Input fields */
+  .input {
+    @apply bg-background-tertiary border border-border rounded px-3 py-2 text-sm text-text-primary;
+    @apply placeholder:text-text-muted;
+    @apply focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
+  }
+
+  /* Select dropdown */
+  .select {
+    @apply bg-background-tertiary border border-border rounded px-3 py-2 text-sm text-text-primary;
+    @apply focus:outline-none focus:border-accent cursor-pointer;
+  }
+
+  /* Monospace numbers */
+  .mono {
+    @apply font-mono tabular-nums;
+  }
+
+  /* P&L coloring */
+  .pnl-positive {
+    @apply text-pnl-positive;
+  }
+
+  .pnl-negative {
+    @apply text-pnl-negative;
+  }
+
+  .pnl-neutral {
+    @apply text-pnl-neutral;
+  }
+}
+
+/* ============================================
+   AG-GRID ENTERPRISE DARK THEME
+   Institutional styling
+   ============================================ */
+
+.ag-theme-nexrisk {
+  --ag-background-color: #141416;
+  --ag-foreground-color: #e6e6e6;
+  --ag-header-background-color: #1a1a1c;
+  --ag-header-foreground-color: #a0a0a8;
+  --ag-border-color: #2d2d32;
+  --ag-secondary-border-color: #232328;
+  --ag-row-hover-color: #1e1e21;
+  --ag-selected-row-background-color: #1a3d3d;
+  --ag-odd-row-background-color: #141416;
+  --ag-header-column-resize-handle-color: #2d7a7a;
+  --ag-range-selection-border-color: #2d7a7a;
+  --ag-input-focus-border-color: #2d7a7a;
+  --ag-checkbox-checked-color: #2d7a7a;
+  --ag-toggle-button-on-background-color: #2d7a7a;
+  --ag-cell-horizontal-border: solid #232328;
+  
+  /* Font settings - readable sizes */
+  --ag-font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --ag-font-size: 13px;
+  --ag-header-height: 36px;
+  --ag-row-height: 32px;
+  --ag-list-item-height: 28px;
+  
+  /* Grid chrome */
+  --ag-card-radius: 4px;
+  --ag-card-shadow: none;
+  --ag-popup-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  
+  /* Icon sizing */
+  --ag-icon-size: 14px;
+  --ag-row-group-indent-size: 20px;
+}
+
+.ag-theme-nexrisk .ag-root-wrapper {
+  border: 1px solid var(--ag-border-color);
+  border-radius: 4px;
+}
+
+.ag-theme-nexrisk .ag-header {
+  border-bottom: 1px solid var(--ag-border-color);
+}
+
+.ag-theme-nexrisk .ag-header-cell {
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ag-theme-nexrisk .ag-cell {
+  display: flex;
+  align-items: center;
+}
+
+/* Row grouping styles */
+.ag-theme-nexrisk .ag-group-expanded .ag-icon-tree-closed {
+  display: none;
+}
+
+.ag-theme-nexrisk .ag-group-contracted .ag-icon-tree-open {
+  display: none;
+}
+
+.ag-theme-nexrisk .ag-row-group {
+  font-weight: 500;
+}
+
+/* Status bar */
+.ag-theme-nexrisk .ag-status-bar {
+  background-color: #1a1a1c;
+  border-top: 1px solid var(--ag-border-color);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Side panel (column/filter tools) */
+.ag-theme-nexrisk .ag-side-bar {
+  background-color: #141416;
+  border-left: 1px solid var(--ag-border-color);
+}
+
+.ag-theme-nexrisk .ag-side-button {
+  color: #a0a0a8;
+}
+
+.ag-theme-nexrisk .ag-side-button-button:hover {
+  background-color: #1e1e21;
+}
+
+/* Context menu */
+.ag-theme-nexrisk .ag-menu {
+  background-color: #1a1a1c;
+  border: 1px solid #2d2d32;
+}
+
+.ag-theme-nexrisk .ag-menu-option:hover {
+  background-color: #1e1e21;
+}
+
+/* Cell styling for P&L values */
+.ag-theme-nexrisk .cell-pnl-positive {
+  color: #448b55;
+}
+
+.ag-theme-nexrisk .cell-pnl-negative {
+  color: #8b4444;
+}
+
+/* Risk level cell backgrounds */
+.ag-theme-nexrisk .cell-risk-critical {
+  background-color: #2d1f1f;
+  color: #8b4444;
+}
+
+.ag-theme-nexrisk .cell-risk-high {
+  background-color: #2d251f;
+  color: #8b6644;
+}
+
+.ag-theme-nexrisk .cell-risk-medium {
+  background-color: #2d2c1f;
+  color: #8b8644;
+}
+
+.ag-theme-nexrisk .cell-risk-low {
+  background-color: #1f2d22;
+  color: #448b55;
+}
+
+/* Pinned columns */
+.ag-theme-nexrisk .ag-pinned-left-cols-container {
+  border-right: 2px solid #2d7a7a;
+}
+
+.ag-theme-nexrisk .ag-pinned-right-cols-container {
+  border-left: 2px solid #2d7a7a;
+}
+
+/* Loading overlay */
+.ag-theme-nexrisk .ag-overlay-loading-wrapper {
+  background-color: rgba(13, 13, 14, 0.8);
+}
+
+.ag-theme-nexrisk .ag-overlay-loading-center {
+  background-color: #1e1e21;
+  border: 1px solid #2d2d32;
+  border-radius: 4px;
+  padding: 16px 24px;
+  color: #e6e6e6;
+}
+
+/* No rows overlay */
+.ag-theme-nexrisk .ag-overlay-no-rows-wrapper {
+  background-color: transparent;
+}
+
+/* Filter styling */
+.ag-theme-nexrisk .ag-filter-toolpanel-header {
+  background-color: #1a1a1c;
+}
+
+.ag-theme-nexrisk input[type="text"],
+.ag-theme-nexrisk input[type="number"] {
+  background-color: #0d0d0e;
+  border: 1px solid #2d2d32;
+  color: #e6e6e6;
+}
+
+.ag-theme-nexrisk input:focus {
+  border-color: #2d7a7a;
+  outline: none;
+}
