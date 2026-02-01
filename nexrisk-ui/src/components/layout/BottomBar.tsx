@@ -71,7 +71,7 @@ export function BottomBar() {
   }, [health, isError, setHealth, setConnected]);
 
   return (
-    <footer className="h-7 bg-background-secondary border-t border-border flex items-center justify-between px-4 text-xs shrink-0">
+    <footer className="h-7 bg-[#313032] border-t border-[#808080] flex items-center justify-between px-4 text-xs shrink-0">
       {/* Left Section - Server Resources */}
       <div className="flex items-center gap-4">
         <StatusItem 

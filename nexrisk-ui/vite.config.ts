@@ -10,14 +10,14 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: 5174,
     proxy: {
       '/api': {
-        target: 'http://localhost:8090',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://localhost:8090',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
     },
@@ -30,11 +30,7 @@ export default defineConfig({
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
           query: ['@tanstack/react-query'],
-          grid: [
-            '@ag-grid-community/core',
-            '@ag-grid-community/react',
-            '@ag-grid-community/client-side-row-model',
-          ],
+          grid: ['ag-grid-community', 'ag-grid-enterprise', 'ag-grid-react'],
           charts: ['recharts'],
         },
       },

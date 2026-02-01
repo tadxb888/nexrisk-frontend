@@ -12,76 +12,72 @@ export default {
         
         // Base Palette (Structural)
         background: {
-          DEFAULT: '#0d0d0e',      // Primary: Deep charcoal/near-black
-          secondary: '#141416',    // Secondary panels: Dark slate
-          tertiary: '#1a1a1c',     // Elevated surfaces
+          DEFAULT: '#0b0c0e',      // Slightly cleaner near-black (less muddy)
+          secondary: '#121318',    // Lifted a touch for separation
+          tertiary: '#171820',     // Slight lift for elevated surfaces
         },
         
         surface: {
-          DEFAULT: '#1e1e21',      // Card/panel backgrounds
-          hover: '#252528',        // Hover states
-          active: '#2a2a2e',       // Active/selected states
+          DEFAULT: '#1b1c22',      // Slight lift: better contrast with text
+          hover: '#23242b',        // More noticeable hover
+          active: '#2a2b33',       // More visible active
         },
         
         border: {
-          DEFAULT: '#2d2d32',      // Primary borders
-          muted: '#232328',        // Subtle dividers
-          focus: '#3d5a5a',        // Focus rings (accent-derived)
+          DEFAULT: '#44454f',      // Brighter borders for definition
+          muted: '#323340',        // Subtle but still visible
+          focus: '#57b3b3',        // Brighter focus ring for accessibility
         },
         
-        // Text Colors
+        // Text Colors - MAXIMUM READABILITY
         text: {
-          primary: '#e6e6e6',      // Off-white - high readability
-          secondary: '#a0a0a8',    // Muted gray - labels/metadata
-          muted: '#6b6b73',        // Very muted - hints/disabled
-          inverse: '#0d0d0e',      // For light backgrounds
+          primary: '#ffffff',      // Keep pure white
+          secondary: '#e2e4ec',    // Brighter secondary (much easier on dark)
+          muted: '#d2d6e2',        // Muted still clearly readable
+          inverse: '#0b0c0e',      // Match updated background
         },
         
-        // Brand Accent (Deep Teal - ONE accent color)
+        // Brand Accent (Deep Teal - brighter for visibility)
         accent: {
-          DEFAULT: '#2d7a7a',      // Primary accent
-          hover: '#358888',        // Hover state
-          muted: '#1f5555',        // Muted variant
-          subtle: '#1a3d3d',       // Very subtle backgrounds
+          DEFAULT: '#49b3b3',      // Brighter teal for legibility on dark
+          hover: '#63c7c7',        // Clearer hover
+          muted: '#2f8f8f',        // Muted but still readable
+          subtle: '#163a3a',       // Subtle bg, slightly clearer than before
         },
         
-        // Semantic Colors (ALL with 10-20% gray blend as per guidelines)
-        // "Never use red/green as pure saturation"
+        // Semantic Colors - BRIGHTER for readability
+        // Still muted per guidelines but clearly visible
         
         risk: {
-          // Critical: Muted red (not neon)
-          critical: '#8b4444',     // Text/icons
-          'critical-bg': '#2d1f1f', // Background
-          'critical-border': '#4a2828', // Border
-          
-          // High: Orange/Amber (warning, not panic)
-          high: '#8b6644',
-          'high-bg': '#2d251f',
-          'high-border': '#4a3828',
-          
-          // Medium: Gold/Yellow (muted)
-          medium: '#8b8644',
-          'medium-bg': '#2d2c1f',
-          'medium-border': '#4a4628',
-          
-          // Low: Deep Green (avoid bright lime)
-          low: '#448b55',
-          'low-bg': '#1f2d22',
-          'low-border': '#284a30',
-        },
+        // Critical: Stronger red emphasis
+        critical: '#ff6b6b',        // was #e06666 → more punch, still professional
+        'critical-bg': '#2c1417',   // slightly deeper bg for contrast
+        'critical-border': '#7a2f36', // clearer border definition
         
-        // P&L Colors (also muted)
-        pnl: {
-          positive: '#448b55',     // Deep green
-          negative: '#8b4444',     // Muted red
-          neutral: '#6b6b73',      // Gray
-        },
+        high: '#e09a55',
+        'high-bg': '#2a2016',
+        'high-border': '#6a4a2f',
+        
+        medium: '#e0d066',
+        'medium-bg': '#2a2816',
+        'medium-border': '#6a6530',
+        
+        low: '#66e07a',
+        'low-bg': '#162a1c',
+        'low-border': '#2f6a3d',
+      },
+
+      pnl: {
+        positive: '#66e07a',
+        negative: '#ff6b6b',   // align with stronger critical red
+        neutral: '#d2d6e2',    // match muted text
+      },
         
         // Informational (blue - only for neutral info)
         info: {
-          DEFAULT: '#446b8b',
-          bg: '#1f252d',
-          border: '#28384a',
+          DEFAULT: '#5b86b8',      // Lifted for readability
+          bg: '#18202a',
+          border: '#2b3e57',
         },
       },
       
@@ -108,14 +104,14 @@ export default {
       },
       
       fontSize: {
-        // Readable sizes - NOT tiny
-        'xs': ['12px', { lineHeight: '16px' }],
-        'sm': ['13px', { lineHeight: '18px' }],
-        'base': ['14px', { lineHeight: '20px' }],
-        'lg': ['16px', { lineHeight: '24px' }],
-        'xl': ['18px', { lineHeight: '28px' }],
-        '2xl': ['20px', { lineHeight: '28px' }],
-        '3xl': ['24px', { lineHeight: '32px' }],
+        // Readable sizes - bumped up for comfort
+        'xs': ['13px', { lineHeight: '18px' }],
+        'sm': ['14px', { lineHeight: '20px' }],
+        'base': ['16px', { lineHeight: '24px' }],
+        'lg': ['18px', { lineHeight: '26px' }],
+        'xl': ['20px', { lineHeight: '28px' }],
+        '2xl': ['22px', { lineHeight: '30px' }],
+        '3xl': ['28px', { lineHeight: '36px' }],
       },
       
       spacing: {
@@ -135,8 +131,8 @@ export default {
       },
       
       boxShadow: {
-        'glow-critical': '0 0 8px rgba(139, 68, 68, 0.3)',
-        'glow-accent': '0 0 8px rgba(45, 122, 122, 0.3)',
+        'glow-critical': '0 0 8px rgba(224, 102, 102, 0.28)',
+        'glow-accent': '0 0 8px rgba(73, 179, 179, 0.28)',
       },
     },
   },

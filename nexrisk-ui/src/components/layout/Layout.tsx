@@ -1,35 +1,18 @@
-// ============================================
-// Main Layout Component
-// Structure: TopBar | Sidebar + Content + AlertDrawer | BottomBar
-// ============================================
-
 import { Outlet } from 'react-router-dom';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { BottomBar } from './BottomBar';
-import { AlertDrawer } from './AlertDrawer';
 
 export function Layout() {
   return (
-    <div className="h-screen w-screen flex flex-col bg-background overflow-hidden">
-      {/* Top Bar */}
+    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
       <TopBar />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Navigation */}
+      <div className="flex-1 flex overflow-hidden gap-2 p-2">
         <Sidebar />
-
-        {/* Center Working Space */}
-        <main className="flex-1 overflow-auto bg-background">
+        <main className="flex-1 overflow-auto rounded" style={{ backgroundColor: '#313032' }}>
           <Outlet />
         </main>
-
-        {/* Right Alert Drawer */}
-        <AlertDrawer />
       </div>
-
-      {/* Bottom Bar */}
       <BottomBar />
     </div>
   );

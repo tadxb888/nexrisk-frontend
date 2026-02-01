@@ -6,15 +6,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { AgGridReact } from '@ag-grid-community/react';
-import type { ColDef, GridReadyEvent, RowClickedEvent } from '@ag-grid-community/core';
+import { AgGridReact } from 'ag-grid-react';
+import type { ColDef, GridReadyEvent, RowClickedEvent } from 'ag-grid-community';
 import { tradersApi, explanationsApi } from '@/services/api';
 import { useSelectionStore } from '@/stores';
 import { clsx } from 'clsx';
 import type { Trader, TraderExplanation } from '@/types';
 
-import '@ag-grid-community/styles/ag-grid.css';
-import '../components/ui/grid-config';
 
 // Risk badge component
 function RiskBadge({ level }: { level: string }) {

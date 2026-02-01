@@ -15,7 +15,7 @@ const configSchema = z.object({
   nexriskApiTimeoutMs: z.coerce.number().default(30000),
 
   // Authentication
-  authEnabled: z.coerce.boolean().default(false),
+  authEnabled: z.string().optional().transform((val) => val?.toLowerCase() === 'true'),
   authIssuerUrl: z.string().optional(),
   authClientId: z.string().optional(),
   authAudience: z.string().optional(),

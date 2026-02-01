@@ -56,12 +56,12 @@ export function Sidebar() {
   return (
     <aside
       className={clsx(
-        'h-full bg-background-secondary border-r border-border flex flex-col transition-all duration-200',
+        'h-full bg-[#313032] border-r border-[#808080] flex flex-col transition-all duration-200',
         sidebarCollapsed ? 'w-12' : 'w-52'
       )}
     >
       {/* Logo */}
-      <div className="h-12 flex items-center justify-between px-3 border-b border-border shrink-0">
+      <div className="h-12 flex items-center justify-between px-3 border-b border-[#808080] shrink-0">
         {!sidebarCollapsed && (
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded bg-accent flex items-center justify-center">
@@ -112,7 +112,7 @@ export function Sidebar() {
       </nav>
 
       {/* Collapse Toggle - ICON ONLY as per mockup */}
-      <div className="p-2 border-t border-border shrink-0">
+      <div className="p-2 border-t border-[#808080] shrink-0">
         <button
           onClick={toggleSidebar}
           className={clsx(

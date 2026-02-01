@@ -74,7 +74,7 @@ export function TopBar() {
   };
 
   return (
-    <header className="h-11 bg-background-secondary border-b border-border flex items-center justify-between px-4 shrink-0">
+    <header className="h-11 bg-[#313032] border-b border-[#808080] flex items-center justify-between px-4 shrink-0">
       {/* Left Section - Broker Context */}
       <div className="flex items-center gap-4">
         {/* Connection Status */}

@@ -5,14 +5,12 @@
 
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AgGridReact } from '@ag-grid-community/react';
-import type { ColDef, GridReadyEvent } from '@ag-grid-community/core';
+import { AgGridReact } from 'ag-grid-react';
+import type { ColDef, GridReadyEvent } from 'ag-grid-community';
 import { positionsApi, tradersApi } from '@/services/api';
 import { clsx } from 'clsx';
 import type { BookType } from '@/types';
 
-import '@ag-grid-community/styles/ag-grid.css';
-import '../components/ui/grid-config';
 
 interface BookPageProps {
   bookType: BookType;

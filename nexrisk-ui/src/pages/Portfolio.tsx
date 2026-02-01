@@ -5,14 +5,9 @@
 // ============================================
 
 import { useState, useMemo, useCallback } from 'react';
-import { AgGridReact } from '@ag-grid-community/react';
-import type { ColDef, GridReadyEvent, ValueFormatterParams } from '@ag-grid-community/core';
-import '@ag-grid-community/styles/ag-grid.css';
-import '@ag-grid-community/styles/ag-theme-quartz.css';
+import { AgGridReact } from 'ag-grid-react';
+import type { ColDef, GridReadyEvent, ValueFormatterParams } from 'ag-grid-community';
 import { clsx } from 'clsx';
-
-// Import grid setup
-import '../components/ui/grid-config';
 
 interface PortfolioRow {
   id: string;
