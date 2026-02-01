@@ -1,127 +1,226 @@
 // ============================================
 // Sidebar Component
-// Navigation with icon-only collapse/expand
+// Collapsible navigation with icons
 // ============================================
 
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { useUIStore } from '@/stores';
 import { clsx } from 'clsx';
 
-// SVG Icons - Clean, minimal, institutional
+// Icon components
+const CockpitIcon = () => (
+  <svg viewBox="0 0 512 512" fill="currentColor" width="20" height="20">
+    <path d="M228.267,56c-17.455-37.114-61.692-53.05-98.805-35.595C113.814,27.765,101.226,40.353,93.867,56H32C14.327,56,0,70.327,0,88c0,17.673,14.327,32,32,32h61.76c17.455,37.114,61.692,53.05,98.805,35.595c15.647-7.359,28.235-19.948,35.595-35.595H480c17.673,0,32-14.327,32-32c0-17.673-14.327-32-32-32H228.267z"/>
+    <path d="M351.04,181.333c-28.765,0.051-54.931,16.659-67.221,42.667H32c-17.673,0-32,14.327-32,32c0,17.673,14.327,32,32,32h251.733c17.455,37.114,61.692,53.05,98.805,35.595c15.647-7.359,28.235-19.948,35.595-35.595H480c17.673,0,32-14.327,32-32c0-17.673-14.327-32-32-32h-61.76C405.953,197.999,379.798,181.393,351.04,181.333z"/>
+    <path d="M160.96,349.333c-28.758,0.059-54.913,16.666-67.2,42.667H32c-17.673,0-32,14.327-32,32c0,17.673,14.327,32,32,32h61.76c17.455,37.114,61.692,53.05,98.805,35.595c15.647-7.359,28.235-19.948,35.595-35.595H480c17.673,0,32-14.327,32-32c0-17.673-14.327-32-32-32H228.267C215.963,365.965,189.756,349.352,160.96,349.333z"/>
+  </svg>
+);
+
+const PortfolioIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="M19,4H17.9A5.009,5.009,0,0,0,13,0H11A5.009,5.009,0,0,0,6.1,4H5A5.006,5.006,0,0,0,0,9V19a5.006,5.006,0,0,0,5,5H19a5.006,5.006,0,0,0,5-5V9A5.006,5.006,0,0,0,19,4ZM11,2h2a3,3,0,0,1,2.816,2H8.184A3,3,0,0,1,11,2ZM5,6H19a3,3,0,0,1,3,3v3H2V9A3,3,0,0,1,5,6ZM19,22H5a3,3,0,0,1-3-3V14h9v1a1,1,0,0,0,2,0V14h9v5A3,3,0,0,1,19,22Z"/>
+  </svg>
+);
+
+const FocusIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m12 0a12 12 0 1 0 12 12 12.013 12.013 0 0 0 -12-12zm1 21.949v-1.949a1 1 0 0 0 -2 0v1.949a10.015 10.015 0 0 1 -8.949-8.949h1.949a1 1 0 0 0 0-2h-1.949a10.015 10.015 0 0 1 8.949-8.949v1.949a1 1 0 0 0 2 0v-1.949a10.015 10.015 0 0 1 8.949 8.949h-1.949a1 1 0 0 0 0 2h1.949a10.015 10.015 0 0 1 -8.949 8.949zm3-9.949a1 1 0 0 1 -1 1h-2v2a1 1 0 0 1 -2 0v-2h-2a1 1 0 0 1 0-2h2v-2a1 1 0 0 1 2 0v2h2a1 1 0 0 1 1 1z"/>
+  </svg>
+);
+
+const BBookIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m15.331,11.213c.422-.634.669-1.395.669-2.212,0-2.206-1.794-4-4-4h-2.5c-1.93,0-3.5,1.57-3.5,3.5v7c0,1.929,1.57,3.5,3.5,3.5h4.545c2.181,0,3.955-1.774,3.955-4.03,0-1.062-.41-2.06-1.155-2.808-.433-.435-.95-.756-1.514-.95Zm-7.331-2.713c0-.827.673-1.5,1.5-1.5h2.5c1.103,0,2,.897,2,2s-.897,2-2,2h-4v-2.501Zm6.045,8.501h-4.545c-.827,0-1.5-.674-1.5-1.5v-2.5h6.048c.521,0,1.011.203,1.379.573.369.371.573.867.573,1.472,0,1.078-.877,1.955-1.955,1.955ZM19,0H5C2.243,0,0,2.243,0,5v14c0,2.757,2.243,5,5,5h14c2.757,0,5-2.243,5-5V5c0-2.757-2.243-5-5-5Zm3,19c0,1.654-1.346,3-3,3H5c-1.654,0-3-1.346-3-3V5c0-1.654,1.346-3,3-3h14c1.654,0,3,1.346,3,3v14Z"/>
+  </svg>
+);
+
+const ABookIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m19.019-.077H5.019C2.262-.077.019,2.166.019,4.923v14c0,2.757,2.243,5,5,5h14c2.757,0,5-2.243,5-5V4.923C24.019,2.166,21.776-.077,19.019-.077Zm3,19c0,1.654-1.346,3-3,3H5.019c-1.654,0-3-1.346-3-3V4.923c0-1.654,1.346-3,3-3h14c1.654,0,3,1.346,3,3v14Zm-6.888-11.818c-.474-1.335-1.695-2.198-3.112-2.198s-2.638.863-3.109,2.19l-3.831,10.5c-.189.519.078,1.093.597,1.282.519.188,1.093-.078,1.282-.597l1.197-3.282h7.726l1.197,3.282c.148.406.531.658.939.658.114,0,.229-.02.343-.061.519-.189.786-.763.597-1.282l-3.827-10.492Zm-6.246,5.895l1.906-5.226c.286-.805,1.012-.867,1.227-.867s.942.062,1.23.875l1.903,5.218h-6.267Z"/>
+  </svg>
+);
+
+const CBookIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m19,0H5C2.243,0,0,2.243,0,5v14c0,2.757,2.243,5,5,5h14c2.757,0,5-2.243,5-5V5c0-2.757-2.243-5-5-5Zm3,19c0,1.654-1.346,3-3,3H5c-1.654,0-3-1.346-3-3V5c0-1.654,1.346-3,3-3h14c1.654,0,3,1.346,3,3v14Zm-13.995-8.091v2.182c0,2.156,1.731,3.909,3.858,3.909h.545c1.307,0,2.522-.65,3.251-1.738.308-.458.929-.581,1.388-.274.458.308.582.929.274,1.388-1.101,1.644-2.938,2.625-4.913,2.625h-.545c-3.23,0-5.858-2.651-5.858-5.909v-2.182c0-3.258,2.628-5.909,5.858-5.909h.545c1.976,0,3.813.981,4.913,2.625.307.459.184,1.08-.275,1.387-.461.307-1.081.184-1.387-.275-.729-1.088-1.943-1.738-3.251-1.738h-.545c-2.127,0-3.858,1.753-3.858,3.909Z"/>
+  </svg>
+);
+
+const ExposureIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m17,10c-3.86,0-7,3.141-7,7s3.14,7,7,7,7-3.141,7-7-3.14-7-7-7Zm0,12c-2.757,0-5-2.243-5-5s2.243-5,5-5,5,2.243,5,5-2.243,5-5,5Zm-1-9h2v5h-2v-5Zm0,6h2v2h-2v-2Zm-6.895,2.321c.476.867,1.096,1.641,1.819,2.305-.041.017-.092.039-.131.055l-.836.336-.806-.404C7.005,22.541,0,18.53,0,11.964v-5.755c0-1.727,1.102-3.253,2.741-3.797L10,.005l7.259,2.407c1.639.544,2.741,2.07,2.741,3.797v2.314c-.638-.226-1.305-.388-2-.464v-1.85c0-.863-.551-1.627-1.371-1.898l-6.629-2.198-6.629,2.198c-.82.271-1.371,1.035-1.371,1.898v5.755c0,4.709,4.647,7.965,7.105,9.357Z"/>
+  </svg>
+);
+
+const CharterIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m24,12c0,.552-.448,1-1,1h-.551c-.474,4.992-4.457,8.975-9.449,9.449v.551c0,.552-.448,1-1,1s-1-.448-1-1v-.551c-4.992-.474-8.975-4.457-9.449-9.449h-.551c-.552,0-1-.448-1-1s.448-1,1-1h.556c.264-2.786,1.615-5.349,3.813-7.141.428-.348,1.058-.286,1.407.143.349.428.285,1.058-.143,1.407-1.729,1.41-2.815,3.409-3.071,5.591h1.439c.552,0,1,.448,1,1s-.448,1-1,1h-1.436c.458,3.888,3.548,6.977,7.436,7.436v-1.436c0-.552.448-1,1-1s1,.448,1,1v1.436c3.888-.458,6.977-3.548,7.436-7.436h-1.436c-.552,0-1-.448-1-1s.448-1,1-1h1.439c-.256-2.182-1.342-4.18-3.071-5.591-.428-.349-.492-.979-.143-1.407.349-.429.98-.491,1.407-.143,2.198,1.792,3.549,4.354,3.813,7.141h.556c.552,0,1,.448,1,1Zm-7.205-4.275L13.456.876c-.326-.583-.891-.874-1.456-.876-.565.002-1.13.293-1.456.876l-3.339,6.849c-.706,1.256.535,2.725,1.812,2.145l2.983-1.355,2.983,1.355c1.277.58,2.518-.889,1.812-2.145Z"/>
+  </svg>
+);
+
+const LiquidityProvidersIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m21.5,9.5c-1.025,0-1.903.618-2.289,1.5h-3.353c-.176-.677-.515-1.286-.987-1.774.45-.734,1.144-1.867,1.747-2.853.954.132,1.94-.295,2.475-1.169.721-1.177.351-2.717-.827-3.438-1.177-.721-2.717-.351-3.438.826-.535.874-.467,1.946.084,2.736-.607.991-1.304,2.131-1.753,2.863-.37-.113-.754-.192-1.16-.192s-.79.079-1.16.192c-.449-.733-1.147-1.872-1.753-2.863.551-.79.619-1.862.084-2.736-.721-1.177-2.26-1.548-3.438-.826-1.177.721-1.547,2.26-.826,3.438.535.874,1.521,1.3,2.474,1.169.604.986,1.298,2.119,1.747,2.853-.472.488-.811,1.098-.987,1.774h-3.353c-.386-.882-1.264-1.5-2.289-1.5C1.119,9.5,0,10.619,0,12s1.119,2.5,2.5,2.5c1.025,0,1.903-.618,2.289-1.5h3.353c.176.677.515,1.286.987,1.774l-1.747,2.853c-.954-.131-1.94.295-2.475,1.169-.721,1.177-.351,2.716.826,3.438,1.177.721,2.717.351,3.438-.827.535-.874.467-1.945-.084-2.735l1.753-2.863c.369.113.753.192,1.159.192s.79-.079,1.159-.192l1.754,2.864c-.551.79-.619,1.862-.084,2.735.721,1.177,2.26,1.548,3.438.827,1.177-.721,1.548-2.26.827-3.438-.535-.874-1.521-1.3-2.475-1.169l-1.747-2.853c.472-.488.811-1.098.987-1.774h3.353c.386.882,1.264,1.5,2.289,1.5,1.381,0,2.5-1.119,2.5-2.5s-1.119-2.5-2.5-2.5Zm-11.5,2.5c0-1.103.897-2,2-2s2,.897,2,2-.897,2-2,2-2-.897-2-2Z"/>
+  </svg>
+);
+
+const HedgeRulesIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="M24,10v5h-2v-3.586l-3.414,3.414c-.372,.372-.586,.888-.586,1.414v7.758h-2v-7.758c0-1.053,.427-2.084,1.172-2.828l3.414-3.414h-3.586v-2h5c1.103,0,2,.897,2,2Zm-20.547,0h3.586v-2H2.039C.936,8,.039,8.897,.039,10v5H2.039v-3.586l3.414,3.414c.373,.372,.586,.888,.586,1.414v7.758h2v-7.758c0-1.053-.427-2.084-1.172-2.828l-3.414-3.414Zm13.708-5.651L13.557,.703c-.8-.895-2.368-.871-3.127-.023l-3.562,3.719,1.444,1.383,2.688-2.806V24h2V3.018l2.736,2.737,1.424-1.406Z"/>
+  </svg>
+);
+
+const PriceRulesIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="M7.707,9.256c.391,.391,.391,1.024,0,1.414-.391,.391-1.024,.391-1.414,0-.391-.391-.391-1.024,0-1.414,.391-.391,1.024-.391,1.414,0Zm13.852,6.085l-.565,.565c-.027,1.233-.505,2.457-1.435,3.399l-3.167,3.208c-.943,.955-2.201,1.483-3.543,1.487h-.017c-1.335,0-2.59-.52-3.534-1.464L1.882,15.183c-.65-.649-.964-1.542-.864-2.453l.765-6.916c.051-.456,.404-.819,.858-.881l6.889-.942c.932-.124,1.87,.193,2.528,.851l7.475,7.412c.387,.387,.697,.823,.931,1.288,.812-1.166,.698-2.795-.342-3.835L12.531,2.302c-.229-.229-.545-.335-.851-.292l-6.889,.942c-.549,.074-1.052-.309-1.127-.855-.074-.547,.309-1.051,.855-1.126L11.409,.028c.921-.131,1.869,.191,2.528,.852l7.589,7.405c1.946,1.945,1.957,5.107,.032,7.057Zm-3.438-1.67l-7.475-7.412c-.223-.223-.536-.326-.847-.287l-6.115,.837-.679,6.14c-.033,.303,.071,.601,.287,.816l7.416,7.353c.569,.57,1.322,.881,2.123,.881h.01c.806-.002,1.561-.319,2.126-.893l3.167-3.208c1.155-1.17,1.149-3.067-.014-4.229Z"/>
+  </svg>
+);
+
+const ExecutionReportIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m6.5,16H1C.448,16,0,15.552,0,15s.448-1,1-1h4.965l1.703-2.555c.197-.296.542-.473.894-.443.356.022.673.232.833.551l2.229,4.459,1.044-1.566c.186-.278.498-.445.832-.445h4.5c.552,0,1,.448,1,1s-.448,1-1,1h-3.965l-1.703,2.555c-.186.279-.499.445-.832.445-.021,0-.042,0-.062-.002-.356-.022-.673-.232-.833-.551l-2.229-4.459-1.044,1.566c-.186.278-.498.445-.832.445Zm15.5-5.515v8.515c0,2.757-2.243,5-5,5H7c-2.757,0-5-2.243-5-5,0-.552.448-1,1-1s1,.448,1,1c0,1.654,1.346,3,3,3h10c1.654,0,3-1.346,3-3v-8.515c0-.163-.008-.325-.023-.485h-4.977c-1.654,0-3-1.346-3-3V2.023c-.16-.015-.322-.023-.485-.023h-4.515c-1.654,0-3,1.346-3,3v6c0,.552-.448,1-1,1s-1-.448-1-1v-6C2,2.243,4.243,0,7,0h4.515c1.87,0,3.627.728,4.95,2.05l3.485,3.485c1.322,1.322,2.05,3.08,2.05,4.95Zm-2.659-2.485c-.218-.379-.487-.733-.805-1.05l-3.485-3.485c-.318-.318-.671-.587-1.05-.805v4.341c0,.551.449,1,1,1h4.341Z"/>
+  </svg>
+);
+
+const LogsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m8.722 18.368c0 .346-.28.627-.626.628l-1.468.003c-.347 0-.629-.28-.629-.627l-.005-4.744c0-.347.281-.628.628-.628s.627.28.627.626c.001 1.249.003 2.869.004 4.118.71-.001.592-.003.837-.004.348-.002.631.28.631.628zm4.757-3.368.008 2v.015c0 1.094-.902 1.985-2.012 1.985-1.086 0-1.967-.881-1.967-1.967l-.008-2.066c0-1.086.881-1.967 1.967-1.967 1.109 0 2.012.891 2.012 1.985zm-1.242 2.015-.008-2.015v-.015c0-.394-.342-.726-.75-.733-.402.007-.725.333-.724.736 0 .095.008 1.886.008 2.024 0 .403.322.729.724.736.408-.007.75-.338.75-.733zm5.62-1.013-.766.002c-.345.001-.625.281-.625.627 0 .349.284.631.633.627h.085c-.106.279-.378.485-.698.491-.402-.007-.725-.333-.724-.736 0-.138-.008-1.929-.008-2.024 0-.403.322-.729.724-.736.289.005.544.172.669.409.106.202.32.324.548.324.473 0 .776-.504.553-.921-.337-.632-1.009-1.064-1.782-1.064-1.086 0-1.967.881-1.967 1.967l.008 2.066c0 1.086.881 1.967 1.967 1.967 1.11 0 2.012-.891 2.012-1.985v-.389c-.003-.346-.284-.625-.63-.624zm4.143-5.516v8.515c0 2.757-2.243 5-5 5h-10c-2.757 0-5-2.243-5-5v-14.001c0-2.757 2.243-5 5-5h4.515c1.87 0 3.627.728 4.95 2.05l3.485 3.485c1.322 1.322 2.05 3.08 2.05 4.95zm-6.95-7.022c-.315-.315-.674-.564-1.05-.781v4.317c0 .551.449 1 1 1h4.317c-.217-.376-.466-.735-.781-1.05l-3.485-3.485zm4.95 7.021c0-.165-.032-.323-.047-.485h-4.953c-1.654 0-3-1.346-3-3v-4.953c-.162-.016-.32-.047-.485-.047h-4.515c-1.654 0-3 1.346-3 3v14c0 1.654 1.346 3 3 3h10c1.654 0 3-1.346 3-3z"/>
+  </svg>
+);
+
 const ChevronLeft = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M10 12L6 8L10 4" />
   </svg>
 );
 
 const ChevronRight = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M6 12L10 8L6 4" />
   </svg>
 );
 
 interface NavItem {
-  label: string;
   path: string;
-  section?: string;
+  label: string;
+  icon: React.ReactNode;
 }
 
-const navItems: NavItem[] = [
-  // Main
-  { label: 'Cockpit', path: '/', section: 'main' },
-  
-  // RIAN Section
-  { label: 'Portfolio', path: '/portfolio', section: 'rian' },
-  { label: 'Focus', path: '/focus', section: 'rian' },
-  { label: 'B-Book', path: '/b-book', section: 'rian' },
-  { label: 'A-Book', path: '/a-book', section: 'rian' },
-  { label: 'C-Book', path: '/c-book', section: 'rian' },
-  { label: 'Net-Exposure', path: '/net-exposure', section: 'rian' },
-  
-  // Configuration
-  { label: 'Charter', path: '/charter', section: 'config' },
-  { label: 'Liquidity Providers', path: '/liquidity-providers', section: 'config' },
-  { label: 'Hedge Rules', path: '/hedge-rules', section: 'config' },
-  { label: 'Price Rules', path: '/price-rules', section: 'config' },
-  
-  // Reports
-  { label: 'Execution Report', path: '/execution-report', section: 'reports' },
-  { label: 'Logs', path: '/logs', section: 'reports' },
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
+const navSections: NavSection[] = [
+  {
+    title: 'Main',
+    items: [
+      { path: '/', label: 'Cockpit', icon: <CockpitIcon /> },
+    ],
+  },
+  {
+    title: 'RIAN',
+    items: [
+      { path: '/portfolio', label: 'Portfolio', icon: <PortfolioIcon /> },
+      { path: '/focus', label: 'Focus', icon: <FocusIcon /> },
+      { path: '/b-book', label: 'B-Book', icon: <BBookIcon /> },
+      { path: '/a-book', label: 'A-Book', icon: <ABookIcon /> },
+      { path: '/c-book', label: 'C-Book', icon: <CBookIcon /> },
+      { path: '/net-exposure', label: 'Net Exposure', icon: <ExposureIcon /> },
+    ],
+  },
+  {
+    title: 'Configuration',
+    items: [
+      { path: '/charter', label: 'Charter', icon: <CharterIcon /> },
+      { path: '/liquidity-providers', label: 'Liquidity Providers', icon: <LiquidityProvidersIcon /> },
+      { path: '/hedge-rules', label: 'Hedge Rules', icon: <HedgeRulesIcon /> },
+      { path: '/price-rules', label: 'Price Rules', icon: <PriceRulesIcon /> },
+    ],
+  },
+  {
+    title: 'Reports',
+    items: [
+      { path: '/execution-report', label: 'Execution Report', icon: <ExecutionReportIcon /> },
+      { path: '/logs', label: 'Logs', icon: <LogsIcon /> },
+    ],
+  },
 ];
 
 export function Sidebar() {
+  const [collapsed, setCollapsed] = useState(true); // Collapsed by default
   const location = useLocation();
-  const { sidebarCollapsed, toggleSidebar } = useUIStore();
 
   return (
     <aside
       className={clsx(
-        'h-full bg-[#313032] border-r border-[#808080] flex flex-col transition-all duration-200',
-        sidebarCollapsed ? 'w-12' : 'w-52'
+        'h-full flex flex-col border-r border-[#808080] transition-all duration-300 shrink-0',
+        collapsed ? 'w-14' : 'w-48'
       )}
+      style={{ backgroundColor: '#313032' }}
     >
-      {/* Logo */}
-      <div className="h-12 flex items-center justify-between px-3 border-b border-[#808080] shrink-0">
-        {!sidebarCollapsed && (
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded bg-accent flex items-center justify-center">
-              <span className="text-text-primary font-semibold text-sm">N</span>
-            </div>
-            <span className="font-semibold text-text-primary text-sm">NexRisk</span>
-          </div>
-        )}
-        {sidebarCollapsed && (
-          <div className="w-7 h-7 rounded bg-accent flex items-center justify-center mx-auto">
-            <span className="text-text-primary font-semibold text-sm">N</span>
-          </div>
-        )}
-      </div>
-
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2">
-        <div className="space-y-0.5 px-2">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path || 
-              (item.path !== '/' && location.pathname.startsWith(item.path));
-
-            return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={clsx(
-                  'flex items-center px-2 py-1.5 rounded text-sm transition-colors',
-                  isActive
-                    ? 'bg-accent-subtle text-accent font-medium'
-                    : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
-                  sidebarCollapsed && 'justify-center'
-                )}
-                title={sidebarCollapsed ? item.label : undefined}
-              >
-                {!sidebarCollapsed && (
-                  <span className="truncate">{item.label}</span>
-                )}
-                {sidebarCollapsed && (
-                  <span className="text-xs font-medium">
-                    {item.label.charAt(0)}
-                  </span>
-                )}
-              </NavLink>
-            );
-          })}
-        </div>
+        {navSections.map((section, sectionIdx) => (
+          <div key={section.title} className={sectionIdx > 0 ? 'mt-3' : ''}>
+            {/* Section title - only show when expanded */}
+            {!collapsed && (
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[#666]">
+                {section.title}
+              </div>
+            )}
+            
+            {/* Nav items */}
+            <div className="space-y-1 px-2">
+              {section.items.map((item) => {
+                const isActive = location.pathname === item.path;
+                
+                return (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    className={clsx(
+                      'flex items-center gap-2 rounded transition-colors relative',
+                      collapsed ? 'justify-center p-2' : 'px-2 py-1.5',
+                      isActive 
+                        ? 'text-[#4ecdc4]' 
+                        : 'text-[#999] hover:text-white hover:bg-[#3a3a3c]'
+                    )}
+                  >
+                    {/* Icon */}
+                    <div className="flex items-center justify-center">
+                      {item.icon}
+                    </div>
+                    
+                    {/* Label - only show when expanded */}
+                    {!collapsed && (
+                      <span className="text-sm truncate">{item.label}</span>
+                    )}
+                    
+                    {/* Underline for active item */}
+                    {isActive && (
+                      <div 
+                        className={clsx(
+                          'absolute bottom-0 h-0.5 bg-[#4ecdc4]',
+                          collapsed ? 'left-2 right-2' : 'left-0 right-0'
+                        )} 
+                      />
+                    )}
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
-      {/* Collapse Toggle - ICON ONLY as per mockup */}
-      <div className="p-2 border-t border-[#808080] shrink-0">
+      {/* Collapse toggle button */}
+      <div className="border-t border-[#808080] p-2">
         <button
-          onClick={toggleSidebar}
-          className={clsx(
-            'w-full flex items-center justify-center p-2 rounded',
-            'text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors'
-          )}
-          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          onClick={() => setCollapsed(!collapsed)}
+          className="w-full flex items-center justify-center p-2 text-[#999] hover:text-white hover:bg-[#3a3a3c] rounded transition-colors"
         >
-          {sidebarCollapsed ? <ChevronRight /> : <ChevronLeft />}
+          {collapsed ? <ChevronRight /> : <ChevronLeft />}
         </button>
       </div>
     </aside>

@@ -115,6 +115,7 @@ export function BBookPage() {
   const [symbol, setSymbol] = useState('');
   const [server, setServer] = useState('');
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
+  const [timePeriod, setTimePeriod] = useState<'today' | 'month'>('month');
   
   // Initial snapshot
   const [positions] = useState<BBookPosition[]>(() => generateMockPositions(100));
@@ -226,27 +227,56 @@ export function BBookPage() {
   }, []);
 
   // ======================
-  // STATS
+  // STATS (mock different values based on time period)
   // ======================
   const stats = useMemo(() => {
-    const total = positions.length;
-    const totalPnL = positions.reduce((s, p) => s + p.profit, 0);
-    const totalVolume = positions.reduce((s, p) => s + p.volume, 0);
-    const buyCount = positions.filter(p => p.type === 'BUY').length;
-    const sellCount = positions.filter(p => p.type === 'SELL').length;
-    const hedgedCount = positions.filter(p => p.hedge !== 'No').length;
-    return { total, totalPnL, totalVolume, buyCount, sellCount, hedgedCount };
-  }, [positions]);
+    // In real app, these would come from API based on timePeriod
+    if (timePeriod === 'today') {
+      const total = positions.length;
+      const totalPnL = positions.reduce((s, p) => s + p.profit, 0);
+      const totalVolume = positions.reduce((s, p) => s + p.volume, 0);
+      const buyCount = positions.filter(p => p.type === 'BUY').length;
+      const sellCount = positions.filter(p => p.type === 'SELL').length;
+      const hedgedCount = positions.filter(p => p.hedge !== 'No').length;
+      return { total, totalPnL, totalVolume, buyCount, sellCount, hedgedCount };
+    } else {
+      // Mock monthly data (higher numbers)
+      return {
+        total: positions.length * 22,
+        totalPnL: positions.reduce((s, p) => s + p.profit, 0) * 22,
+        totalVolume: positions.reduce((s, p) => s + p.volume, 0) * 22,
+        buyCount: positions.filter(p => p.type === 'BUY').length * 22,
+        sellCount: positions.filter(p => p.type === 'SELL').length * 22,
+        hedgedCount: positions.filter(p => p.hedge !== 'No').length * 22,
+      };
+    }
+  }, [positions, timePeriod]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
-      {/* Header */}
+      {/* Page Header - Title + Stats in one row */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between">
+        {/* Left: Title */}
         <div>
-          <h1 className="text-sm font-medium text-white">B-Book</h1>
+          <h1 className="text-lg font-semibold text-white">B-Book</h1>
           <p className="text-xs text-[#999]">Internalized flow — Live positions held against the house</p>
         </div>
+        
+        {/* Right: Time Period + Stats */}
         <div className="flex items-center gap-6 text-xs">
+          {/* Time Period Selector */}
+          <select
+            value={timePeriod}
+            onChange={(e) => setTimePeriod(e.target.value as 'today' | 'month')}
+            className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#4ecdc4]"
+          >
+            <option value="today">Today</option>
+            <option value="month">This Month</option>
+          </select>
+          
+          <div className="w-px h-4 bg-[#808080]" />
+          
+          {/* Stats */}
           <div><span className="text-[#999]">Positions:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
           <div><span className="text-[#999]">Long/Short:</span><span className="ml-1 font-mono"><span className="text-[#4ecdc4]">{stats.buyCount}</span><span className="text-[#999]"> / </span><span className="text-[#e0a020]">{stats.sellCount}</span></span></div>
           <div><span className="text-[#999]">Volume:</span><span className="ml-1 font-mono text-white">{stats.totalVolume.toFixed(2)} lots</span></div>
@@ -255,47 +285,50 @@ export function BBookPage() {
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="flex items-center gap-3 px-3 py-2 border-b border-[#808080]">
-        <input type="text" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="All Groups / All Traders" className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
-        <input type="text" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="All Symbols" className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
-        <select value={server} onChange={(e) => setServer(e.target.value)} className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#4ecdc4]">
-          <option value="">MT5 Server</option>
-        </select>
-        <button className="px-6 py-1.5 rounded text-sm font-medium bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black">Request</button>
-      </div>
+      {/* Content Area with padding */}
+      <div className="flex-1 flex flex-col overflow-hidden p-2">
+        {/* Filter Bar */}
+        <div className="flex items-center gap-3 px-2 py-2 border-b border-[#808080]">
+          <input type="text" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="All Groups / All Traders" className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
+          <input type="text" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="All Symbols" className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
+          <select value={server} onChange={(e) => setServer(e.target.value)} className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#4ecdc4]">
+            <option value="">MT5 Server</option>
+          </select>
+          <button className="px-6 py-1.5 rounded text-sm font-medium bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black">Request</button>
+        </div>
 
-      {/* Grid - takes remaining space */}
-      <div style={{ flex: 1, width: '100%' }}>
-        <AgGridReact<BBookPosition>
-          ref={gridRef}
-          theme={gridTheme}
-          rowData={positions}
-          columnDefs={columnDefs}
-          defaultColDef={defaultColDef}
-          gridOptions={gridOptions}
-          rowHeight={26}
-          headerHeight={36}
-          getRowId={(p) => getRowId(p.data)}
-          rowSelection={rowSelection}
-          cellSelection={{ enableHeaderHighlight: true }}
-          getContextMenuItems={getContextMenuItems}
-        />
-      </div>
+        {/* Grid - takes remaining space */}
+        <div style={{ flex: 1, width: '100%' }}>
+          <AgGridReact<BBookPosition>
+            ref={gridRef}
+            theme={gridTheme}
+            rowData={positions}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            gridOptions={gridOptions}
+            rowHeight={26}
+            headerHeight={36}
+            getRowId={(p) => getRowId(p.data)}
+            rowSelection={rowSelection}
+            cellSelection={{ enableHeaderHighlight: true }}
+            getContextMenuItems={getContextMenuItems}
+          />
+        </div>
 
-      {/* Charts - collapsible */}
-      <div 
-        className={clsx(
-          'border-t border-[#808080] transition-all duration-300',
-          chartsCollapsed ? 'h-[40px]' : 'h-[300px]'
-        )} 
-        style={{ backgroundColor: '#313032' }}
-      >
-        <BBookCharts 
-          positions={positions} 
-          collapsed={chartsCollapsed}
-          onToggle={() => setChartsCollapsed(!chartsCollapsed)}
-        />
+        {/* Charts - collapsible */}
+        <div 
+          className={clsx(
+            'border-t border-[#808080] transition-all duration-300',
+            chartsCollapsed ? 'h-[40px]' : 'h-[300px]'
+          )} 
+          style={{ backgroundColor: '#313032' }}
+        >
+          <BBookCharts 
+            positions={positions} 
+            collapsed={chartsCollapsed}
+            onToggle={() => setChartsCollapsed(!chartsCollapsed)}
+          />
+        </div>
       </div>
     </div>
   );

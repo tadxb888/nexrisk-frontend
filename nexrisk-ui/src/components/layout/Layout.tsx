@@ -7,9 +7,9 @@ export function Layout() {
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
       <TopBar />
-      <div className="flex-1 flex overflow-hidden gap-2 p-2">
+      <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-auto rounded" style={{ backgroundColor: '#313032' }}>
+        <main className="flex-1 overflow-auto" style={{ backgroundColor: '#313032' }}>
           <Outlet />
         </main>
       </div>

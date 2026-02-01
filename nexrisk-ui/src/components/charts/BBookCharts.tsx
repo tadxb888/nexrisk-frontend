@@ -76,14 +76,14 @@ function TraderConcentrationChart({ positions }: { positions: Position[] }) {
 
   return (
     <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#313032' }}>
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-start justify-between mb-1">
         <div>
           <h4 className="text-sm font-semibold text-white">Trader Concentration</h4>
           <p className="text-xs text-white">Top traders by volume</p>
         </div>
-        <select value={mode} onChange={(e) => setMode(e.target.value as 'net' | 'gross')} className="bg-[#232225] border border-[#808080] rounded px-1 py-0.5 text-xs text-white">
-          <option value="gross">Gross</option>
-          <option value="net">Net</option>
+        <select value={mode} onChange={(e) => setMode(e.target.value as 'net' | 'gross')} className="bg-[#232225] border border-[#808080] rounded px-2 py-0.5 text-xs text-white min-w-[100px]">
+          <option value="gross">Gross Volume</option>
+          <option value="net">Net Volume</option>
         </select>
       </div>
       <div className="flex-1 min-h-0">
