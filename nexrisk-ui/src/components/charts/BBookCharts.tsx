@@ -27,6 +27,12 @@ interface ChartItem {
   pct?: string;
 }
 
+interface BBookChartsProps {
+  positions: Position[];
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
 function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartItem }> }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
@@ -221,15 +227,13 @@ function TopProfitableChart({ positions }: { positions: Position[] }) {
   );
 }
 
-export function BBookCharts({ positions }: { positions: Position[] }) {
-  const [collapsed, setCollapsed] = useState(false);
-
+export function BBookCharts({ positions, collapsed, onToggle }: BBookChartsProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Collapse toggle - upper middle */}
-      <div className="flex justify-center mb-1">
+      <div className="flex justify-center py-1">
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={onToggle}
           className="flex items-center gap-1 px-3 py-1 text-xs text-white bg-[#232225] border border-[#808080] rounded hover:bg-[#3a3a3c] transition-colors"
         >
           <svg

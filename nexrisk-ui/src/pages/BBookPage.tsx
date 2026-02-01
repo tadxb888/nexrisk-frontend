@@ -114,6 +114,7 @@ export function BBookPage() {
   const [group, setGroup] = useState('');
   const [symbol, setSymbol] = useState('');
   const [server, setServer] = useState('');
+  const [chartsCollapsed, setChartsCollapsed] = useState(false);
   
   // Initial snapshot
   const [positions] = useState<BBookPosition[]>(() => generateMockPositions(100));
@@ -193,7 +194,7 @@ export function BBookPage() {
 
   const gridOptions = useMemo<GridOptions<BBookPosition>>(() => ({
     enableAdvancedFilter: true,
-    sideBar: 'columns',
+    sideBar: { toolPanels: ['columns', 'filters'], defaultToolPanel: '' },
     columnHoverHighlight: true,
     animateRows: false,
     rowBuffer: 20,
@@ -264,7 +265,7 @@ export function BBookPage() {
         <button className="px-6 py-1.5 rounded text-sm font-medium bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black">Request</button>
       </div>
 
-      {/* Grid */}
+      {/* Grid - takes remaining space */}
       <div style={{ flex: 1, width: '100%' }}>
         <AgGridReact<BBookPosition>
           ref={gridRef}
@@ -282,9 +283,19 @@ export function BBookPage() {
         />
       </div>
 
-      {/* Charts */}
-      <div className="h-[300px] border-t border-[#808080] p-4" style={{ backgroundColor: '#313032' }}>
-        <BBookCharts positions={positions} />
+      {/* Charts - collapsible */}
+      <div 
+        className={clsx(
+          'border-t border-[#808080] transition-all duration-300',
+          chartsCollapsed ? 'h-[40px]' : 'h-[300px]'
+        )} 
+        style={{ backgroundColor: '#313032' }}
+      >
+        <BBookCharts 
+          positions={positions} 
+          collapsed={chartsCollapsed}
+          onToggle={() => setChartsCollapsed(!chartsCollapsed)}
+        />
       </div>
     </div>
   );

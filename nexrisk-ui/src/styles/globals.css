@@ -210,3 +210,12 @@
   background: #232225;
   border-color: #808080;
 }
+
+/* Advanced Filter focus override */
+.ag-advanced-filter input:focus,
+.ag-advanced-filter .ag-input-field-input:focus,
+.ag-advanced-filter .ag-picker-field-wrapper:focus-within {
+  border-color: #4ecdc4 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}

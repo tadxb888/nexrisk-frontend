@@ -1,6 +1,6 @@
 // ============================================
 // BottomBar Component
-// Server CPU, RAM, disk usage, ping to LPs, latency
+// Connection status, Server CPU, RAM, disk usage, ping to LPs, latency
 // ============================================
 
 import { useQuery } from '@tanstack/react-query';
@@ -29,21 +29,21 @@ interface StatusItemProps {
 function StatusItem({ label, value, status = 'ok', unit }: StatusItemProps) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-text-muted">{label}:</span>
+      <span className="text-[#999]">{label}:</span>
       <span className={clsx(
         'font-mono',
-        status === 'ok' && 'text-text-primary',
-        status === 'warning' && 'text-risk-medium',
-        status === 'error' && 'text-risk-critical'
+        status === 'ok' && 'text-white',
+        status === 'warning' && 'text-[#e0a020]',
+        status === 'error' && 'text-[#ff6b6b]'
       )}>
-        {value}{unit && <span className="text-text-muted text-xs ml-0.5">{unit}</span>}
+        {value}{unit && <span className="text-[#999] text-xs ml-0.5">{unit}</span>}
       </span>
     </div>
   );
 }
 
 export function BottomBar() {
-  const { setHealth, setConnected } = useSystemStore();
+  const { setHealth, setConnected, isConnected } = useSystemStore();
 
   // Health check query
   const { data: health, isError } = useQuery({
@@ -72,8 +72,24 @@ export function BottomBar() {
 
   return (
     <footer className="h-7 bg-[#313032] border-t border-[#808080] flex items-center justify-between px-4 text-xs shrink-0">
-      {/* Left Section - Server Resources */}
+      {/* Left Section - Connection Status & Server Resources */}
       <div className="flex items-center gap-4">
+        {/* Connection Status */}
+        <div className="flex items-center gap-2">
+          <span className={clsx(
+            'w-2 h-2 rounded-full',
+            isConnected ? 'bg-[#66e07a]' : 'bg-[#ff6b6b]'
+          )} />
+          <span className={clsx(
+            'text-sm',
+            isConnected ? 'text-[#66e07a]' : 'text-[#ff6b6b]'
+          )}>
+            {isConnected ? 'Connected' : 'Disconnected'}
+          </span>
+        </div>
+
+        <div className="w-px h-4 bg-[#808080]" />
+
         <StatusItem 
           label="CPU" 
           value="24" 
@@ -93,7 +109,7 @@ export function BottomBar() {
           status="ok" 
         />
         
-        <div className="w-px h-4 bg-border-muted" />
+        <div className="w-px h-4 bg-[#808080]" />
         
         {/* Component Status */}
         <StatusItem 
@@ -142,12 +158,12 @@ export function BottomBar() {
       <div className="flex items-center gap-4">
         {/* LP Ping (placeholder values) */}
         <div className="flex items-center gap-2">
-          <span className="text-text-muted">LP Ping:</span>
-          <span className="font-mono text-pnl-positive">LP1: 12ms</span>
-          <span className="font-mono text-pnl-positive">LP2: 18ms</span>
+          <span className="text-[#999]">LP Ping:</span>
+          <span className="font-mono text-[#66e07a]">LP1: 12ms</span>
+          <span className="font-mono text-[#66e07a]">LP2: 18ms</span>
         </div>
         
-        <div className="w-px h-4 bg-border-muted" />
+        <div className="w-px h-4 bg-[#808080]" />
         
         {/* Uptime */}
         {health && (
