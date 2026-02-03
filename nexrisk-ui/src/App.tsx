@@ -23,6 +23,14 @@ import {
   CommandCenterPage,
   FlowHedgingPage,
   BusinessPage,
+  // Settings Pages
+  SettingsPage,
+  SecuritySettingsPage,
+  ConnectivitySettingsPage,
+  SymbologySettingsPage,
+  AuditSettingsPage,
+  NotificationsSettingsPage,
+  RiskLogicSettingsPage,
 } from '@/pages';
 
 // Create React Query client
@@ -45,7 +53,6 @@ function App() {
             {/* Main */}
             <Route path="/" element={<CockpitPage />} />
             <Route path="/command-center" element={<CommandCenterPage />} />
-            <Route path="/cockpit" element={<CockpitPage />} /> 
             
             {/* RIAN Section */}
             <Route path="/portfolio" element={<PortfolioPage />} />
@@ -66,6 +73,15 @@ function App() {
             {/* Reports */}
             <Route path="/execution-report" element={<ExecutionReportPage />} />
             <Route path="/logs" element={<LogsPage />} />
+
+            {/* Settings */}
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/security" element={<SecuritySettingsPage />} />
+            <Route path="/settings/connectivity" element={<ConnectivitySettingsPage />} />
+            <Route path="/settings/symbology" element={<SymbologySettingsPage />} />
+            <Route path="/settings/audit" element={<AuditSettingsPage />} />
+            <Route path="/settings/notifications" element={<NotificationsSettingsPage />} />
+            <Route path="/settings/risk-logic" element={<RiskLogicSettingsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

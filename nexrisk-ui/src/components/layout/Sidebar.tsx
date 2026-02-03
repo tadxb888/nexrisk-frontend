@@ -82,15 +82,17 @@ const ExecutionReportIcon = () => (
   </svg>
 );
 
-const XAnalyticsIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-    <path d="m2 7h-2v-4c0-1.654 1.346-3 3-3h4v2h-4c-.551 0-1 .448-1 1zm19-7h-4v2h4c.551 0 1 .448 1 1v4h2v-4c0-1.654-1.346-3-3-3zm1 21c0 .552-.449 1-1 1h-4v2h4c1.654 0 3-1.346 3-3v-4h-2zm-20 0v-4h-2v4c0 1.654 1.346 3 3 3h4v-2h-4c-.551 0-1-.448-1-1zm17-3v-3h-3.022c-.913 1.208-2.347 2-3.978 2s-3.065-.792-3.978-2h-3.022v3c0 1.105.895 2 2 2h10c1.105 0 2-.895 2-2zm0-7h5v2h-10.278c-.347.595-.984 1-1.722 1s-1.376-.405-1.722-1h-10.278v-2h5v-5c0-1.103.897-2 2-2h10c1.103 0 2 .897 2 2zm-2.101 0c-.463-2.282-2.48-4-4.899-4s-4.436 1.718-4.899 4h3.177c.347-.595.984-1 1.722-1s1.376.405 1.722 1z"/>
-  </svg>
-);
-
 const LogsIcon = () => (
   <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
     <path d="m8.722 18.368c0 .346-.28.627-.626.628l-1.468.003c-.347 0-.629-.28-.629-.627l-.005-4.744c0-.347.281-.628.628-.628s.627.28.627.626c.001 1.249.003 2.869.004 4.118.71-.001.592-.003.837-.004.348-.002.631.28.631.628zm4.757-3.368.008 2v.015c0 1.094-.902 1.985-2.012 1.985-1.086 0-1.967-.881-1.967-1.967l-.008-2.066c0-1.086.881-1.967 1.967-1.967 1.109 0 2.012.891 2.012 1.985zm-1.242 2.015-.008-2.015v-.015c0-.394-.342-.726-.75-.733-.402.007-.725.333-.724.736 0 .095.008 1.886.008 2.024 0 .403.322.729.724.736.408-.007.75-.338.75-.733zm5.62-1.013-.766.002c-.345.001-.625.281-.625.627 0 .349.284.631.633.627h.085c-.106.279-.378.485-.698.491-.402-.007-.725-.333-.724-.736 0-.138-.008-1.929-.008-2.024 0-.403.322-.729.724-.736.289.005.544.172.669.409.106.202.32.324.548.324.473 0 .776-.504.553-.921-.337-.632-1.009-1.064-1.782-1.064-1.086 0-1.967.881-1.967 1.967l.008 2.066c0 1.086.881 1.967 1.967 1.967 1.11 0 2.012-.891 2.012-1.985v-.389c-.003-.346-.284-.625-.63-.624zm4.143-5.516v8.515c0 2.757-2.243 5-5 5h-10c-2.757 0-5-2.243-5-5v-14.001c0-2.757 2.243-5 5-5h4.515c1.87 0 3.627.728 4.95 2.05l3.485 3.485c1.322 1.322 2.05 3.08 2.05 4.95zm-6.95-7.022c-.315-.315-.674-.564-1.05-.781v4.317c0 .551.449 1 1 1h4.317c-.217-.376-.466-.735-.781-1.05l-3.485-3.485zm4.95 7.021c0-.165-.032-.323-.047-.485h-4.953c-1.654 0-3-1.346-3-3v-4.953c-.162-.016-.32-.047-.485-.047h-4.515c-1.654 0-3 1.346-3 3v14c0 1.654 1.346 3 3 3h10c1.654 0 3-1.346 3-3z"/>
+  </svg>
+);
+
+// Settings Icon (from uploaded SVG)
+const SettingsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="M12,8a4,4,0,1,0,4,4A4,4,0,0,0,12,8Zm0,6a2,2,0,1,1,2-2A2,2,0,0,1,12,14Z"/>
+    <path d="M21.294,13.9l-.444-.256a9.1,9.1,0,0,0,0-3.29l.444-.256a3,3,0,1,0-3-5.2l-.445.257A8.977,8.977,0,0,0,15,3.513V3A3,3,0,0,0,9,3v.513A8.977,8.977,0,0,0,6.152,5.159L5.705,4.9a3,3,0,0,0-3,5.2l.444.256a9.1,9.1,0,0,0,0,3.29l-.444.256a3,3,0,1,0,3,5.2l.445-.257A8.977,8.977,0,0,0,9,20.487V21a3,3,0,0,0,6,0v-.513a8.977,8.977,0,0,0,2.848-1.646l.447.258a3,3,0,0,0,3-5.2Zm-2.548-3.776a7.048,7.048,0,0,1,0,3.75,1,1,0,0,0,.464,1.133l1.084.626a1,1,0,0,1-1,1.733l-1.086-.628a1,1,0,0,0-1.215.165,6.984,6.984,0,0,1-3.243,1.875,1,1,0,0,0-.751.969V21a1,1,0,0,1-2,0V19.748a1,1,0,0,0-.751-.969A6.984,6.984,0,0,1,7.006,16.9a1,1,0,0,0-1.215-.165l-1.084.627a1,1,0,1,1-1-1.732l1.084-.626a1,1,0,0,0,.464-1.133,7.048,7.048,0,0,1,0-3.75A1,1,0,0,0,4.79,8.992L3.706,8.366a1,1,0,0,1,1-1.733l1.086.628A1,1,0,0,0,7.006,7.1a6.984,6.984,0,0,1,3.243-1.875A1,1,0,0,0,11,4.252V3a1,1,0,0,1,2,0V4.252a1,1,0,0,0,.751.969A6.984,6.984,0,0,1,16.994,7.1a1,1,0,0,0,1.215.165l1.084-.627a1,1,0,1,1,1,1.732l-1.084.626A1,1,0,0,0,18.746,10.125Z"/>
   </svg>
 );
 
@@ -119,16 +121,16 @@ interface NavSection {
 
 const navSections: NavSection[] = [
   {
-    title: 'Overview',
+    title: 'Main',
     items: [
-      { path: '/cockpit', label: 'Cockpit', icon: <CockpitIcon /> },
-      { path: '/portfolio', label: 'Portfolio', icon: <PortfolioIcon /> },
-      { path: '/focus', label: 'Focus', icon: <FocusIcon /> },
+      { path: '/', label: 'Cockpit', icon: <CockpitIcon /> },
     ],
   },
   {
-    title: 'Book Pages',
+    title: 'RIAN',
     items: [
+      { path: '/portfolio', label: 'Portfolio', icon: <PortfolioIcon /> },
+      { path: '/focus', label: 'Focus', icon: <FocusIcon /> },
       { path: '/b-book', label: 'B-Book', icon: <BBookIcon /> },
       { path: '/a-book', label: 'A-Book', icon: <ABookIcon /> },
       { path: '/c-book', label: 'C-Book', icon: <CBookIcon /> },
@@ -147,9 +149,14 @@ const navSections: NavSection[] = [
   {
     title: 'Reports',
     items: [
-      { path: '/x-analytics', label: 'X-Analytics', icon: <XAnalyticsIcon /> },
       { path: '/execution-report', label: 'Execution Report', icon: <ExecutionReportIcon /> },
       { path: '/logs', label: 'Logs', icon: <LogsIcon /> },
+    ],
+  },
+  {
+    title: 'System',
+    items: [
+      { path: '/settings', label: 'Settings', icon: <SettingsIcon /> },
     ],
   },
 ];
@@ -157,6 +164,9 @@ const navSections: NavSection[] = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(true); // Collapsed by default
   const location = useLocation();
+
+  // Check if current path starts with /settings for highlighting
+  const isSettingsActive = location.pathname.startsWith('/settings');
 
   return (
     <aside
@@ -180,7 +190,10 @@ export function Sidebar() {
             {/* Nav items */}
             <div className="space-y-1 px-2">
               {section.items.map((item) => {
-                const isActive = location.pathname === item.path;
+                // Special handling for Settings - highlight if any /settings/* route is active
+                const isActive = item.path === '/settings' 
+                  ? isSettingsActive 
+                  : location.pathname === item.path;
                 
                 return (
                   <NavLink
