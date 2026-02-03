@@ -40,21 +40,11 @@ export const healthApi = {
 // Traders API
 // ============================================
 export const tradersApi = {
-  getAll: (params?: { 
-    limit?: number; 
-    offset?: number; 
-    group?: string;
-    classification?: string;
-    risk_level?: string;
-    min_risk_score?: number;
-  }) => {
+  getAll: (params?: { limit?: number; offset?: number; group?: string }) => {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.set('limit', String(params.limit));
     if (params?.offset) searchParams.set('offset', String(params.offset));
     if (params?.group) searchParams.set('group', params.group);
-    if (params?.classification) searchParams.set('classification', params.classification);
-    if (params?.risk_level) searchParams.set('risk_level', params.risk_level);
-    if (params?.min_risk_score) searchParams.set('min_risk_score', String(params.min_risk_score));
     
     const query = searchParams.toString();
     return fetchAPI<import('@/types').TradersResponse>(
@@ -83,22 +73,6 @@ export const tradersApi = {
     fetchAPI<{ login: number; window: string; features: Record<string, number> }>(
       `/api/v1/traders/${login}/features?window=${window}`
     ),
-    
-  getStrategies: (login: number) =>
-    fetchAPI<{
-      login: number;
-      is_multi_strategy: boolean;
-      strategy_count: number;
-      strategies: Array<{
-        strategy_id: string;
-        classification: string;
-        risk_level: string;
-        risk_score: number;
-        confidence: number;
-        trade_count: number;
-        is_toxic: boolean;
-      }>;
-    }>(`/api/v1/traders/${login}/strategies`),
 };
 
 // ============================================
@@ -267,24 +241,6 @@ export const explanationsApi = {
       running: boolean;
       stats: { queued_total: number; generated_total: number; failed_total: number };
     }>('/api/v1/explanations/queue'),
-    
-  enqueue: (data: {
-    login: number;
-    classification: string;
-    risk_level: string;
-    risk_score: number;
-    confidence: number;
-    features_json?: string;
-    triggered_rules?: string;
-  }) =>
-    fetchAPI<{
-      success: boolean;
-      login: number;
-      message: string;
-    }>('/api/v1/explanations/enqueue', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
 };
 
 // ============================================
@@ -313,33 +269,12 @@ export const llmApi = {
 // ============================================
 export const clusteringApi = {
   getConfig: () => 
-    fetchAPI<{
-      min_cluster_size: number;
-      min_samples: number;
-      cluster_selection_epsilon: number;
-      distance_metric: string;
-      feature_window: string;
-      min_trades_for_clustering: number;
-      run_interval_minutes: number;
-      min_traders_for_run: number;
-      auto_run_enabled: boolean;
-      action_threshold: number;
-      emerging_cluster_min: number;
-      high_outlier_threshold: number;
-      medium_outlier_threshold: number;
-      store_feature_snapshots: boolean;
-      source: string;
-    }>('/api/v1/clustering/config'),
+    fetchAPI<Record<string, unknown>>('/api/v1/clustering/config'),
   
   updateConfig: (config: Record<string, unknown>) => 
     fetchAPI<{ success: boolean; message: string }>('/api/v1/clustering/config', {
       method: 'PUT',
       body: JSON.stringify(config),
-    }),
-    
-  reloadConfig: () =>
-    fetchAPI<{ success: boolean; message: string }>('/api/v1/clustering/config/reload', {
-      method: 'POST',
     }),
   
   triggerRun: (sinceHours?: number) => 
@@ -354,28 +289,9 @@ export const clusteringApi = {
     ),
   
   getRunById: (runId: string) => 
-    fetchAPI<import('@/types').ClusteringRunDetail>(
+    fetchAPI<import('@/types').ClusteringRun & { assignments: unknown[] }>(
       `/api/v1/clustering/runs/${runId}`
     ),
-    
-  deleteRun: (runId: string) =>
-    fetchAPI<{ success: boolean; deleted_run_id: string }>(
-      `/api/v1/clustering/runs/${runId}`,
-      { method: 'DELETE' }
-    ),
-    
-  getRunProfiles: (runId: string) =>
-    fetchAPI<{
-      run_id: string;
-      profiles: Array<{
-        cluster_id: number;
-        member_count: number;
-        status: string;
-        label_hint: string;
-        archetype_id?: number;
-        archetype_code?: string;
-      }>;
-    }>(`/api/v1/clustering/runs/${runId}/profiles`),
   
   getTraderCluster: (login: number) => 
     fetchAPI<import('@/types').TraderClusterAssignment>(
@@ -389,68 +305,6 @@ export const clusteringApi = {
       count: number;
       outliers: { trader_login: number; outlier_score: number }[];
     }>('/api/v1/clustering/outliers'),
-    
-  getArchetypes: () =>
-    fetchAPI<{
-      archetypes: Array<{
-        archetype_id: number;
-        archetype_code: string;
-        display_name: string;
-        description: string;
-        risk_severity: number;
-      }>;
-      count: number;
-    }>('/api/v1/clustering/archetypes'),
-    
-  setClusterArchetype: (runId: string, clusterId: number, archetypeId: number, mappedBy?: string) =>
-    fetchAPI<{ success: boolean }>(
-      `/api/v1/clustering/runs/${runId}/clusters/${clusterId}/archetype`,
-      {
-        method: 'PUT',
-        body: JSON.stringify({ archetype_id: archetypeId, mapped_by: mappedBy }),
-      }
-    ),
-    
-  explainCluster: (runId: string, clusterId: number) =>
-    fetchAPI<{
-      run_id: string;
-      cluster_id: number;
-      member_count: number;
-      explanation: {
-        behavior_description: string;
-        risk_indicators: string[];
-        suggested_archetype_id: number;
-        suggested_archetype_code: string;
-        confidence: number;
-        reasoning: string;
-      };
-      llm_stats: {
-        model: string;
-        input_tokens: number;
-        output_tokens: number;
-        latency_ms: number;
-        cost_usd: number;
-      };
-    }>(`/api/v1/clustering/runs/${runId}/clusters/${clusterId}/explain`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    }),
-    
-  detectDrift: (baselineRunId: string, currentRunId: string) =>
-    fetchAPI<{
-      alert_count: number;
-      alerts: Array<{
-        drift_type: string;
-        cluster_id: number;
-        severity: string;
-      }>;
-    }>('/api/v1/clustering/drift/detect', {
-      method: 'POST',
-      body: JSON.stringify({
-        baseline_run_id: baselineRunId,
-        current_run_id: currentRunId,
-      }),
-    }),
 };
 
 // ============================================
@@ -503,143 +357,4 @@ export const groupsApi = {
       }[];
       total: number;
     }>('/api/v1/groups'),
-};
-
-// ============================================
-// Command Center API (Dashboard)
-// ============================================
-export const commandApi = {
-  getKPIs: () =>
-    fetchAPI<{
-      toxic_flow_unhedged: {
-        pct: number;
-        status: string;
-        threshold: number;
-      };
-      net_exposure_direction: {
-        direction: string;
-        alignment_score: number;
-        status: string;
-        note?: string;
-      };
-      hedge_efficiency: {
-        hedge_cost_usd: number;
-        risk_reduced_usd: number;
-        ratio: number;
-        status: string;
-        note?: string;
-      };
-      risk_concentration: {
-        top_1pct_risk_share: number;
-        top_1pct_trader_count: number;
-        status: string;
-      };
-      traders_requiring_review: {
-        count: number;
-        critical: number;
-        high: number;
-      };
-      symbols_at_critical_exposure: {
-        count: number;
-        symbols: string[];
-      };
-      generated_at: string;
-    }>('/api/v1/command/kpis'),
-    
-  getReviewQueue: (limit: number = 20) =>
-    fetchAPI<{
-      traders: Array<{
-        login: number;
-        name: string;
-        group: string;
-        balance: number;
-        equity: number;
-        classification: string;
-        risk_level: string;
-        risk_score: number;
-        has_explanation: boolean;
-        explanation_fresh: boolean;
-        recommended_action: string;
-        requires_urgent_review: boolean;
-      }>;
-      total: number;
-    }>(`/api/v1/command/review-queue?limit=${limit}`),
-};
-
-// ============================================
-// Portfolio API (Dashboard)
-// ============================================
-export const portfolioApi = {
-  getSummary: (period: string = 'today') =>
-    fetchAPI<{
-      period: string;
-      generated_at: string;
-      books: {
-        a_book: {
-          floating_pnl: number;
-          total_equity: number;
-          volume_lots: number;
-          trader_count: number;
-          position_count: number;
-          avg_risk_score: number;
-        };
-        b_book: {
-          floating_pnl: number;
-          total_equity: number;
-          volume_lots: number;
-          trader_count: number;
-          position_count: number;
-          avg_risk_score: number;
-        };
-        unclassified: {
-          floating_pnl: number;
-          total_equity: number;
-          volume_lots: number;
-          trader_count: number;
-          position_count: number;
-          avg_risk_score: number;
-        };
-      };
-      net_total: {
-        floating_pnl: number;
-        total_equity: number;
-        volume_lots: number;
-        trader_count: number;
-      };
-    }>(`/api/v1/portfolio/summary?period=${period}`),
-    
-  getRatios: () =>
-    fetchAPI<{
-      hedge_ratio_notional: {
-        a_book_pct: number;
-        b_book_pct: number;
-        other_pct: number;
-        a_to_b_ratio: number;
-      };
-      hedge_ratio_toxic_weighted: {
-        toxic_flow_hedged_pct: number;
-        toxic_flow_unhedged_pct: number;
-        a_to_b_toxic_ratio: number;
-      };
-      b_book_profitability_index: {
-        value: number;
-        trend: string;
-        trend_pct: number;
-        period: string;
-        note?: string;
-      };
-      generated_at: string;
-    }>('/api/v1/portfolio/ratios'),
-    
-  getRiskRadar: () =>
-    fetchAPI<{
-      dimensions: Array<{
-        axis: string;
-        value: number;
-        benchmark: number;
-      }>;
-      overall_risk_score: number;
-      risk_status: string;
-      generated_at: string;
-    }>('/api/v1/portfolio/risk-radar'),
 };
