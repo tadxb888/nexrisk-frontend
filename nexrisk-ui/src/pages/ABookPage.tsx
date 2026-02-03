@@ -350,9 +350,6 @@ export function ABookPage() {
   const gridRef = useRef<AgGridReact<ABookHedge>>(null);
   const exposureGridRef = useRef<AgGridReact<HedgeExposureRow>>(null);
   const [activeTab, setActiveTab] = useState<TabType>('hedge-ledger');
-  const [group, setGroup] = useState('');
-  const [symbol, setSymbol] = useState('');
-  const [lpFilter, setLpFilter] = useState('');
   const [headerLpFilter, setHeaderLpFilter] = useState('');
   const [timePeriod, setTimePeriod] = useState<'today' | 'month'>('month');
   const [selectedRow, setSelectedRow] = useState<ABookHedge | null>(null);
@@ -558,6 +555,13 @@ export function ABookPage() {
     if (event.data) { setSelectedRow(event.data); setDetailsPanelOpen(true); }
   }, []);
 
+  // Auto-size columns on grid ready
+  const onGridReady = useCallback((_event: GridReadyEvent<ABookHedge>) => {
+    setTimeout(() => {
+      gridRef.current?.api?.autoSizeAllColumns();
+    }, 0);
+  }, []);
+
   const onExposureGridReady = useCallback((event: GridReadyEvent<HedgeExposureRow>) => {
     console.log('Exposure grid ready, row count:', event.api.getDisplayedRowCount());
     setTimeout(() => {
@@ -741,20 +745,6 @@ export function ABookPage() {
       {/* Tab Content */}
       {activeTab === 'hedge-ledger' && (
         <div className="flex-1 flex flex-col overflow-hidden p-2">
-          {/* Filter Bar */}
-          <div className="flex items-center gap-3 px-2 py-2 border-b border-[#808080]">
-            <input type="text" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="All Groups / All Traders"
-              className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
-            <input type="text" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="All Symbols"
-              className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
-            <select value={lpFilter} onChange={(e) => setLpFilter(e.target.value)}
-              className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#4ecdc4]">
-              <option value="">All Liquidity Providers</option>
-              {lpOptions.map(lp => <option key={lp} value={lp}>{lp}</option>)}
-            </select>
-            <button className="px-6 py-1.5 rounded text-sm font-medium bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black">Request</button>
-          </div>
-
           {/* Main content: Grid + Details Panel */}
           <div className="flex-1 flex gap-0 min-h-0">
             <div style={{ flex: detailsPanelOpen ? '1 1 75%' : '1 1 100%', minWidth: 0 }}>
@@ -764,6 +754,7 @@ export function ABookPage() {
                 getRowId={(p) => p.data.id} rowSelection={rowSelection}
                 cellSelection={{ enableHeaderHighlight: true }}
                 getContextMenuItems={getContextMenuItems} onRowClicked={onRowClicked}
+                onGridReady={onGridReady}
               />
             </div>
 

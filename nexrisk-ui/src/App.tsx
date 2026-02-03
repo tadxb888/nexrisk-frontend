@@ -45,6 +45,7 @@ function App() {
             {/* Main */}
             <Route path="/" element={<CockpitPage />} />
             <Route path="/command-center" element={<CommandCenterPage />} />
+            <Route path="/cockpit" element={<CockpitPage />} /> 
             
             {/* RIAN Section */}
             <Route path="/portfolio" element={<PortfolioPage />} />

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
-import type { ColDef, GridOptions, RowSelectionOptions, ValueFormatterParams, GetContextMenuItemsParams, MenuItemDef } from 'ag-grid-community';
+import type { ColDef, GridOptions, RowSelectionOptions, ValueFormatterParams, GetContextMenuItemsParams, MenuItemDef, GridReadyEvent } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
 
@@ -111,9 +111,6 @@ function generateMockPositions(count: number): BBookPosition[] {
 // ======================
 export function BBookPage() {
   const gridRef = useRef<AgGridReact<BBookPosition>>(null);
-  const [group, setGroup] = useState('');
-  const [symbol, setSymbol] = useState('');
-  const [server, setServer] = useState('');
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
   const [timePeriod, setTimePeriod] = useState<'today' | 'month'>('month');
   
@@ -209,6 +206,13 @@ export function BBookPage() {
     },
   }), []);
 
+  // Auto-size columns on grid ready
+  const onGridReady = useCallback((_event: GridReadyEvent) => {
+    setTimeout(() => {
+      gridRef.current?.api?.autoSizeAllColumns();
+    }, 0);
+  }, []);
+
   const getContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
     const rowData = params.node?.data as BBookPosition | undefined;
     return [
@@ -287,16 +291,6 @@ export function BBookPage() {
 
       {/* Content Area with padding */}
       <div className="flex-1 flex flex-col overflow-hidden p-2">
-        {/* Filter Bar */}
-        <div className="flex items-center gap-3 px-2 py-2 border-b border-[#808080]">
-          <input type="text" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="All Groups / All Traders" className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
-          <input type="text" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="All Symbols" className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white placeholder-[#888] focus:outline-none focus:border-[#4ecdc4]" />
-          <select value={server} onChange={(e) => setServer(e.target.value)} className="flex-1 bg-[#232225] border border-[#808080] rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#4ecdc4]">
-            <option value="">MT5 Server</option>
-          </select>
-          <button className="px-6 py-1.5 rounded text-sm font-medium bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black">Request</button>
-        </div>
-
         {/* Grid - takes remaining space */}
         <div style={{ flex: 1, width: '100%' }}>
           <AgGridReact<BBookPosition>
@@ -312,6 +306,7 @@ export function BBookPage() {
             rowSelection={rowSelection}
             cellSelection={{ enableHeaderHighlight: true }}
             getContextMenuItems={getContextMenuItems}
+            onGridReady={onGridReady}
           />
         </div>
 

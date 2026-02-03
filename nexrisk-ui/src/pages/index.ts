@@ -3,7 +3,7 @@ export { PortfolioPage } from './Portfolio';
 export { FocusPage } from './Focus';
 export { BBookPage } from './BBookPage';
 export { ABookPage } from './ABookPage';
-export { CBookPage } from './BookPages';
+export { CBookPage } from './CBookPage';
 export { NetExposurePage } from './NetExposure';
 export { CharterPage } from './Charter';
 export { LogsPage } from './Logs';
