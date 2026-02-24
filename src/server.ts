@@ -10,6 +10,7 @@ import { explanationsRoutes } from './routes/explanations.js';
 import { positionsRoutes, ordersRoutes } from './routes/positions-orders.js';
 import { clusteringRoutes } from './routes/clustering.js';
 import { checkNexRiskHealth } from './services/nexrisk-api.js';
+import { riskMatrixRoutes } from './routes/risk-matrix.js';
 
 /**
  * Create and configure Fastify server
@@ -129,8 +130,9 @@ async function buildServer() {
       await api.register(positionsRoutes);
       await api.register(ordersRoutes);
       await api.register(clusteringRoutes);
+      await api.register(riskMatrixRoutes);
     },
-    { prefix: '/api' }
+    { prefix: '/api/v1' } 
   );
 
   // =========================================================================

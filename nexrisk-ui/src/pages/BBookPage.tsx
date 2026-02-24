@@ -37,6 +37,8 @@ export interface BBookPosition {
   profit: number;
   hedge: 'No' | 'Rule' | 'Manual';
   lp: string | null;
+  group: string;
+  server: string;
 }
 
 export type BBookStreamMsg = {
@@ -74,6 +76,8 @@ function generateMockPositions(count: number): BBookPosition[] {
   const types: ('BUY' | 'SELL')[] = ['BUY', 'SELL'];
   const hedgeOptions: ('No' | 'Rule' | 'Manual')[] = ['No', 'Rule', 'Manual'];
   const lps = ['Lmax', 'Equity', 'CMC', null];
+  const groups = ['VIP', 'PRO', 'STD', 'ECN', 'DEMO'];
+  const servers = ['MT5-Live-1', 'MT5-Live-2', 'MT5-Live-3'];
 
   return Array.from({ length: count }, (_, i) => {
     const symbol = symbols[i % symbols.length];
@@ -102,6 +106,8 @@ function generateMockPositions(count: number): BBookPosition[] {
       profit: Math.round(profit * 100) / 100,
       hedge,
       lp: hedge !== 'No' ? lps[Math.floor(Math.random() * 3)] : null,
+      group: groups[Math.floor(Math.random() * groups.length)],
+      server: servers[Math.floor(Math.random() * servers.length)],
     };
   });
 }
@@ -116,6 +122,11 @@ export function BBookPage() {
   
   // Initial snapshot
   const [positions] = useState<BBookPosition[]>(() => generateMockPositions(100));
+
+  // Filter state — free-text input values
+  const [groupInput, setGroupInput] = useState('');
+  const [symbolInput, setSymbolInput] = useState('');
+  const [filterServer, setFilterServer] = useState<string>('ALL');
   
   // Index for streaming updates
   const rowIndexRef = useRef<Map<string, BBookPosition>>(new Map());
@@ -125,6 +136,34 @@ export function BBookPage() {
     for (const r of positions) m.set(getRowId(r), r);
     rowIndexRef.current = m;
   }, [positions]);
+
+  // Unique filter values for datalists
+  const uniqueGroups = useMemo(() => Array.from(new Set(positions.map(p => p.group))).sort(), [positions]);
+  const uniqueLogins = useMemo(() => Array.from(new Set(positions.map(p => String(p.login)))).sort(), [positions]);
+  const uniqueSymbols = useMemo(() => Array.from(new Set(positions.map(p => p.symbol))).sort(), [positions]);
+  const uniqueServers = useMemo(() => ['ALL', ...Array.from(new Set(positions.map(p => p.server))).sort()], [positions]);
+
+  // Filtered positions
+  const filteredPositions = useMemo(() => {
+    const gTerm = groupInput.trim().toUpperCase();
+    const sTerm = symbolInput.trim().toUpperCase();
+
+    return positions.filter(p => {
+      // Group/Account filter: match group name OR login ID
+      if (gTerm) {
+        const matchesGroup = p.group.toUpperCase().includes(gTerm);
+        const matchesLogin = String(p.login).includes(gTerm);
+        if (!matchesGroup && !matchesLogin) return false;
+      }
+      // Symbol filter
+      if (sTerm) {
+        if (!p.symbol.toUpperCase().includes(sTerm)) return false;
+      }
+      // Server filter
+      if (filterServer !== 'ALL' && p.server !== filterServer) return false;
+      return true;
+    });
+  }, [positions, groupInput, symbolInput, filterServer]);
 
   // ======================
   // COLUMN DEFINITIONS
@@ -173,6 +212,8 @@ export function BBookPage() {
     },
     { field: 'hedge', headerName: 'Hedge', filter: 'agSetColumnFilter', width: 90, filterParams: { values: ['No', 'Rule', 'Manual'] } },
     { field: 'lp', headerName: 'LP', filter: 'agSetColumnFilter', width: 90, valueFormatter: (p: ValueFormatterParams) => p.value || '' },
+    { field: 'group', headerName: 'Group', filter: 'agSetColumnFilter', width: 90 },
+    { field: 'server', headerName: 'Server', filter: 'agSetColumnFilter', width: 120 },
   ], []);
 
   const defaultColDef = useMemo<ColDef>(() => ({
@@ -234,27 +275,27 @@ export function BBookPage() {
   // STATS (mock different values based on time period)
   // ======================
   const stats = useMemo(() => {
-    // In real app, these would come from API based on timePeriod
     if (timePeriod === 'today') {
-      const total = positions.length;
-      const totalPnL = positions.reduce((s, p) => s + p.profit, 0);
-      const totalVolume = positions.reduce((s, p) => s + p.volume, 0);
-      const buyCount = positions.filter(p => p.type === 'BUY').length;
-      const sellCount = positions.filter(p => p.type === 'SELL').length;
-      const hedgedCount = positions.filter(p => p.hedge !== 'No').length;
+      const total = filteredPositions.length;
+      const totalPnL = filteredPositions.reduce((s, p) => s + p.profit, 0);
+      const totalVolume = filteredPositions.reduce((s, p) => s + p.volume, 0);
+      const buyCount = filteredPositions.filter(p => p.type === 'BUY').length;
+      const sellCount = filteredPositions.filter(p => p.type === 'SELL').length;
+      const hedgedCount = filteredPositions.filter(p => p.hedge !== 'No').length;
       return { total, totalPnL, totalVolume, buyCount, sellCount, hedgedCount };
     } else {
-      // Mock monthly data (higher numbers)
       return {
-        total: positions.length * 22,
-        totalPnL: positions.reduce((s, p) => s + p.profit, 0) * 22,
-        totalVolume: positions.reduce((s, p) => s + p.volume, 0) * 22,
-        buyCount: positions.filter(p => p.type === 'BUY').length * 22,
-        sellCount: positions.filter(p => p.type === 'SELL').length * 22,
-        hedgedCount: positions.filter(p => p.hedge !== 'No').length * 22,
+        total: filteredPositions.length * 22,
+        totalPnL: filteredPositions.reduce((s, p) => s + p.profit, 0) * 22,
+        totalVolume: filteredPositions.reduce((s, p) => s + p.volume, 0) * 22,
+        buyCount: filteredPositions.filter(p => p.type === 'BUY').length * 22,
+        sellCount: filteredPositions.filter(p => p.type === 'SELL').length * 22,
+        hedgedCount: filteredPositions.filter(p => p.hedge !== 'No').length * 22,
       };
     }
-  }, [positions, timePeriod]);
+  }, [filteredPositions, timePeriod]);
+
+  const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '' || filterServer !== 'ALL';
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
@@ -289,6 +330,73 @@ export function BBookPage() {
         </div>
       </div>
 
+      {/* Filter Bar */}
+      <div className="px-4 py-1.5 border-b border-[#505050] flex items-center gap-4" style={{ backgroundColor: '#2a292c' }}>
+        <span className="text-[10px] text-[#666] uppercase tracking-wider font-medium">Filters</span>
+
+        {/* Group / Account — searchable input with datalist */}
+        <div className="relative">
+          <input
+            type="text"
+            list="group-options"
+            value={groupInput}
+            onChange={(e) => setGroupInput(e.target.value)}
+            placeholder="All Groups / All Accounts"
+            className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#4ecdc4]"
+          />
+          <datalist id="group-options">
+            {uniqueGroups.map(g => <option key={g} value={g} />)}
+            {uniqueLogins.map(l => <option key={l} value={l} />)}
+          </datalist>
+        </div>
+
+        {/* Symbol — searchable input with datalist */}
+        <div className="relative">
+          <input
+            type="text"
+            list="symbol-options"
+            value={symbolInput}
+            onChange={(e) => setSymbolInput(e.target.value)}
+            placeholder="All Symbols"
+            className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#4ecdc4]"
+          />
+          <datalist id="symbol-options">
+            {uniqueSymbols.map(s => <option key={s} value={s} />)}
+          </datalist>
+        </div>
+
+        {/* Server — dropdown */}
+        <select value={filterServer} onChange={(e) => setFilterServer(e.target.value)}
+          className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]">
+          {uniqueServers.map(s => <option key={s} value={s}>{s === 'ALL' ? 'All Servers' : s}</option>)}
+        </select>
+
+        {/* Request Button */}
+        <button
+          className="px-4 py-1 rounded text-xs font-medium text-white transition-colors"
+          style={{ backgroundColor: '#4ecdc4' }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#3dbdb5')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#4ecdc4')}
+          onClick={() => console.log('Request:', { group: groupInput, symbol: symbolInput, server: filterServer })}
+        >
+          Request
+        </button>
+
+        {hasActiveFilters && (
+          <button
+            onClick={() => { setGroupInput(''); setSymbolInput(''); setFilterServer('ALL'); }}
+            className="text-xs text-[#999] hover:text-white transition-colors"
+          >
+            ✕ Clear
+          </button>
+        )}
+        {hasActiveFilters && (
+          <span className="text-[10px] text-[#4ecdc4] font-mono ml-auto">
+            {filteredPositions.length} of {positions.length} positions
+          </span>
+        )}
+      </div>
+
       {/* Content Area with padding */}
       <div className="flex-1 flex flex-col overflow-hidden p-2">
         {/* Grid - takes remaining space */}
@@ -296,7 +404,7 @@ export function BBookPage() {
           <AgGridReact<BBookPosition>
             ref={gridRef}
             theme={gridTheme}
-            rowData={positions}
+            rowData={filteredPositions}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             gridOptions={gridOptions}
@@ -319,7 +427,7 @@ export function BBookPage() {
           style={{ backgroundColor: '#313032' }}
         >
           <BBookCharts 
-            positions={positions} 
+            positions={filteredPositions} 
             collapsed={chartsCollapsed}
             onToggle={() => setChartsCollapsed(!chartsCollapsed)}
           />
