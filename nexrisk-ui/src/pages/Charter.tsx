@@ -132,11 +132,11 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const RISK_STYLE: Record<RiskLevel, { bg: string; text: string; border: string; bar: string; label: string }> = {
-  VERY_LOW: { bg: '#0a1c0d', text: '#66e07a', border: '#1e4a2a', bar: '#2f6a3d', label: 'Very Low' },
-  LOW:      { bg: '#0f200f', text: '#66e07a', border: '#2f6a3d', bar: '#3d8050', label: 'Low' },
-  MEDIUM:   { bg: '#1a1900', text: '#e0d066', border: '#6a6530', bar: '#9a9040', label: 'Medium' },
-  HIGH:     { bg: '#1c1200', text: '#e09a55', border: '#6a4a2f', bar: '#9a6a3a', label: 'High' },
-  CRITICAL: { bg: '#1f0c0e', text: '#ff6b6b', border: '#7a2f36', bar: '#b03040', label: 'Critical' },
+  VERY_LOW: { bg: '#0d1a10', text: '#7aab85', border: '#1f3d28', bar: '#2a5435', label: 'Very Low' },
+  LOW:      { bg: '#101d12', text: '#7aab85', border: '#26472e', bar: '#306040', label: 'Low' },
+  MEDIUM:   { bg: '#1a1a00', text: '#b0a84a', border: '#4a4820', bar: '#6a6530', label: 'Medium' },
+  HIGH:     { bg: '#1c1508', text: '#b88a5cff', border: '#5a3d20', bar: '#7a5228', label: 'High' },
+  CRITICAL: { bg: '#1c0d0f', text: '#f1c6caff', border: '#5a2028', bar: '#d81c2bff', label: 'Critical' },
 };
 
 // ─── Factory Default Mock Data ────────────────────────────────
@@ -217,11 +217,11 @@ function ActionBadge({ code, actionDefs }: { code: ActionCode; actionDefs?: Acti
   const mod    = ['WIDEN_SPREAD', 'MIN_HOLDING_TIME', 'RESTRICT_VOLUME', 'DISABLE_REBATES'];
   const abook  = ['A_BOOK_REVIEW', 'A_BOOK_PARTIAL', 'A_BOOK_FULL'];
 
-  const color = safe.includes(code)  ? { bg: '#10201a', text: '#66e07a', border: '#2f6a3d' }
-    : watch.includes(code)  ? { bg: '#1a1900', text: '#e0d066', border: '#6a6530' }
-    : mod.includes(code)    ? { bg: '#1c1200', text: '#e09a55', border: '#6a4a2f' }
-    : abook.includes(code)  ? { bg: '#1f0c0e', text: '#ff6b6b', border: '#7a2f36' }
-    : { bg: '#1b1c22', text: '#d2d6e2', border: '#44454f' };
+  const color = safe.includes(code)  ? { bg: '#0d1a10', text: '#7aab85', border: '#1f3d28' }
+    : watch.includes(code)  ? { bg: '#1a1a00', text: '#b0a84a', border: '#4a4820' }
+    : mod.includes(code)    ? { bg: '#1c1508', text: '#b07840', border: '#5a3d20' }
+    : abook.includes(code)  ? { bg: '#1c0d0f', text: '#b05050', border: '#5a2028' }
+    : { bg: '#1b1c22', text: '#a0a4b8', border: '#44454f' };
 
   return (
     <span className="px-1.5 py-0.5 rounded text-xs font-mono font-medium"
@@ -244,23 +244,23 @@ function BandCell({ band, actionDefs, modifiedRuleIds, onClick }: {
       className="group flex flex-col text-left rounded transition-all duration-150 hover:ring-1 hover:ring-accent"
       style={{
         background: s.bg,
-        border: `1px solid ${modified ? '#9a7830' : s.border}`,
+        border: `1px solid ${modified ? '#7a6020' : s.border}`,
         minWidth: 0, flex: 1, position: 'relative', padding: 0, overflow: 'hidden',
       }}>
-      <div style={{ height: 3, background: s.bar, width: '100%' }} />
+      <div style={{ height: 2, background: s.bar, width: '100%' }} />
       {modified && (
-        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full" style={{ background: '#e0b84a' }}
+        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full" style={{ background: '#8a7030' }}
           title={`Modified by ${band.updated_by}`} />
       )}
-      <div className="flex flex-col gap-0.5 p-2 flex-1">
-        <span className="uppercase tracking-wider font-semibold" style={{ color: s.text, opacity: 0.7, fontSize: 10 }}>
+      <div className="flex flex-col gap-0 px-2 py-1 flex-1">
+        <span className="uppercase tracking-wider font-semibold" style={{ color: s.text, opacity: 0.7, fontSize: 9 }}>
           {s.label}
         </span>
         <span className="text-xs font-semibold leading-tight" style={{ color: s.text }}>
           {getActionLabel(band.action_code, actionDefs)}
         </span>
         {hint && <span className="text-xs font-mono" style={{ color: s.text, opacity: 0.65 }}>{hint}</span>}
-        <span className="font-mono mt-auto pt-1" style={{ color: s.text, opacity: 0.75, fontSize: 10 }}>
+        <span className="font-mono mt-auto" style={{ color: '#c8cad4', fontSize: 9 }}>
           PF {pfLabel(band)}
         </span>
       </div>
@@ -345,20 +345,20 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
 
         {/* API error banners — shown when save or reset fails */}
         {saveError && (
-          <div className="rounded p-3 text-xs" style={{ background: '#1f0c0e', border: '1px solid #7a2f36', color: '#ff6b6b' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#1c0d0f', border: '1px solid #5a2028', color: '#b05050' }}>
             <div className="font-semibold mb-0.5">Save failed</div>
             <div>{saveError}</div>
           </div>
         )}
         {resetError && (
-          <div className="rounded p-3 text-xs" style={{ background: '#1f0c0e', border: '1px solid #7a2f36', color: '#ff6b6b' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#1c0d0f', border: '1px solid #5a2028', color: '#b05050' }}>
             <div className="font-semibold mb-0.5">Reset failed</div>
             <div>{resetError}</div>
           </div>
         )}
 
         {band.is_factory_default === false ? (
-          <div className="rounded p-3 text-xs" style={{ background: '#1c1900', border: '1px solid #6a6530', color: '#e0d066' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#1a1a00', border: '1px solid #4a4820', color: '#b0a84a' }}>
             <div className="font-semibold mb-1">Previously customised</div>
             <div>By <span className="font-mono">{band.updated_by}</span> · {formatDate(band.updated_at ?? '')}</div>
           </div>
@@ -402,7 +402,7 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
           </select>
           {selectedDef && (
             <p className="text-xs mt-1.5" style={{ color: '#666' }}>
-              {selectedDef.requires_approval && <span style={{ color: '#e0b84a' }}>⚠ Requires approval · </span>}
+              {selectedDef.requires_approval && <span style={{ color: '#8a7030' }}>⚠ Requires approval · </span>}
               {selectedDef.auto_executable ? 'Auto-executable' : 'Manual execution required'}
             </p>
           )}
@@ -468,16 +468,16 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
           <label className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2 block"
             style={{ color: '#a0a4b8' }}>
             Reason for Change
-            <span className="text-xs font-normal normal-case" style={{ color: '#ff6b6b' }}>Required for audit</span>
+            <span className="text-xs font-normal normal-case" style={{ color: '#b05050' }}>Required for audit</span>
           </label>
           <textarea rows={3} value={reason}
             onChange={e => { setReason(e.target.value); setReasonError(false); }}
             placeholder="Describe why this rule is being changed…"
             className="input w-full resize-none"
-            style={{ borderColor: reasonError ? '#ff6b6b' : undefined }}
+            style={{ borderColor: reasonError ? '#8a3030' : undefined }}
           />
           {reasonError && (
-            <p className="text-xs mt-1" style={{ color: '#ff6b6b' }}>A reason is mandatory for audit compliance.</p>
+            <p className="text-xs mt-1" style={{ color: '#b05050' }}>A reason is mandatory for audit compliance.</p>
           )}
         </div>
       </div>
@@ -490,7 +490,7 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
               onClick={() => onResetRule(band.rule_id)}
               disabled={isSaving || isResetting}
               className="btn text-sm flex items-center gap-1.5"
-              style={{ background: '#1c1900', color: '#e0b84a', border: '1px solid #6a6530' }}
+              style={{ background: '#1a1a00', color: '#b0a84a', border: '1px solid #4a4820' }}
               title="Revert this rule to its original factory shipped values"
             >
               {isResetting && <span className="w-3 h-3 border border-current/30 border-t-current rounded-full animate-spin" />}
@@ -526,19 +526,19 @@ function RuleLookupPanel({
   onClose:         () => void;
   onCellClick:     (behavior: BehaviorType, band: PFBand) => void;
 }) {
-  const [filterBehavior,  setFilterBehavior]  = useState<BehaviorType | 'ALL'>('ALL');
-  const [filterRiskLevel, setFilterRiskLevel] = useState<RiskLevel | 'ALL'>('ALL');
-  const [filterAction,    setFilterAction]    = useState<ActionCode | 'ALL'>('ALL');
+  const [filterBehavior,  setFilterBehavior]  = useState<BehaviorType | 'ALL' | ''>('');
+  const [filterRiskLevel, setFilterRiskLevel] = useState<RiskLevel | 'ALL' | ''>('');
+  const [filterAction,    setFilterAction]    = useState<ActionCode | 'ALL' | ''>('');
   const [filterPF,        setFilterPF]        = useState('');
 
   const results = useMemo(() => {
     const pfVal = filterPF !== '' ? parseFloat(filterPF) : null;
     const rows: Array<{ behavior: BehaviorType; band: PFBand }> = [];
     for (const [btype, bands] of Object.entries(pfBands)) {
-      if (filterBehavior !== 'ALL' && btype !== filterBehavior) continue;
+      if (filterBehavior && btype !== filterBehavior) continue;
       for (const band of bands) {
-        if (filterRiskLevel !== 'ALL' && band.risk_level !== filterRiskLevel) continue;
-        if (filterAction    !== 'ALL' && band.action_code !== filterAction)   continue;
+        if (filterRiskLevel && band.risk_level !== filterRiskLevel) continue;
+        if (filterAction    && band.action_code !== filterAction)              continue;
         if (pfVal !== null && !(band.pf_min <= pfVal && (isOpenEnded(band.pf_max) || (band.pf_max as number) > pfVal))) continue;
         rows.push({ behavior: btype, band });
       }
@@ -546,7 +546,7 @@ function RuleLookupPanel({
     return rows;
   }, [pfBands, filterBehavior, filterRiskLevel, filterAction, filterPF]);
 
-  const hasFilters = filterBehavior !== 'ALL' || filterRiskLevel !== 'ALL' || filterAction !== 'ALL' || filterPF !== '';
+  const hasFilters = !!filterBehavior || !!filterRiskLevel || !!filterAction || filterPF !== '';
   const allActionCodes = useMemo(() => {
     const codes = new Set<ActionCode>();
     for (const bands of Object.values(pfBands)) for (const b of bands) codes.add(b.action_code);
@@ -573,15 +573,15 @@ function RuleLookupPanel({
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Behavior</label>
-            <select value={filterBehavior} onChange={e => setFilterBehavior(e.target.value as BehaviorType | 'ALL')} className="select w-full text-xs">
-              <option value="ALL">All behaviors</option>
+            <select value={filterBehavior} onChange={e => setFilterBehavior(e.target.value as BehaviorType | '')} className="select w-full text-xs">
+              <option value="">Select...</option>
               {getBehaviors(pfBands).map(b => <option key={b} value={b}>{getBehaviorMeta(b).label}</option>)}
             </select>
           </div>
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Risk Level</label>
-            <select value={filterRiskLevel} onChange={e => setFilterRiskLevel(e.target.value as RiskLevel | 'ALL')} className="select w-full text-xs">
-              <option value="ALL">All levels</option>
+            <select value={filterRiskLevel} onChange={e => setFilterRiskLevel(e.target.value as RiskLevel | '')} className="select w-full text-xs">
+              <option value="">Select...</option>
               {(['VERY_LOW','LOW','MEDIUM','HIGH','CRITICAL'] as RiskLevel[]).map(l =>
                 <option key={l} value={l}>{RISK_STYLE[l].label}</option>
               )}
@@ -589,8 +589,8 @@ function RuleLookupPanel({
           </div>
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Action</label>
-            <select value={filterAction} onChange={e => setFilterAction(e.target.value as ActionCode | 'ALL')} className="select w-full text-xs">
-              <option value="ALL">All actions</option>
+            <select value={filterAction} onChange={e => setFilterAction(e.target.value as ActionCode | '')} className="select w-full text-xs">
+              <option value="">Select...</option>
               {allActionCodes.map(c => <option key={c} value={c}>{ACTION_LABELS[c] ?? c}</option>)}
             </select>
           </div>
@@ -605,7 +605,7 @@ function RuleLookupPanel({
         </div>
 
         {hasFilters && (
-          <button onClick={() => { setFilterBehavior('ALL'); setFilterRiskLevel('ALL'); setFilterAction('ALL'); setFilterPF(''); }}
+          <button onClick={() => { setFilterBehavior(''); setFilterRiskLevel(''); setFilterAction(''); setFilterPF(''); }}
             className="text-xs text-text-muted hover:text-white transition-colors text-left">
             ✕ Clear filters
           </button>
@@ -615,13 +615,17 @@ function RuleLookupPanel({
         <div style={{ borderTop: '1px solid #2a2b35' }} />
 
         {/* Results */}
-        <div className="text-xs text-text-muted">
-          {results.length === 0
-            ? 'No rules match'
-            : `${results.length} rule${results.length !== 1 ? 's' : ''} matched`}
-        </div>
-
-        <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 420 }}>
+        {!hasFilters ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
+            <div className="text-2xl opacity-20">⌕</div>
+            <div className="text-xs text-text-muted">Select at least one filter to find rules</div>
+          </div>
+        ) : (
+          <>
+            <div className="text-xs text-text-muted">
+              {results.length === 0 ? 'No rules match' : `${results.length} rule${results.length !== 1 ? 's' : ''} matched`}
+            </div>
+            <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 380 }}>
           {results.map(({ behavior, band }) => {
             const s        = RISK_STYLE[band.risk_level];
             const hint     = actionParamHint(band);
@@ -630,16 +634,16 @@ function RuleLookupPanel({
               <button key={band.rule_id}
                 onClick={() => onCellClick(behavior, band)}
                 className="text-left rounded transition-all hover:ring-1 hover:ring-accent"
-                style={{ background: s.bg, border: `1px solid ${modified ? '#9a7830' : s.border}`, position: 'relative', overflow: 'hidden' }}>
+                style={{ background: s.bg, border: `1px solid ${modified ? '#7a6020' : s.border}`, position: 'relative', overflow: 'hidden' }}>
                 <div style={{ height: 2, background: s.bar, width: '100%' }} />
-                {modified && <span className="absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full" style={{ background: '#e0b84a' }} />}
+                {modified && <span className="absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full" style={{ background: '#8a7030' }} />}
                 <div className="p-3 flex items-start justify-between gap-3">
                   <div className="flex flex-col gap-0.5 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-xs uppercase tracking-wider font-semibold" style={{ color: s.text, opacity: 0.7 }}>
                         {s.label}
                       </span>
-                      {modified && <span className="text-xs" style={{ color: '#e0b84a' }}>Modified</span>}
+                      {modified && <span className="text-xs" style={{ color: '#8a7030' }}>Modified</span>}
                     </div>
                     <span className="text-sm font-semibold" style={{ color: s.text }}>
                       {getActionLabel(band.action_code, actionDefs)}
@@ -654,7 +658,9 @@ function RuleLookupPanel({
               </button>
             );
           })}
-        </div>
+          </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -692,7 +698,7 @@ function ConfirmModal({
           {danger && (
             <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
               style={{ background: '#1f0c0e', border: '1px solid #7a2f36' }}>
-              <svg width="14" height="14" fill="none" stroke="#ff6b6b" strokeWidth="2" viewBox="0 0 24 24">
+              <svg width="14" height="14" fill="none" stroke="#b05050" strokeWidth="2" viewBox="0 0 24 24">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                 <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
@@ -707,8 +713,8 @@ function ConfirmModal({
             <div className="rounded p-3" style={{ background: '#1f0c0e', border: '1px solid #7a2f36' }}>
               <label className="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)}
-                  className="mt-0.5 shrink-0" style={{ accentColor: '#ff6b6b', width: 14, height: 14 }} />
-                <span className="text-xs leading-relaxed font-semibold" style={{ color: '#ff6b6b' }}>
+                  className="mt-0.5 shrink-0" style={{ accentColor: '#b05050', width: 14, height: 14 }} />
+                <span className="text-xs leading-relaxed font-semibold" style={{ color: '#b05050' }}>
                   {doubleConfirmLabel ?? 'I understand this action cannot be undone.'}
                 </span>
               </label>
@@ -727,7 +733,7 @@ function ConfirmModal({
             className="btn text-sm flex items-center gap-2"
             style={{
               background: danger ? '#1f0c0e' : '#163a3a',
-              color:      danger ? '#ff6b6b' : '#49b3b3',
+              color:      danger ? '#b05050' : '#49b3b3',
               border:     `1px solid ${danger ? '#7a2f36' : '#2f6a3d'}`,
               opacity:    blocked ? 0.4 : 1,
             }}>
@@ -742,15 +748,279 @@ function ConfirmModal({
 
 // ─── Matrix Tab ────────────────────────────────────────────────
 
-function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetBehavior }: {
+
+// ─── Edit Ladder Panel ─────────────────────────────────────────
+
+interface LadderBand {
+  pf_min:       number;
+  pf_max:       number;   // 999 = open-ended
+  risk_level:   RiskLevel;
+  action_code:  ActionCode;
+  action_params: Record<string, number>;
+}
+
+function EditLadderPanel({
+  behavior, bands, actionDefs, onClose, onSave, isSaving, saveError,
+}: {
+  behavior:    BehaviorType;
+  bands:       PFBand[];
+  actionDefs?: ActionCodeDef[];
+  onClose:     () => void;
+  onSave:      (behavior: BehaviorType, ladder: LadderBand[], reason: string) => void;
+  isSaving:    boolean;
+  saveError?:  string | null;
+}) {
+  // Initialise rows from live bands — 999 stored as open-ended sentinel
+  const [rows, setRows] = useState<LadderBand[]>(() =>
+    bands.map(b => ({
+      pf_min:        b.pf_min,
+      pf_max:        isOpenEnded(b.pf_max) ? 999 : (b.pf_max as number),
+      risk_level:    b.risk_level,
+      action_code:   b.action_code,
+      action_params: b.action_params ?? {},
+    }))
+  );
+  const [reason, setReason]           = useState('');
+  const [reasonError, setReasonError] = useState(false);
+
+  // Client-side contiguity validation
+  const validationErrors = useMemo(() => {
+    const errs: string[] = [];
+    if (rows.length === 0) { errs.push('At least one band is required.'); return errs; }
+    if (rows[0].pf_min !== 0) errs.push('First band must start at PF 0.00.');
+    for (let i = 1; i < rows.length; i++) {
+      const prev = rows[i - 1], curr = rows[i];
+      if (Math.abs(curr.pf_min - prev.pf_max) > 0.0001)
+        errs.push(`Band ${i + 1}: gap or overlap between PF ${prev.pf_max} and ${curr.pf_min}.`);
+      if (curr.pf_min >= curr.pf_max)
+        errs.push(`Band ${i + 1}: pf_min must be less than pf_max.`);
+    }
+    if (rows[rows.length - 1].pf_max !== 999)
+      errs.push('Last band must be open-ended (∞).');
+    return errs;
+  }, [rows]);
+
+  const updateRow = (i: number, patch: Partial<LadderBand>) =>
+    setRows(r => r.map((row, idx) => idx === i ? { ...row, ...patch } : row));
+
+  const addBand = () => {
+    const last = rows[rows.length - 1];
+    // Insert a new band before the last (open-ended) one
+    const newPfMin = last.pf_min;
+    const newPfMax = Math.round((newPfMin + 1) * 100) / 100;
+    setRows(r => [
+      ...r.slice(0, -1),
+      { pf_min: newPfMin, pf_max: newPfMax, risk_level: 'MEDIUM', action_code: 'MONITOR' as ActionCode, action_params: {} },
+      { ...last, pf_min: newPfMax },
+    ]);
+  };
+
+  const removeBand = (i: number) => {
+    if (rows.length <= 1) return;
+    setRows(r => {
+      const next = [...r];
+      // If removing last row, extend previous to 999
+      if (i === next.length - 1) { next[i - 1] = { ...next[i - 1], pf_max: 999 }; }
+      // If removing first row, set next pf_min to 0
+      else if (i === 0) { next[1] = { ...next[1], pf_min: 0 }; }
+      // Otherwise bridge the gap
+      else { next[i + 1] = { ...next[i + 1], pf_min: next[i - 1].pf_max }; }
+      next.splice(i, 1);
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    if (!reason.trim()) { setReasonError(true); return; }
+    if (validationErrors.length > 0) return;
+    onSave(behavior, rows, reason);
+  };
+
+  const meta = getBehaviorMeta(behavior);
+
+  return (
+    <div className="flex flex-col h-full" style={{ background: '#14151a', borderLeft: '1px solid #44454f', minWidth: 480 }}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #44454f' }}>
+        <div>
+          <div className="text-sm font-semibold text-white">Edit Ladder — {meta.label}</div>
+          <div className="text-xs mt-0.5" style={{ color: '#a0a4b8' }}>
+            Redefine PF breakpoints, risk levels, and actions atomically
+          </div>
+        </div>
+        <button onClick={onClose} className="btn-icon text-text-secondary hover:text-white">
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+
+        {/* Save error */}
+        {saveError && (
+          <div className="rounded p-3 text-xs" style={{ background: '#1c0d0f', border: '1px solid #5a2028', color: '#b05050' }}>
+            <div className="font-semibold mb-0.5">Save failed</div>
+            <div>{saveError}</div>
+          </div>
+        )}
+
+        {/* Validation errors */}
+        {validationErrors.length > 0 && (
+          <div className="rounded p-3 text-xs flex flex-col gap-1"
+            style={{ background: '#1f0c0e', border: '1px solid #7a2f36', color: '#b05050' }}>
+            <div className="font-semibold mb-0.5">Ladder validation</div>
+            {validationErrors.map((e, i) => <div key={i}>· {e}</div>)}
+          </div>
+        )}
+
+        {/* Band rows */}
+        <div className="flex flex-col gap-2">
+          {/* Column headers */}
+          <div className="grid gap-2 text-xs font-semibold uppercase tracking-wider px-1"
+            style={{ gridTemplateColumns: '90px 90px 1fr 1fr 28px', color: '#a0a4b8' }}>
+            <span>PF Min</span>
+            <span>PF Max</span>
+            <span>Risk Level</span>
+            <span>Action</span>
+            <span />
+          </div>
+
+          {rows.map((row, i) => {
+            const s = RISK_STYLE[row.risk_level];
+            const isLast = i === rows.length - 1;
+            return (
+              <div key={i} className="grid gap-2 items-center"
+                style={{ gridTemplateColumns: '90px 90px 1fr 1fr 28px' }}>
+
+                {/* PF Min */}
+                <input type="number" min="0" step="0.1" value={row.pf_min}
+                  onChange={e => updateRow(i, { pf_min: parseFloat(e.target.value) || 0 })}
+                  className="input font-mono text-xs" style={{ padding: '5px 8px' }} />
+
+                {/* PF Max — locked for last band */}
+                {isLast ? (
+                  <div className="input font-mono text-xs flex items-center" style={{ color: '#666', padding: '5px 8px' }}>∞</div>
+                ) : (
+                  <input type="number" min="0" step="0.1" value={row.pf_max}
+                    onChange={e => {
+                      const val = parseFloat(e.target.value) || 0;
+                      updateRow(i, { pf_max: val });
+                      // Auto-advance next band's pf_min
+                      if (i + 1 < rows.length) updateRow(i + 1, { pf_min: val });
+                    }}
+                    className="input font-mono text-xs" style={{ padding: '5px 8px' }} />
+                )}
+
+                {/* Risk Level */}
+                <select value={row.risk_level}
+                  onChange={e => updateRow(i, { risk_level: e.target.value as RiskLevel })}
+                  className="select text-xs"
+                  style={{ background: s.bg, color: s.text, borderColor: s.border }}>
+                  {(['VERY_LOW','LOW','MEDIUM','HIGH','CRITICAL'] as RiskLevel[]).map(l =>
+                    <option key={l} value={l}>{RISK_STYLE[l].label}</option>
+                  )}
+                </select>
+
+                {/* Action */}
+                <select value={row.action_code}
+                  onChange={e => updateRow(i, { action_code: e.target.value as ActionCode, action_params: {} })}
+                  className="select text-xs">
+                  {actionDefs
+                    ? actionDefs.map(d => <option key={d.code} value={d.code}>{ACTION_LABELS[d.code] ?? d.code}</option>)
+                    : (Object.keys(ACTION_LABELS) as ActionCode[]).map(a => <option key={a} value={a}>{ACTION_LABELS[a]}</option>)
+                  }
+                </select>
+
+                {/* Remove */}
+                <button onClick={() => removeBand(i)} disabled={rows.length <= 1}
+                  className="flex items-center justify-center rounded transition-colors"
+                  style={{ width: 28, height: 28, color: rows.length <= 1 ? '#333' : '#666',
+                    background: 'transparent', border: '1px solid #2a2b35' }}
+                  title="Remove this band">
+                  <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Add band */}
+        <button onClick={addBand}
+          className="text-xs flex items-center gap-1.5 transition-colors hover:text-white"
+          style={{ color: '#666' }}>
+          <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Add band
+        </button>
+
+        {/* Preview strip */}
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#a0a4b8' }}>Preview</div>
+          <div className="flex rounded overflow-hidden" style={{ height: 12 }}>
+            {rows.map((row, i) => {
+              const s = RISK_STYLE[row.risk_level];
+              const width = isOpenEnded(row.pf_max)
+                ? '60px'
+                : `${Math.max(((row.pf_max - row.pf_min) / 5) * 100, 8)}%`;
+              return (
+                <div key={i} title={`PF ${row.pf_min}–${row.pf_max === 999 ? '∞' : row.pf_max}: ${ACTION_LABELS[row.action_code] ?? row.action_code}`}
+                  style={{ background: s.bar, width, minWidth: 8, flex: row.pf_max === 999 ? 1 : undefined }} />
+              );
+            })}
+          </div>
+          <div className="flex justify-between mt-1 text-xs font-mono" style={{ color: '#555' }}>
+            <span>0</span>
+            <span>∞</span>
+          </div>
+        </div>
+
+        {/* Reason */}
+        <div>
+          <label className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2 block"
+            style={{ color: '#a0a4b8' }}>
+            Reason for Change
+            <span className="text-xs font-normal normal-case" style={{ color: '#b05050' }}>Required for audit</span>
+          </label>
+          <textarea rows={3} value={reason}
+            onChange={e => { setReason(e.target.value); setReasonError(false); }}
+            placeholder="Describe why this ladder is being restructured…"
+            className="input w-full resize-none"
+            style={{ borderColor: reasonError ? '#8a3030' : undefined }}
+          />
+          {reasonError && (
+            <p className="text-xs mt-1" style={{ color: '#b05050' }}>A reason is mandatory for audit compliance.</p>
+          )}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="px-5 py-4 flex items-center justify-between gap-3" style={{ borderTop: '1px solid #44454f' }}>
+        <button onClick={onClose} disabled={isSaving} className="btn btn-ghost text-sm">Cancel</button>
+        <button onClick={handleSave}
+          disabled={isSaving || validationErrors.length > 0}
+          className="btn btn-primary text-sm flex items-center gap-2">
+          {isSaving && <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />}
+          Replace Ladder
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetBehavior, onEditLadder }: {
   pfBands: Record<BehaviorType, PFBand[]>; actionDefs?: ActionCodeDef[];
   modifiedRuleIds: Set<number>;
   onCellClick:     (behavior: BehaviorType, band: PFBand) => void;
   onResetBehavior: (behavior: BehaviorType) => void;
+  onEditLadder:    (behavior: BehaviorType) => void;
 }) {
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-6 flex-wrap">
+      <div className="flex items-center gap-4 flex-wrap" style={{ marginBottom: 4 }}>
         <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#a0a4b8' }}>Risk Level</span>
         {(['VERY_LOW', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as RiskLevel[]).map(lvl => {
           const s = RISK_STYLE[lvl];
@@ -762,34 +1032,46 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
           );
         })}
         <div className="flex items-center gap-1.5 ml-4">
-          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#e0b84a' }} />
+          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#8a7030' }} />
           <span className="text-xs text-text-secondary">Modified from default</span>
         </div>
       </div>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col" style={{ gap: 3 }}>
         {getBehaviors(pfBands).map(btype => {
           const bands = pfBands[btype] ?? [];
           return (
             <div key={btype} className="flex gap-2 items-stretch">
-              <div className="flex flex-col justify-center shrink-0" style={{ width: 136 }}>
-                <div className="text-sm font-semibold text-white">{getBehaviorMeta(btype).label}</div>
-                <div className="text-xs mt-0.5 leading-snug" style={{ color: '#666' }}>
-                  {getBehaviorMeta(btype).description}
+              <div className="flex flex-col justify-center shrink-0" style={{ width: 130 }}>
+                <div className="text-xs font-semibold text-white">{getBehaviorMeta(btype).label}</div>
+
+                <div className="flex items-center gap-3 mt-0.5">
+                  <button
+                    onClick={() => onEditLadder(btype)}
+                    className="text-xs flex items-center gap-1 transition-colors"
+                    style={{ color: '#5b86b8' }}
+                    title={`Restructure the ${getBehaviorMeta(btype).label} PF ladder atomically`}
+                  >
+                    <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                    Edit ladder
+                  </button>
+                  <button
+                    onClick={() => onResetBehavior(btype)}
+                    className="text-xs flex items-center gap-1 transition-colors"
+                    style={{ color: '#8a7030' }}
+                    title={`Reset all ${getBehaviorMeta(btype).label} rules to factory defaults`}
+                  >
+                    <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                      <path d="M3 3v5h5" />
+                    </svg>
+                    Reset row
+                  </button>
                 </div>
-                <button
-                  onClick={() => onResetBehavior(btype)}
-                  className="mt-1.5 text-xs flex items-center gap-1 transition-colors"
-                  style={{ color: '#e0b84a' }}
-                  title={`Reset all ${getBehaviorMeta(btype).label} rules to factory defaults`}
-                >
-                  <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                    <path d="M3 3v5h5" />
-                  </svg>
-                  Reset row
-                </button>
               </div>
-              <div className="flex gap-1 flex-1" style={{ minHeight: 86 }}>
+              <div className="flex gap-1 flex-1" style={{ minHeight: 70 }}>
                 {bands.length > 0 ? (
                   bands.map(band => (
                     <BandCell key={band.rule_id} band={band} actionDefs={actionDefs}
@@ -806,7 +1088,7 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
           );
         })}
       </div>
-      <p className="text-xs" style={{ color: '#555', marginTop: 4 }}>
+      <p className="text-xs" style={{ color: '#a0a4b8', marginTop: 4 }}>
         Click any cell to view or edit that rule. Changes require a reason and are written to the audit log.
       </p>
     </div>
@@ -876,7 +1158,7 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
                   <td className="px-3 py-2"><ActionBadge code={band.action_code} actionDefs={actionDefs} /></td>
                   <td className="px-3 py-2 text-xs font-mono text-text-muted">{actionParamHint(band) ?? '—'}</td>
                   <td className="px-3 py-2">
-                    <span className="text-xs" style={{ color: modified ? '#e0b84a' : '#5b86b8' }}>
+                    <span className="text-xs" style={{ color: modified ? '#8a7030' : '#5b86b8' }}>
                       {modified ? 'Modified' : 'Default'}
                     </span>
                   </td>
@@ -903,17 +1185,17 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
 
 function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record<BehaviorType, PFBand[]> }) {
   const CHANGE_COLORS: Record<string, { color: string; bg: string }> = {
-    CREATE:               { color: '#66e07a', bg: '#162a1c' },
-    UPDATE:               { color: '#e0d066', bg: '#1a1900' },
-    DELETE:               { color: '#ff6b6b', bg: '#1f0c0e' },
+    CREATE:               { color: '#7aab85', bg: '#0d1a10' },
+    UPDATE:               { color: '#b0a84a', bg: '#1a1a00' },
+    DELETE:               { color: '#b05050', bg: '#1c0d0f' },
     RESET_SINGLE:         { color: '#5b86b8', bg: '#101820' },
     RESET_BEHAVIOR:       { color: '#5b86b8', bg: '#101820' },
     RESET_ALL:            { color: '#5b86b8', bg: '#101820' },
-    REPLACE_LADDER:       { color: '#e09a55', bg: '#1c1200' },
+    REPLACE_LADDER:       { color: '#b07840', bg: '#1c1508' },
     BULK_TOGGLE:          { color: '#a0a4b8', bg: '#1b1c22' },
-    BULK_ACTION:          { color: '#e09a55', bg: '#1c1200' },
-    IMPORT_MERGE:         { color: '#66e07a', bg: '#162a1c' },
-    IMPORT_REPLACE_CUSTOM:{ color: '#e09a55', bg: '#1c1200' },
+    BULK_ACTION:          { color: '#b07840', bg: '#1c1508' },
+    IMPORT_MERGE:         { color: '#7aab85', bg: '#0d1a10' },
+    IMPORT_REPLACE_CUSTOM:{ color: '#b07840', bg: '#1c1508' },
   };
 
   // Build rule_id → behavior_type map from pfBands
@@ -1066,23 +1348,23 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
                 {(entry.old_values && Object.keys(entry.old_values).length > 0 || entry.new_values && Object.keys(entry.new_values).length > 0) && (
                   <div className="flex gap-3 mb-3 text-xs font-mono flex-wrap">
                     {entry.old_values && Object.keys(entry.old_values).length > 0 && (
-                      <div className="rounded p-2 flex-1" style={{ background: '#200c0f', border: '1px solid #5a1f25', minWidth: 140 }}>
-                        <div className="font-semibold mb-1" style={{ color: '#ff6b6b' }}>Before</div>
+                      <div className="rounded p-2 flex-1" style={{ background: '#1c0d0f', border: '1px solid #4a1820', minWidth: 140 }}>
+                        <div className="font-semibold mb-1" style={{ color: '#b05050' }}>Before</div>
                         {Object.entries(entry.old_values).map(([k, v]) => (
                           <div key={k} className="flex gap-2">
                             <span style={{ color: '#888' }}>{k}:</span>
-                            <span style={{ color: '#ff6b6b' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                            <span style={{ color: '#b05050' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
                           </div>
                         ))}
                       </div>
                     )}
                     {entry.new_values && Object.keys(entry.new_values).length > 0 && (
-                      <div className="rounded p-2 flex-1" style={{ background: '#0c200f', border: '1px solid #1f5a25', minWidth: 140 }}>
-                        <div className="font-semibold mb-1" style={{ color: '#66e07a' }}>After</div>
+                      <div className="rounded p-2 flex-1" style={{ background: '#0d1a10', border: '1px solid #1a3d22', minWidth: 140 }}>
+                        <div className="font-semibold mb-1" style={{ color: '#7aab85' }}>After</div>
                         {Object.entries(entry.new_values).map(([k, v]) => (
                           <div key={k} className="flex gap-2">
                             <span style={{ color: '#888' }}>{k}:</span>
-                            <span style={{ color: '#66e07a' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                            <span style={{ color: '#7aab85' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
                           </div>
                         ))}
                       </div>
@@ -1114,6 +1396,7 @@ export function CharterPage() {
   const [activeTab,    setActiveTab]    = useState<Tab>('matrix');
   const [showLookup, setShowLookup] = useState(false);
   const [editTarget,   setEditTarget]   = useState<{ behavior: BehaviorType; band: PFBand } | null>(null);
+  const [editLadder,   setEditLadder]   = useState<BehaviorType | null>(null);
 
   // Confirm modal state — covers both behavior-level and full factory reset
   const [confirmModal, setConfirmModal] = useState<{
@@ -1219,6 +1502,21 @@ export function CharterPage() {
     },
   });
 
+  // PUT /api/v1/risk-matrix/pf-bands/:behavior — replace entire ladder atomically
+  const replaceLadder = useMutation({
+    mutationFn: ({ behavior, ladder, reason }: { behavior: BehaviorType; ladder: LadderBand[]; reason: string }) =>
+      apiFetch<{ success: boolean; rules_created: number; rules_replaced: number }>(
+        `/api/v1/risk-matrix/pf-bands/${behavior}`,
+        { method: 'PUT', body: JSON.stringify({ updated_by: 'risk_manager', reason, bands: ladder }) }
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['risk-matrix-pf-bands'] });
+      qc.invalidateQueries({ queryKey: ['risk-matrix-diff'] });
+      qc.invalidateQueries({ queryKey: ['risk-matrix-history'] });
+      setEditLadder(null);
+    },
+  });
+
   // GET /api/v1/risk-matrix/rules/export
   // Returns a file attachment — open in new tab to trigger download
   const handleExport = useCallback(() => {
@@ -1255,30 +1553,28 @@ export function CharterPage() {
       <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* Page header */}
-        <div className="px-5 pt-5 pb-0" style={{ borderBottom: '1px solid #44454f' }}>
-          <div className="flex items-start justify-between gap-4 pb-4">
+        <div className="px-4 pt-3 pb-0" style={{ borderBottom: '1px solid #44454f' }}>
+          <div className="flex items-center justify-between gap-4 pb-2">
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-lg font-semibold text-white">Risk Charter</h1>
+                <h1 className="text-sm font-semibold text-white">Risk Charter</h1>
                 {bandsLoading && (
                   <span className="w-3 h-3 border border-accent/30 border-t-accent rounded-full animate-spin" />
                 )}
                 {diffCount > 0 ? (
                   <span className="text-xs px-2 py-0.5 rounded font-semibold"
-                    style={{ background: '#1c1900', color: '#e0b84a', border: '1px solid #6a6530' }}>
+                    style={{ background: '#1a1a00', color: '#b0a84a', border: '1px solid #4a4820' }}>
                     {diffCount} change{diffCount !== 1 ? 's' : ''} from factory defaults
                   </span>
                 ) : (
                   <span className="text-xs px-2 py-0.5 rounded font-semibold"
-                    style={{ background: '#0f200f', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+                    style={{ background: '#0d1a10', color: '#7aab85', border: '1px solid #1f3d28' }}>
                     At factory defaults
                   </span>
                 )}
               </div>
-              <p className="text-sm mt-1 text-text-secondary max-w-2xl">
-                Defines the risk posture for each trader classification based on Profit Factor.
-                Rules govern whether positions are internalised, monitored, or routed to a liquidity provider.
-                All changes are attributed and auditable.
+              <p style={{ fontSize: 12, color: '#f1e9e9ff', marginTop: 3, lineHeight: 1.4, maxWidth: 580 }}>
+                Defines the risk posture for each trader classification based on Profit Factor. Rules govern whether positions are internalised, monitored, or routed to a liquidity provider. All changes are attributed and auditable.
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -1293,7 +1589,7 @@ export function CharterPage() {
               <button
                 onClick={() => setConfirmModal({ type: 'all' })}
                 className="btn text-sm flex items-center gap-1.5"
-                style={{ background: '#1f0c0e', color: '#ff6b6b', border: '1px solid #7a2f36' }}
+                style={{ background: '#1f0c0e', color: '#b05050', border: '1px solid #7a2f36' }}
                 title="Restore all factory rules and delete all custom rules"
               >
                 <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -1307,7 +1603,7 @@ export function CharterPage() {
           <div className="flex gap-1">
             {TABS.map(t => (
               <button key={t.id} onClick={() => setActiveTab(t.id)}
-                className="px-4 py-2 text-sm font-medium transition-colors"
+                className="px-3 py-1.5 text-xs font-medium transition-colors"
                 style={{
                   color:        activeTab === t.id ? '#49b3b3' : '#a0a4b8',
                   borderBottom: `2px solid ${activeTab === t.id ? '#49b3b3' : 'transparent'}`,
@@ -1316,7 +1612,7 @@ export function CharterPage() {
                 {t.label}
                 {t.badge !== undefined && (
                   <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold"
-                    style={{ background: '#1c1900', color: '#e0b84a', fontSize: 10 }}>
+                    style={{ background: '#1a1a00', color: '#b0a84a', fontSize: 10 }}>
                     {t.badge}
                   </span>
                 )}
@@ -1326,11 +1622,12 @@ export function CharterPage() {
         </div>
 
         {/* Tab content */}
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 overflow-y-auto px-4 pt-2 pb-2">
           {activeTab === 'matrix' && (
             <MatrixTab pfBands={pfBands} actionDefs={actionDefs} modifiedRuleIds={modifiedRuleIds}
-              onCellClick={(behavior, band) => setEditTarget({ behavior, band })}
-              onResetBehavior={(behavior) => setConfirmModal({ type: 'behavior', behavior })} />
+              onCellClick={(behavior, band) => { setEditTarget({ behavior, band }); setEditLadder(null); }}
+              onResetBehavior={(behavior) => setConfirmModal({ type: 'behavior', behavior })}
+              onEditLadder={(behavior) => { setEditLadder(behavior); setEditTarget(null); setShowLookup(false); }} />
           )}
           {activeTab === 'rules'     && <RulesTab pfBands={pfBands} actionDefs={actionDefs} modifiedRuleIds={modifiedRuleIds} />}
           {activeTab === 'history' && (
@@ -1340,13 +1637,28 @@ export function CharterPage() {
                   Loading change history…
                 </div>
               : historyError
-                ? <div className="p-4 text-xs rounded" style={{ background: '#1f0c0e', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+                ? <div className="p-4 text-xs rounded" style={{ background: '#1f0c0e', color: '#b05050', border: '1px solid #7a2f36' }}>
                     {(historyError as Error).message}
                   </div>
                 : <AuditTab history={history} pfBands={pfBands} />
           )}
         </div>
       </div>
+
+      {/* Edit Ladder sidebar */}
+      {editLadder && !editTarget && !showLookup && (
+        <div className="shrink-0 overflow-hidden flex flex-col" style={{ width: 520, borderLeft: '1px solid #44454f' }}>
+          <EditLadderPanel
+            behavior={editLadder}
+            bands={pfBands[editLadder] ?? []}
+            actionDefs={actionDefs}
+            onClose={() => setEditLadder(null)}
+            onSave={(behavior, ladder, reason) => replaceLadder.mutate({ behavior, ladder, reason })}
+            isSaving={replaceLadder.isPending}
+            saveError={replaceLadder.error ? (replaceLadder.error as Error).message : null}
+          />
+        </div>
+      )}
 
       {/* Rule Lookup sidebar */}
       {showLookup && !editTarget && (
@@ -1407,7 +1719,7 @@ export function CharterPage() {
             }
           }}
         />
-      )}
+      )}f
     </div>
   );
 }

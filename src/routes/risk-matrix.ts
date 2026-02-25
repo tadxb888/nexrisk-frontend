@@ -70,8 +70,8 @@ export async function riskMatrixRoutes(fastify: FastifyInstance): Promise<void> 
 
   // ── /api/v1/config/action-codes & modifier-flags ─────────────────────────
 
-  fastify.get('/config/risk-action-codes', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const response = await nexriskApi.get('/api/v1/config/risk-action-codes');
+  fastify.get('/config/action-codes', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const response = await nexriskApi.get('/api/v1/config/action-codes');
     if (!response.ok) return reply.code(response.status).send(response.error);
     return reply.send(response.data);
   });
@@ -97,6 +97,27 @@ export async function riskMatrixRoutes(fastify: FastifyInstance): Promise<void> 
     return reply.send(response.data);
   });
 
+  fastify.put('/risk-matrix/pf-bands/:behavior', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { behavior } = request.params as { behavior: string };
+    const response = await nexriskApi.put(`/api/v1/risk-matrix/pf-bands/${behavior}`, request.body as Record<string, unknown>);
+    if (!response.ok) return reply.code(response.status).send(response.error);
+    return reply.send(response.data);
+  });
+
+  fastify.patch('/risk-matrix/pf-bands/:behavior/action', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { behavior } = request.params as { behavior: string };
+    const response = await nexriskApi.put(`/api/v1/risk-matrix/pf-bands/${behavior}/action`, request.body as Record<string, unknown>);
+    if (!response.ok) return reply.code(response.status).send(response.error);
+    return reply.send(response.data);
+  });
+
+  fastify.patch('/risk-matrix/pf-bands/:behavior/thresholds', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { behavior } = request.params as { behavior: string };
+    const response = await nexriskApi.put(`/api/v1/risk-matrix/pf-bands/${behavior}/thresholds`, request.body as Record<string, unknown>);
+    if (!response.ok) return reply.code(response.status).send(response.error);
+    return reply.send(response.data);
+  });
+
   fastify.get('/risk-matrix/diff', async (_request: FastifyRequest, reply: FastifyReply) => {
     const response = await nexriskApi.get('/api/v1/risk-matrix/diff');
     if (!response.ok) return reply.code(response.status).send(response.error);
@@ -115,10 +136,23 @@ export async function riskMatrixRoutes(fastify: FastifyInstance): Promise<void> 
     return reply.send(response.data);
   });
 
+  fastify.get('/risk-matrix/factory-defaults', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const response = await nexriskApi.get('/api/v1/risk-matrix/factory-defaults');
+    if (!response.ok) return reply.code(response.status).send(response.error);
+    return reply.send(response.data);
+  });
+
   fastify.get('/risk-matrix/rules/export', async (_request: FastifyRequest, reply: FastifyReply) => {
     const response = await nexriskApi.get('/api/v1/risk-matrix/rules/export');
     if (!response.ok) return reply.code(response.status).send(response.error);
     reply.header('Content-Disposition', 'attachment; filename="risk-matrix-export.json"');
+    return reply.send(response.data);
+  });
+
+  fastify.get('/risk-matrix/rules/:rule_id/history', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { rule_id } = request.params as { rule_id: string };
+    const response = await nexriskApi.get(`/api/v1/risk-matrix/rules/${rule_id}/history`);
+    if (!response.ok) return reply.code(response.status).send(response.error);
     return reply.send(response.data);
   });
 

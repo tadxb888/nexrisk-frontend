@@ -9,7 +9,7 @@ export function Layout() {
       <TopBar />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-auto" style={{ backgroundColor: '#313032' }}>
+        <main className="flex-1 overflow-hidden h-full" style={{ backgroundColor: '#313032' }}>
           <Outlet />
         </main>
       </div>
