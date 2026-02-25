@@ -305,6 +305,71 @@ export const clusteringApi = {
       count: number;
       outliers: { trader_login: number; outlier_score: number }[];
     }>('/api/v1/clustering/outliers'),
+
+  getArchetypes: () =>
+    fetchAPI<{
+      archetypes: {
+        archetype_id: number;
+        archetype_code: string;
+        display_name: string;
+        description: string;
+        risk_severity: number;
+      }[];
+      count: number;
+    }>('/api/v1/clustering/archetypes'),
+
+  getRunProfiles: (runId: string) =>
+    fetchAPI<{
+      run_id: string;
+      profiles: {
+        cluster_id: number;
+        member_count: number;
+        status: string;
+        label_hint: string;
+        mapped_archetype?: string;
+        mapped_archetype_id?: number;
+      }[];
+    }>(`/api/v1/clustering/runs/${runId}/profiles`),
+
+  explainCluster: (runId: string, clusterId: number) =>
+    fetchAPI<{
+      run_id: string;
+      cluster_id: number;
+      member_count: number;
+      explanation: {
+        behavior_description: string;
+        risk_indicators: string[];
+        suggested_archetype_id: number;
+        suggested_archetype_code: string;
+        confidence: number;
+        reasoning: string;
+      };
+      llm_stats: {
+        model: string;
+        input_tokens: number;
+        output_tokens: number;
+        latency_ms: number;
+        cost_usd: number;
+      };
+    }>(`/api/v1/clustering/runs/${runId}/clusters/${clusterId}/explain`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  mapArchetype: (runId: string, clusterId: number, archetypeId: number, mappedBy: string) =>
+    fetchAPI<{ success: boolean }>(
+      `/api/v1/clustering/runs/${runId}/clusters/${clusterId}/archetype`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ archetype_id: archetypeId, mapped_by: mappedBy }),
+      }
+    ),
+
+  deleteRun: (runId: string) =>
+    fetchAPI<{ success: boolean; deleted_run_id: string }>(
+      `/api/v1/clustering/runs/${runId}`,
+      { method: 'DELETE' }
+    ),  
 };
 
 // ============================================

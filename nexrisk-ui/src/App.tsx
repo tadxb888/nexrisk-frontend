@@ -15,6 +15,7 @@ import {
   CBookPage,
   NetExposurePage,
   CharterPage,
+  ArchetypePage,
   LogsPage,
   LiquidityProvidersPage,
   HedgeRulesPage,
@@ -66,6 +67,7 @@ function App() {
             
             {/* Configuration */}
             <Route path="/charter" element={<CharterPage />} />
+            <Route path="/archetype" element={<ArchetypePage />} />
             <Route path="/liquidity-providers" element={<LiquidityProvidersPage />} />
             <Route path="/hedge-rules" element={<HedgeRulesPage />} />
             <Route path="/price-rules" element={<PriceRulesPage />} />

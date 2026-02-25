@@ -27,27 +27,38 @@ const api = {
 };
 
 // ─────────────────────────────────────────────
+// camelCase → snake_case for PUT payloads
+// (BFF GET returns camelCase, C++ PUT expects snake_case)
+const toSnake = (obj: Record<string, any>): Record<string, any> =>
+  Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [
+      k.replace(/([A-Z])/g, '_$1').toLowerCase(),
+      v
+    ])
+  );
+
+// ─────────────────────────────────────────────
 // Shared UI atoms
 // ─────────────────────────────────────────────
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-[10px] uppercase tracking-wider text-white/70 mb-2">{children}</div>;
+  return <div className="text-xs uppercase tracking-wider text-white/50 mb-2">{children}</div>;
 }
 
 function KV({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between py-1 border-b border-[#2a2a2c] last:border-0">
-      <span className="text-xs text-white">{label}</span>
-      <span className="text-xs text-white font-mono">{value}</span>
+      <span className="text-sm text-white">{label}</span>
+      <span className="text-sm text-white font-mono">{value}</span>
     </div>
   );
 }
 
-function Bar({ value, label, color = '#4ecdc4' }: { value: number; label: string; color?: string }) {
+function Bar({ value, label, color = '#4a7a8a' }: { value: number; label: string; color?: string }) {
   const pct = Math.round(Math.min(Math.max(value, 0), 1) * 100);
   return (
     <div className="mb-2">
-      <div className="flex justify-between text-[10px] mb-0.5">
+      <div className="flex justify-between text-sm mb-0.5">
         <span className="text-white">{label}</span>
         <span className="font-mono text-white">{pct}%</span>
       </div>
@@ -60,7 +71,7 @@ function Bar({ value, label, color = '#4ecdc4' }: { value: number; label: string
 
 function Toggle({ on }: { on: boolean }) {
   return (
-    <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium', on ? 'bg-green-900/30 text-green-400' : 'bg-zinc-800 text-white/70')}>
+    <span className={clsx('text-xs px-1.5 py-0.5 rounded font-medium', on ? 'bg-green-950/40 text-green-500' : 'bg-zinc-800 text-white/40')}>
       {on ? 'ON' : 'OFF'}
     </span>
   );
@@ -68,12 +79,12 @@ function Toggle({ on }: { on: boolean }) {
 
 function LevelBadge({ level }: { level: string }) {
   const map: Record<string, string> = {
-    MONITOR:  'bg-blue-900/30 text-blue-400 border-blue-800/50',
-    WARN:     'bg-yellow-900/30 text-yellow-400 border-yellow-800/50',
-    RESTRICT: 'bg-orange-900/30 text-orange-400 border-orange-800/50',
-    ESCALATE: 'bg-red-900/30 text-red-400 border-red-800/50',
+    MONITOR:  'bg-zinc-800/60 text-white/60 border-white/10',
+    WARN:     'bg-amber-950/40 text-amber-500 border-amber-900/40',
+    RESTRICT: 'bg-orange-950/40 text-orange-400 border-orange-900/30',
+    ESCALATE: 'bg-red-950/30 text-red-500 border-red-900/15',
   };
-  return <span className={clsx('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border', map[level] ?? 'bg-zinc-800 text-white border-zinc-700')}>{level}</span>;
+  return <span className={clsx('inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border', map[level] ?? 'bg-zinc-800 text-white border-zinc-700')}>{level}</span>;
 }
 
 // Card wrapper
@@ -83,7 +94,7 @@ function Card({ children, className }: { children: React.ReactNode; className?: 
 
 function EditBtn({ onClick }: { onClick: () => void }) {
   return (
-    <button onClick={onClick} className="text-[10px] text-[#4ecdc4] hover:text-white border border-[#4ecdc4]/30 px-2 py-0.5 rounded transition-colors shrink-0">
+    <button onClick={onClick} className="text-xs text-white/50 hover:text-white border border-white/20 px-2 py-0.5 rounded transition-colors shrink-0">
       Edit
     </button>
   );
@@ -108,16 +119,16 @@ function Drawer({
         <div className="flex items-start justify-between px-5 py-4 border-b border-[#3a3a3c]">
           <div>
             <div className="text-sm font-semibold text-white">{title}</div>
-            {subtitle && <div className="text-xs text-white/70 mt-0.5">{subtitle}</div>}
+            {subtitle && <div className="text-xs text-white/50 mt-0.5">{subtitle}</div>}
           </div>
-          <button onClick={onClose} className="text-white/70 hover:text-white p-1 mt-0.5 transition-colors">
+          <button onClick={onClose} className="text-white/50 hover:text-white p-1 mt-0.5 transition-colors">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-3">{children}</div>
-        {error && <div className="px-5 py-2 bg-red-950/50 border-t border-red-900/40 text-xs text-red-400">{error}</div>}
+        {error && <div className="px-5 py-2 bg-red-950/20 border-t border-red-900/15 text-xs text-red-500">{error}</div>}
         <div className="border-t border-[#3a3a3c] px-5 py-4 flex gap-3">
-          <button onClick={onSave} disabled={saving} className="flex-1 text-sm py-2 rounded bg-[#4ecdc4] text-[#1e1e20] font-semibold hover:bg-[#3dbdb4] disabled:opacity-50 transition-colors">
+          <button onClick={onSave} disabled={saving} className="flex-1 text-sm py-2 rounded bg-[#4a7a8a] text-[#1e1e20] font-semibold hover:bg-[#4a7a8a] disabled:opacity-50 transition-colors">
             {saving ? 'Saving…' : 'Save Changes'}
           </button>
           <button onClick={onClose} className="px-4 text-sm py-2 rounded border border-[#3a3a3c] text-white hover:text-white transition-colors">Cancel</button>
@@ -133,7 +144,7 @@ function F({ label, hint, children }: { label: string; hint?: string; children: 
     <div>
       <label className="block text-xs text-white mb-1">{label}</label>
       {children}
-      {hint && <p className="text-[10px] text-white/40 mt-0.5">{hint}</p>}
+      {hint && <p className="text-xs text-white/40 mt-0.5">{hint}</p>}
     </div>
   );
 }
@@ -141,14 +152,14 @@ function F({ label, hint, children }: { label: string; hint?: string; children: 
 function Num({ v, set, min, max, step = 0.01 }: { v: number; set: (n: number) => void; min?: number; max?: number; step?: number }) {
   return (
     <input type="number" value={v} onChange={e => set(parseFloat(e.target.value))} min={min} max={max} step={step}
-      className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white font-mono focus:border-[#4ecdc4] focus:outline-none" />
+      className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white font-mono focus:border-white/30 focus:outline-none" />
   );
 }
 
 function Sel({ v, set, opts }: { v: string; set: (s: string) => void; opts: { value: string; label: string }[] }) {
   return (
     <select value={v} onChange={e => set(e.target.value)}
-      className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white focus:border-[#4ecdc4] focus:outline-none">
+      className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white focus:border-white/30 focus:outline-none">
       {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   );
@@ -159,11 +170,11 @@ function Sel({ v, set, opts }: { v: string; set: (s: string) => void; opts: { va
 // ─────────────────────────────────────────────
 
 const DETECTORS = [
-  { key: 'ea',        label: 'EA Bot',       color: '#a78bfa', severity: 'ea' },
-  { key: 'scalper',   label: 'Scalper',      color: '#f97316', severity: 'scalper' },
-  { key: 'arbitrage', label: 'Arbitrage',    color: '#ef4444', severity: 'arbitrage' },
-  { key: 'rebate',    label: 'Rebate Abuse', color: '#eab308', severity: 'rebate' },
-  { key: 'news',      label: 'News Trader',  color: '#22d3ee', severity: 'news' },
+  { key: 'ea',        label: 'EA Bot',       color: '#7c6fa0', severity: 'ea' },
+  { key: 'scalper',   label: 'Scalper',      color: '#b85c1a', severity: 'scalper' },
+  { key: 'arbitrage', label: 'Arbitrage',    color: '#c0392b', severity: 'arbitrage' },
+  { key: 'rebate',    label: 'Rebate Abuse', color: '#8a6d0a', severity: 'rebate' },
+  { key: 'news',      label: 'News Trader',  color: '#4a7a8a', severity: 'news' },
 ] as const;
 
 type DrawerKind = null | 'global' | 'risk_severity' | 'decision_engine' | 'anomaly' | { detector: string };
@@ -214,7 +225,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
           </div>
           <div className="text-center py-2">
             <div className="text-4xl font-mono font-bold text-white">{cfg?.global?.min_trades_for_classification ?? '—'}</div>
-            <div className="text-[10px] text-white/70 mt-1">min trades before any classification fires</div>
+            <div className="text-xs text-white/40 mt-1">min trades before any classification fires</div>
           </div>
         </Card>
 
@@ -227,27 +238,27 @@ function ClassifierTab({ cfg }: { cfg: any }) {
           {de ? (
             <div className="grid grid-cols-2 gap-8">
               <div>
-                <div className="text-[10px] text-white/70 mb-2">Composite Weights</div>
+                <div className="text-xs text-white/50 mb-2">Composite Weights</div>
                 <Bar value={de.behavior_weight}   label="Behaviour"   />
-                <Bar value={de.anomaly_weight}    label="Anomaly"    color="#f97316" />
-                <Bar value={de.persistence_weight} label="Persistence" color="#a78bfa" />
+                <Bar value={de.anomaly_weight}    label="Anomaly"    color="#b85c1a" />
+                <Bar value={de.persistence_weight} label="Persistence" color="#7c6fa0" />
                 <div className="mt-3 pt-2 border-t border-[#3a3a3c]">
                   <KV label="Anomaly Boost"      value={`×${de.anomaly_risk_boost?.toFixed(1)}`} />
                   <KV label="Min Persistence"    value={`${de.min_persistence_sec}s / ${de.min_persistence_trades} trades`} />
                 </div>
               </div>
               <div>
-                <div className="text-[10px] text-white/70 mb-2">Action Thresholds</div>
+                <div className="text-sm text-white/50 mb-2">Action Thresholds</div>
                 {[
-                  ['monitor_threshold',       'Monitor ≥',       '#60a5fa'],
-                  ['warn_threshold',          'Warn ≥',          '#fbbf24'],
-                  ['restrict_threshold',      'Restrict ≥',      '#f97316'],
-                  ['escalate_threshold',      'Escalate ≥',      '#ef4444'],
-                  ['human_review_threshold',  'Human Review ≥',  '#e879f9'],
+                  ['monitor_threshold',       'Monitor ≥',       '#4a6fa5'],
+                  ['warn_threshold',          'Warn ≥',          '#8a6d0a'],
+                  ['restrict_threshold',      'Restrict ≥',      '#b85c1a'],
+                  ['escalate_threshold',      'Escalate ≥',      '#c0392b'],
+                  ['human_review_threshold',  'Human Review ≥',  '#8b7bb5'],
                 ].map(([k, l, c]) => (
                   <div key={k} className="flex items-center justify-between py-1 border-b border-[#2a2a2c] last:border-0">
-                    <span className="text-xs text-white">{l}</span>
-                    <span className="text-xs font-mono font-bold" style={{ color: c }}>{de[k as string]?.toFixed(1)}</span>
+                    <span className="text-sm text-white">{l}</span>
+                    <span className="text-sm font-mono font-bold" style={{ color: c }}>{de[k as string]?.toFixed(1)}</span>
                   </div>
                 ))}
               </div>
@@ -266,7 +277,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
           <div className="grid grid-cols-5 gap-4">
             {DETECTORS.map(d => (
               <div key={d.key} className="text-center">
-                <div className="text-[10px] text-white/70 mb-1">{d.label}</div>
+                <div className="text-xs text-white/50 mb-1">{d.label}</div>
                 <div className="text-2xl font-mono font-bold" style={{ color: d.color }}>
                   {rs ? (rs[d.severity] as number)?.toFixed(2) : '—'}
                 </div>
@@ -289,7 +300,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
                 ? `${(cfg.anomaly_detector.contamination * 100).toFixed(0)}%`
                 : '—'}
             </div>
-            <div className="text-[10px] text-white/70 mt-1">expected anomalous fraction<br/>(Isolation Forest contamination)</div>
+            <div className="text-xs text-white/40 mt-1">expected anomalous fraction<br/>(Isolation Forest contamination)</div>
           </div>
         </Card>
       </div>
@@ -303,8 +314,8 @@ function ClassifierTab({ cfg }: { cfg: any }) {
             return (
               <Card key={d.key} className="!p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold" style={{ color: d.color }}>{d.label}</span>
-                  <button onClick={() => open({ detector: d.key }, det ? { ...det } : {})} className="text-[10px] text-white/70 hover:text-[#4ecdc4] transition-colors">Edit</button>
+                  <span className="text-sm font-semibold" style={{ color: d.color }}>{d.label}</span>
+                  <button onClick={() => open({ detector: d.key }, det ? { ...det } : {})} className="text-sm text-orange-500 hover:text-white transition-colors">Edit</button>
                 </div>
                 {det ? (
                   <div className="space-y-0.5">
@@ -321,7 +332,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
                       ))}
                   </div>
                 ) : (
-                  <div className="text-[10px] text-white/40 text-center py-3">—</div>
+                  <div className="text-xs text-white/40 text-center py-3">—</div>
                 )}
               </Card>
             );
@@ -402,7 +413,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
 
 const BEHAVIORS = ['EA', 'SCALPER', 'ARBITRAGE', 'REBATE'] as const;
 const LEVELS    = ['MONITOR', 'WARN', 'RESTRICT', 'ESCALATE'] as const;
-const LEVEL_CLR = { MONITOR: '#60a5fa', WARN: '#fbbf24', RESTRICT: '#f97316', ESCALATE: '#ef4444' };
+const LEVEL_CLR = { MONITOR: '#4a6fa5', WARN: '#8a6d0a', RESTRICT: '#b85c1a', ESCALATE: '#c0392b' };
 
 type DetDrawerKind = null | 'risk_scoring' | 'processing' | 'auto_escalation' | { behavior: string };
 
@@ -459,11 +470,11 @@ function DetectionTab({ cfg }: { cfg: any }) {
           </div>
           {rs ? (
             <>
-              <Bar value={rs.ea_severity}        label="EA"        color="#a78bfa" />
-              <Bar value={rs.scalper_severity}   label="Scalper"   color="#f97316" />
-              <Bar value={rs.arbitrage_severity} label="Arbitrage" color="#ef4444" />
-              <Bar value={rs.rebate_severity}    label="Rebate"    color="#eab308" />
-              <Bar value={rs.news_severity}      label="News"      color="#22d3ee" />
+              <Bar value={rs.ea_severity}        label="EA"        color="#7c6fa0" />
+              <Bar value={rs.scalper_severity}   label="Scalper"   color="#b85c1a" />
+              <Bar value={rs.arbitrage_severity} label="Arbitrage" color="#c0392b" />
+              <Bar value={rs.rebate_severity}    label="Rebate"    color="#8a6d0a" />
+              <Bar value={rs.news_severity}      label="News"      color="#4a7a8a" />
               {rs.risk_levels && (
                 <div className="mt-3 pt-2 border-t border-[#3a3a3c] space-y-0.5">
                   <KV label="LOW ≤"    value={rs.risk_levels.low_max?.toFixed(0)} />
@@ -503,7 +514,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
               </div>
               <div className="text-center py-2">
                 <div className="text-4xl font-mono font-bold text-white">{ae.risk_score_threshold?.toFixed(0)}</div>
-                <div className="text-[10px] text-white/70 mt-1">risk score auto-escalation trigger</div>
+                <div className="text-xs text-white/40 mt-1">risk score auto-escalation trigger</div>
               </div>
             </>
           ) : <div className="text-xs text-white/40 text-center py-4">Not loaded</div>}
@@ -531,7 +542,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
                       });
                       open({ behavior: beh }, init);
                     }}
-                    className="text-[10px] text-[#4ecdc4] hover:text-white border border-[#4ecdc4]/30 px-2 py-0.5 rounded transition-colors"
+                    className="text-xs text-white/50 hover:text-white border border-white/20 px-2 py-0.5 rounded transition-colors"
                   >
                     Edit Ladder
                   </button>
@@ -549,7 +560,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
                             <KV label="Duration"   value={fmtDur(lvl.min_duration_sec)} />
                             <KV label="Min Trades" value={String(lvl.min_trades)} />
                           </div>
-                        ) : <div className="text-[10px] text-white/40 mt-2 text-center">No data</div>}
+                        ) : <div className="text-xs text-white/40 mt-2 text-center">No data</div>}
                       </div>
                     );
                   })}
@@ -698,7 +709,7 @@ function ClusteringTab() {
             <SectionLabel>HDBSCAN Config</SectionLabel>
             <button
               onClick={() => { setCfgErr(null); setCfgForm(clusterCfg ? { ...clusterCfg } : {}); setCfgDrawer(true); }}
-              className="text-[10px] text-[#4ecdc4] border border-[#4ecdc4]/30 px-1.5 py-0.5 rounded hover:text-white transition-colors"
+              className="text-xs text-white/50 border border-white/20 px-1.5 py-0.5 rounded hover:text-white transition-colors"
             >
               Edit
             </button>
@@ -714,7 +725,7 @@ function ClusteringTab() {
               <KV label="High Outlier ≥"   value={(clusterCfg.highOutlierThreshold ?? clusterCfg.high_outlier_threshold)?.toFixed(2)} />
               <KV label="Med Outlier ≥"    value={(clusterCfg.mediumOutlierThreshold ?? clusterCfg.medium_outlier_threshold)?.toFixed(2)} />
             </div>
-          ) : <div className="text-[10px] text-white/40 text-center py-3">Not loaded</div>}
+          ) : <div className="text-xs text-white/40 text-center py-3">Not loaded</div>}
         </div>
 
         {/* Archetype Library */}
@@ -723,7 +734,7 @@ function ClusteringTab() {
             mapping needs its own design. See /api/v1/clustering/archetypes. */}
         <div>
           <SectionLabel>Archetype Library</SectionLabel>
-          <div className="mt-2 text-[10px] text-white/30 text-center py-3 border border-dashed border-[#3a3a3c] rounded">
+          <div className="mt-2 text-xs text-white/30 text-center py-3 border border-dashed border-[#3a3a3c] rounded">
             Coming soon
           </div>
         </div>
@@ -738,7 +749,7 @@ function ClusteringTab() {
             <select
               value={activeRunId ?? ''}
               onChange={e => setSelectedRunId(e.target.value)}
-              className="text-xs bg-[#252527] border border-[#3a3a3c] rounded px-2.5 py-1.5 text-white focus:border-[#4ecdc4] focus:outline-none"
+              className="text-xs bg-[#252527] border border-[#3a3a3c] rounded px-2.5 py-1.5 text-white focus:border-white/30 focus:outline-none"
             >
               {runs.map((r: any) => (
                 <option key={r.runId} value={r.runId}>
@@ -748,28 +759,28 @@ function ClusteringTab() {
             </select>
           )}
           {activeRun && (
-            <div className="flex items-center gap-3 text-[10px] text-white/70">
+            <div className="flex items-center gap-3 text-xs text-white/60">
               <span>Noise: <span className="text-white font-mono">{activeRun.nNoisePoints ?? '—'}</span></span>
-              <span>High: <span className={clsx('font-mono', (activeRun.nOutliersHigh ?? 0) > 0 ? 'text-red-400' : 'text-white')}>{activeRun.nOutliersHigh ?? '—'}</span></span>
+              <span>High: <span className={clsx('font-mono', (activeRun.nOutliersHigh ?? 0) > 0 ? 'text-red-500' : 'text-white')}>{activeRun.nOutliersHigh ?? '—'}</span></span>
               <span>Med: <span className="font-mono text-white">{activeRun.nOutliersMedium ?? '—'}</span></span>
               {activeRun.executionTimeMs != null && <span>Exec: <span className="text-white font-mono">{activeRun.executionTimeMs}ms</span></span>}
-              <span className={clsx('px-1.5 py-0.5 rounded text-[10px]',
-                activeRun.status === 'completed' ? 'bg-green-900/30 text-green-400' : 'bg-yellow-900/30 text-yellow-400'
+              <span className={clsx('px-1.5 py-0.5 rounded text-xs',
+                activeRun.status === 'completed' ? 'bg-green-950/40 text-green-500' : 'bg-amber-950/40 text-amber-500'
               )}>{activeRun.status?.toUpperCase()}</span>
             </div>
           )}
           {/* Footer stats inline */}
-          <div className="flex items-center gap-4 text-[10px] text-white/50 ml-2">
-            <span>Established: <span className="text-green-400 font-mono">{profiles.filter((p: any) => p.status === 'ESTABLISHED').length}</span></span>
-            <span>Emerging: <span className="text-yellow-400 font-mono">{profiles.filter((p: any) => p.status === 'EMERGING').length}</span></span>
+          <div className="flex items-center gap-4 text-xs text-white/60 ml-2">
+            <span>Established: <span className="text-green-500 font-mono">{profiles.filter((p: any) => p.status === 'ESTABLISHED').length}</span></span>
+            <span>Emerging: <span className="text-amber-500 font-mono">{profiles.filter((p: any) => p.status === 'EMERGING').length}</span></span>
             <span>Noise: <span className="font-mono">{profiles.filter((p: any) => p.clusterId === -1).length}</span></span>
-            <span>Mapped: <span className="text-[#4ecdc4] font-mono">{profiles.filter((p: any) => p.mappedArchetypeId).length}</span></span>
+            <span>Mapped: <span className="text-green-500 font-mono">{profiles.filter((p: any) => p.mappedArchetypeId).length}</span></span>
           </div>
           <div className="ml-auto">
             <button
               onClick={() => triggerRun.mutate()}
               disabled={triggerRun.isPending}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-[#4ecdc4] text-[#4ecdc4] hover:bg-[#4ecdc4]/10 disabled:opacity-50 transition-all font-medium"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-white/20 text-white/60 hover:bg-white/5 disabled:opacity-50 transition-all font-medium"
             >
               {triggerRun.isPending ? '⟳ Running…' : '▶ Run Clustering'}
             </button>
@@ -785,7 +796,7 @@ function ClusteringTab() {
               <div className="h-full flex items-center justify-center">
                 <div className="text-center py-12">
                   <div className="text-sm text-white/50 mb-3">No clustering runs found</div>
-                  <button onClick={() => triggerRun.mutate()} className="text-xs px-4 py-2 rounded border border-[#4ecdc4] text-[#4ecdc4] hover:bg-[#4ecdc4]/10 transition-colors">
+                  <button onClick={() => triggerRun.mutate()} className="text-xs px-4 py-2 rounded border border-white/20 text-white/60 hover:bg-white/5 transition-colors">
                     Run first clustering
                   </button>
                 </div>
@@ -795,14 +806,14 @@ function ClusteringTab() {
             ) : profiles.length === 0 ? (
               <div className="text-center py-12">
                 <div className="text-sm text-white/50 mb-1">No clusters formed</div>
-                <div className="text-[10px] text-white/30">Insufficient data — need {5}+ traders with enough trades</div>
+                <div className="text-xs text-white/30">Insufficient data — need {5}+ traders with enough trades</div>
               </div>
             ) : (
               profiles.map((cluster: any) => {
                 const severity = cluster.riskSeverity ?? cluster.risk_severity ?? 0.5;
                 const isSelected = explainState.result?.clusterId === cluster.clusterId;
                 const borderColor =
-                  cluster.clusterId === -1 ? 'border-[#4ecdc4]' :
+                  cluster.clusterId === -1 ? 'border-white/20' :
                   severity >= 0.8 ? 'border-red-500' :
                   severity >= 0.6 ? 'border-orange-500' :
                   severity >= 0.4 ? 'border-yellow-500' :
@@ -816,7 +827,7 @@ function ClusteringTab() {
                     className={clsx(
                       'w-full p-3 rounded border-l-4 text-left transition-all',
                       borderColor, bgHover,
-                      isSelected && 'ring-1 ring-[#4ecdc4]/40'
+                      isSelected && 'ring-1 ring-[#4a7a8a]/40'
                     )}
                   >
                     {/* Header */}
@@ -827,11 +838,11 @@ function ClusteringTab() {
                            cluster.labelHint ?? cluster.label_hint ??
                            (cluster.clusterId === -1 ? 'Noise / Outliers' : `Cluster #${cluster.clusterId}`)}
                         </div>
-                        <div className="text-[10px] font-mono text-white/50">
+                        <div className="text-xs font-mono text-white/70">
                           {cluster.archetypeCode ?? cluster.archetype_code ?? (cluster.clusterId === -1 ? 'NOISE' : `ID ${cluster.clusterId}`)}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 text-white/60 text-xs shrink-0 ml-2">
+                      <div className="flex items-center gap-1 text-white/50 text-xs shrink-0 ml-2">
                         <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
                         <span className="font-mono">{cluster.memberCount ?? cluster.member_count ?? 0}</span>
                       </div>
@@ -839,21 +850,21 @@ function ClusteringTab() {
 
                     {/* Description */}
                     {(cluster.description) && (
-                      <p className="text-[10px] text-white/50 mb-1.5 line-clamp-2">{cluster.description}</p>
+                      <p className="text-xs text-white/60 mb-1.5 line-clamp-2">{cluster.description}</p>
                     )}
 
                     {/* Risk stats */}
-                    <div className="flex items-center gap-3 text-[10px] text-white/60">
+                    <div className="flex items-center gap-3 text-xs text-white/50">
                       {cluster.avgRiskScore != null && (
                         <span>Avg Risk: <span className="font-mono text-white">{(cluster.avgRiskScore ?? cluster.avg_risk_score ?? 0).toFixed(0)}</span></span>
                       )}
                       <span>Severity: <span className="font-mono" style={{
-                        color: severity >= 0.8 ? '#ef4444' : severity >= 0.6 ? '#f97316' : severity >= 0.4 ? '#eab308' : '#22c55e'
+                        color: severity >= 0.8 ? '#c0392b' : severity >= 0.6 ? '#b85c1a' : severity >= 0.4 ? '#8a6d0a' : '#2e7d4f'
                       }}>{(severity * 100).toFixed(0)}%</span></span>
                       {(cluster.status) && (
                         <span className={clsx('px-1 py-0.5 rounded text-[9px]',
-                          cluster.status === 'ESTABLISHED' ? 'bg-green-900/30 text-green-400' :
-                          cluster.status === 'EMERGING' ? 'bg-yellow-900/30 text-yellow-400' :
+                          cluster.status === 'ESTABLISHED' ? 'bg-green-950/40 text-green-500' :
+                          cluster.status === 'EMERGING' ? 'bg-amber-950/40 text-amber-500' :
                           'bg-zinc-800 text-white/40'
                         )}>{cluster.status}</span>
                       )}
@@ -861,7 +872,7 @@ function ClusteringTab() {
 
                     {/* Members preview */}
                     {(cluster.members ?? cluster.memberLogins)?.length > 0 && (
-                      <div className="mt-1.5 pt-1.5 border-t border-[#3a3a3c] text-[10px] text-white/40">
+                      <div className="mt-1.5 pt-1.5 border-t border-[#3a3a3c] text-xs text-white/40">
                         {(cluster.members ?? cluster.memberLogins).slice(0, 5).join(', ')}
                         {(cluster.members ?? cluster.memberLogins).length > 5 && ` +${(cluster.members ?? cluster.memberLogins).length - 5} more`}
                       </div>
@@ -875,7 +886,7 @@ function ClusteringTab() {
                           const id = parseInt(e.target.value);
                           if (!isNaN(id)) mapArchetype.mutate({ clusterId: cluster.clusterId, archetypeId: id });
                         }}
-                        className="w-full text-[10px] bg-[#1e1e20] border border-[#3a3a3c] rounded px-2 py-1 text-white/70 focus:border-[#4ecdc4] focus:outline-none"
+                        className="w-full text-xs bg-[#1e1e20] border border-[#3a3a3c] rounded px-2 py-1 text-white focus:border-white/30 focus:outline-none"
                       >
                         <option value="">— Map to archetype —</option>
                         {archetypes.map((a: any) => (
@@ -900,7 +911,7 @@ function ClusteringTab() {
                       {explainState.result.clusterId === -1 ? 'Noise / Outliers' : `Cluster #${explainState.result.clusterId}`} — Analysis
                     </div>
                     {explainState.result.llm_stats?.model && (
-                      <div className="text-[10px] text-white/50 font-mono mt-0.5">{explainState.result.llm_stats.model}</div>
+                      <div className="text-xs text-white/60 font-mono mt-0.5">{explainState.result.llm_stats.model}</div>
                     )}
                   </div>
                   <button onClick={() => setExplainState({ loading: null, result: null })} className="text-white/40 hover:text-white transition-colors p-1">
@@ -912,15 +923,15 @@ function ClusteringTab() {
                   {/* Metrics */}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-[#252527] rounded border border-[#3a3a3c] p-3">
-                      <div className="text-[10px] text-white/50 mb-1">Avg Risk Score</div>
+                      <div className="text-xs text-white/50 mb-1">Avg Risk Score</div>
                       <div className="text-2xl font-mono font-bold text-white">{explainState.result.avgRiskScore?.toFixed(0) ?? '—'}</div>
                     </div>
                     <div className="bg-[#252527] rounded border border-[#3a3a3c] p-3">
-                      <div className="text-[10px] text-white/50 mb-1">Risk Severity</div>
+                      <div className="text-xs text-white/50 mb-1">Risk Severity</div>
                       <div className="text-2xl font-mono font-bold" style={{
-                        color: (explainState.result.riskSeverity ?? 0) >= 0.8 ? '#ef4444' :
-                               (explainState.result.riskSeverity ?? 0) >= 0.6 ? '#f97316' :
-                               (explainState.result.riskSeverity ?? 0) >= 0.4 ? '#eab308' : '#22c55e'
+                        color: (explainState.result.riskSeverity ?? 0) >= 0.8 ? '#c0392b' :
+                               (explainState.result.riskSeverity ?? 0) >= 0.6 ? '#b85c1a' :
+                               (explainState.result.riskSeverity ?? 0) >= 0.4 ? '#8a6d0a' : '#2e7d4f'
                       }}>{(((explainState.result.riskSeverity ?? explainState.result.risk_severity) ?? 0) * 100).toFixed(0)}%</div>
                     </div>
                   </div>
@@ -930,10 +941,10 @@ function ClusteringTab() {
                     <div className="bg-[#252527] rounded border border-[#3a3a3c] p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div className="text-xs font-semibold text-white flex items-center gap-1.5">
-                          <span className="text-[#4ecdc4]">◎</span> AI Analysis
+                          <span className="text-white/60">◎</span> AI Analysis
                         </div>
                         {explainState.result.explanation.generated_at && (
-                          <span className="text-[10px] font-mono text-white/40">
+                          <span className="text-xs font-mono text-white/40">
                             {new Date(explainState.result.explanation.generated_at).toLocaleTimeString('en-GB')}
                           </span>
                         )}
@@ -943,22 +954,22 @@ function ClusteringTab() {
                       </p>
                       {(explainState.result.explanation.risk_indicators ?? explainState.result.explanation.riskIndicators)?.length > 0 && (
                         <div className="mb-3">
-                          <div className="text-[10px] text-white/50 mb-1.5">Risk Indicators</div>
+                          <div className="text-xs text-white/50 mb-1.5">Risk Indicators</div>
                           <ul className="space-y-1">
                             {(explainState.result.explanation.risk_indicators ?? explainState.result.explanation.riskIndicators).map((ind: string, i: number) => (
                               <li key={i} className="text-xs text-white/70 flex items-start gap-1.5">
-                                <span className="text-orange-400 shrink-0 mt-0.5">▸</span>{ind}
+                                <span className="text-orange-500 shrink-0 mt-0.5">▸</span>{ind}
                               </li>
                             ))}
                           </ul>
                         </div>
                       )}
                       {explainState.result.explanation.reasoning && (
-                        <div className="text-[10px] text-white/40 italic mb-3">"{explainState.result.explanation.reasoning}"</div>
+                        <div className="text-xs text-white/40 italic mb-3">"{explainState.result.explanation.reasoning}"</div>
                       )}
                       {(explainState.result.explanation.suggested_archetype_code ?? explainState.result.explanation.suggestedArchetypeCode) && (
-                        <div className="flex items-center justify-between pt-2 border-t border-[#3a3a3c] text-[10px]">
-                          <span className="text-white/50">Suggested: <span className="font-mono text-[#4ecdc4]">
+                        <div className="flex items-center justify-between pt-2 border-t border-[#3a3a3c] text-xs">
+                          <span className="text-white/50">Suggested: <span className="font-mono text-white">
                             {explainState.result.explanation.suggestedArchetypeCode ?? explainState.result.explanation.suggested_archetype_code}
                           </span></span>
                           {explainState.result.explanation.confidence != null && (
@@ -974,7 +985,7 @@ function ClusteringTab() {
                   {/* Members */}
                   {explainState.result.members?.length > 0 && (
                     <div>
-                      <div className="text-[10px] text-white/50 mb-2">Cluster Members</div>
+                      <div className="text-xs text-white/50 mb-2">Cluster Members</div>
                       <div className="space-y-1">
                         {explainState.result.members.map((login: number) => (
                           <div key={login} className="flex items-center justify-between px-3 py-1.5 bg-[#252527] rounded border border-[#3a3a3c]">
@@ -988,7 +999,7 @@ function ClusteringTab() {
 
                 {/* Footer stats */}
                 {explainState.result.llm_stats && (
-                  <div className="shrink-0 border-t border-[#3a3a3c] px-5 py-2 flex gap-4 text-[10px] text-white/50">
+                  <div className="shrink-0 border-t border-[#3a3a3c] px-5 py-2 flex gap-4 text-xs text-white/50">
                     {explainState.result.llm_stats.latency_ms && <span>Latency: <span className="font-mono text-white">{explainState.result.llm_stats.latency_ms}ms</span></span>}
                     {explainState.result.llm_stats.cost_usd && <span>Cost: <span className="font-mono text-white">${explainState.result.llm_stats.cost_usd.toFixed(4)}</span></span>}
                   </div>
@@ -998,14 +1009,14 @@ function ClusteringTab() {
               <div className="h-full flex items-center justify-center">
                 <div className="text-center">
                   <div className="text-sm text-white/50 mb-2">⟳ Analysing cluster…</div>
-                  <div className="text-[10px] text-white/30">LLM generating explanation</div>
+                  <div className="text-xs text-white/30">LLM generating explanation</div>
                 </div>
               </div>
             ) : (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center text-white/30">
                   <div className="text-sm mb-1">Select a cluster</div>
-                  <div className="text-[10px]">Click a card to analyse</div>
+                  <div className="text-xs">Click a card to analyse</div>
                 </div>
               </div>
             )}
@@ -1033,9 +1044,9 @@ function ClusteringTab() {
             <div className="flex items-start justify-between px-5 py-4 border-b border-[#3a3a3c]">
               <div>
                 <div className="text-sm font-semibold text-white">Cluster {explainState.result.clusterId === -1 ? 'Noise' : `#${explainState.result.clusterId}`} — LLM Analysis</div>
-                <div className="text-[10px] text-white/70 mt-0.5 font-mono">{explainState.result.llm_stats?.model ?? 'Claude'}</div>
+                <div className="text-xs text-white/50 mt-0.5 font-mono">{explainState.result.llm_stats?.model ?? 'Claude'}</div>
               </div>
-              <button onClick={() => setExplainState({ loading: null, result: null })} className="text-white/70 hover:text-white p-1 transition-colors">
+              <button onClick={() => setExplainState({ loading: null, result: null })} className="text-white/50 hover:text-white p-1 transition-colors">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><path d="M18 6L6 18M6 6l12 12"/></svg>
               </button>
             </div>
@@ -1045,10 +1056,10 @@ function ClusteringTab() {
                 <p className="text-sm text-zinc-200 leading-relaxed">{explainState.result.explanation?.behavior_description}</p>
               </div>
               {(explainState.result.explanation?.suggestedArchetypeCode ?? explainState.result.explanation?.suggested_archetype_code) && (
-                <div className="rounded border border-[#4ecdc4]/30 bg-[#4ecdc4]/5 p-3">
+                <div className="rounded border border-white/20 bg-[#4a7a8a]/5 p-3">
                   <SectionLabel>Suggested Archetype</SectionLabel>
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-semibold text-[#4ecdc4]">{explainState.result.explanation.suggestedArchetypeCode ?? explainState.result.explanation.suggested_archetype_code}</span>
+                    <span className="text-sm font-semibold text-white">{explainState.result.explanation.suggestedArchetypeCode ?? explainState.result.explanation.suggested_archetype_code}</span>
                     <span className="ml-auto text-xs font-mono text-white">{((explainState.result.explanation.confidence ?? 0) * 100).toFixed(0)}% confidence</span>
                   </div>
                 </div>
@@ -1058,7 +1069,7 @@ function ClusteringTab() {
                   <SectionLabel>Risk Indicators</SectionLabel>
                   <ul className="space-y-1.5">
                     {explainState.result.explanation.risk_indicators.map((ind: string, i: number) => (
-                      <li key={i} className="flex items-start gap-2 text-xs text-white"><span className="text-orange-400 shrink-0">▸</span>{ind}</li>
+                      <li key={i} className="flex items-start gap-2 text-xs text-white"><span className="text-orange-500 shrink-0">▸</span>{ind}</li>
                     ))}
                   </ul>
                 </div>
@@ -1072,7 +1083,7 @@ function ClusteringTab() {
                 </div>
               )}
             </div>
-            <div className="border-t border-[#3a3a3c] px-5 py-3 flex gap-4 text-[10px] text-white/70">
+            <div className="border-t border-[#3a3a3c] px-5 py-3 flex gap-4 text-xs text-white/50">
               <span>Latency: <span className="font-mono text-white">{explainState.result.llm_stats?.latency_ms}ms</span></span>
               <span>Cost: <span className="font-mono text-white">${explainState.result.llm_stats?.cost_usd?.toFixed(4)}</span></span>
             </div>
@@ -1088,7 +1099,7 @@ function ClusteringTab() {
 // ─────────────────────────────────────────────
 
 const RISK_LEVELS = ['VERY_LOW', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
-const RISK_CLR = { VERY_LOW: '#71717a', LOW: '#60a5fa', MEDIUM: '#fbbf24', HIGH: '#f97316', CRITICAL: '#ef4444' };
+const RISK_CLR = { VERY_LOW: '#71717a', LOW: '#4a6fa5', MEDIUM: '#8a6d0a', HIGH: '#b85c1a', CRITICAL: '#c0392b' };
 
 type LLMDrawer = null | 'providers' | 'claude' | 'ollama' | 'api_key' | 'routing' | 'cost_controls' | 'caching';
 
@@ -1139,7 +1150,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
   const cache  = cfg?.caching;
 
   const usagePct   = usage?.daily_usage_pct ?? 0;
-  const usageColor = usagePct >= 80 ? '#ef4444' : usagePct >= 50 ? '#f97316' : '#22c55e';
+  const usageColor = usagePct >= 80 ? '#c0392b' : usagePct >= 50 ? '#b85c1a' : '#2e7d4f';
   const fmtTTL     = (s: number) => s >= 3600 ? `${(s/3600).toFixed(0)}h` : `${Math.floor(s/60)}m`;
 
   return (
@@ -1150,7 +1161,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           <div className="flex items-center justify-between mb-3">
             <SectionLabel>Today's Usage</SectionLabel>
             <div className="flex items-center gap-3">
-              <span className={clsx('text-[10px] px-2 py-0.5 rounded font-mono', claude?.api_key_configured ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400')}>
+              <span className={clsx('text-xs px-2 py-0.5 rounded font-mono', claude?.api_key_configured ? 'bg-green-950/40 text-green-500' : 'bg-red-950/30 text-red-500')}>
                 {claude?.api_key_configured ? 'API Key ✓' : 'API Key Not Set ✗'}
               </span>
             </div>
@@ -1160,20 +1171,20 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
               { label: 'Cost Today',      value: `$${usage.today_cost_usd?.toFixed(3)}`,          sub: `of $${usage.daily_limit_usd} limit`,  color: usageColor },
               { label: 'API Calls',       value: String(usage.today_call_count),                   sub: 'calls today',                         color: 'white' },
               { label: 'Auto-Gen / hr',   value: String(usage.auto_gen_this_hour),                 sub: `of ${usage.hourly_auto_gen_limit} limit`, color: 'white' },
-              { label: 'Cache Hit Rate',  value: `${usage.cache_hit_rate_pct?.toFixed(0)}%`,       sub: `${usage.cache_hits} hits / ${usage.cache_misses} misses`, color: '#4ecdc4' },
-              { label: 'Remaining',       value: `$${usage.daily_limit_remaining_usd?.toFixed(2)}`,sub: 'daily budget left',                   color: usagePct > 80 ? '#ef4444' : '#22c55e' },
+              { label: 'Cache Hit Rate',  value: `${usage.cache_hit_rate_pct?.toFixed(0)}%`,       sub: `${usage.cache_hits} hits / ${usage.cache_misses} misses`, color: 'white' },
+              { label: 'Remaining',       value: `$${usage.daily_limit_remaining_usd?.toFixed(2)}`,sub: 'daily budget left',                   color: usagePct > 80 ? '#c0392b' : '#2e7d4f' },
             ].map(({ label, value, sub, color }) => (
               <div key={label} className="text-center">
                 <div className="text-2xl font-mono font-bold" style={{ color }}>{value}</div>
-                <div className="text-[10px] text-white/70 mt-0.5">{sub}</div>
-                <div className="text-[10px] text-white/40">{label}</div>
+                <div className="text-xs text-white/50 mt-0.5">{sub}</div>
+                <div className="text-xs text-white/40">{label}</div>
               </div>
             ))}
           </div>
           <div className="h-2 bg-[#2a2a2c] rounded-full overflow-hidden">
             <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(usagePct, 100)}%`, backgroundColor: usageColor }} />
           </div>
-          <div className="text-[10px] text-white/70 mt-1 text-right">{usagePct.toFixed(1)}% of daily budget used</div>
+          <div className="text-xs text-white/50 mt-1 text-right">{usagePct.toFixed(1)}% of daily budget used</div>
         </Card>
       )}
 
@@ -1185,7 +1196,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
             <SectionLabel>Provider Selection</SectionLabel>
             <EditBtn onClick={() => open('providers', { defaultProvider: prov?.default_provider ?? 'claude', fallbackProvider: prov?.fallback_provider ?? 'template' })} />
           </div>
-          <KV label="Default"  value={<span className="text-[#4ecdc4]">{prov?.default_provider?.toUpperCase() ?? '—'}</span>} />
+          <KV label="Default"  value={<span className="text-white">{prov?.default_provider?.toUpperCase() ?? '—'}</span>} />
           <KV label="Fallback" value={prov?.fallback_provider?.toUpperCase() ?? '—'} />
         </Card>
 
@@ -1194,7 +1205,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2"><SectionLabel>Claude</SectionLabel>{claude && <Toggle on={claude.enabled} />}</div>
             <div className="flex gap-1">
-              <button onClick={() => open('api_key', { api_key: '' })} className="text-[10px] text-white/70 hover:text-[#4ecdc4] border border-zinc-700 px-1.5 py-0.5 rounded transition-colors">Key</button>
+              <button onClick={() => open('api_key', { api_key: '' })} className="text-xs text-white/50 hover:text-white border border-zinc-700 px-1.5 py-0.5 rounded transition-colors">Key</button>
               <EditBtn onClick={() => open('claude', claude ? { enabled: claude.enabled, model: claude.model, timeout_sec: claude.timeout_sec, max_tokens: claude.max_tokens, temperature: claude.temperature } : {})} />
             </div>
           </div>
@@ -1241,7 +1252,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         </div>
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-[10px] text-white/70 border-b border-[#3a3a3c]">
+            <tr className="text-xs text-white/50 border-b border-[#3a3a3c]">
               <th className="pb-2 text-left font-normal">Risk Level</th>
               <th className="pb-2 text-center font-normal w-24">Use LLM</th>
               <th className="pb-2 text-center font-normal w-28">Auto-Generate</th>
@@ -1256,7 +1267,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
                   <td className="py-2 font-mono" style={{ color: RISK_CLR[lv] }}>{lv}</td>
                   {[r?.use_llm, r?.auto_generate, r?.on_demand_available].map((on, i) => (
                     <td key={i} className="py-2 text-center">
-                      <span className={on ? 'text-green-400' : 'text-zinc-700'}>{on ? '●' : '○'}</span>
+                      <span className={on ? 'text-green-500' : 'text-zinc-700'}>{on ? '●' : '○'}</span>
                     </td>
                   ))}
                 </tr>
@@ -1279,7 +1290,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
               <KV label="Max Auto-Gen / Hour"       value={String(cc.max_auto_generates_per_hour)} />
             </>
           )}
-          <p className="text-[10px] text-white/40 mt-2">On-demand generation always available even when daily limit is reached. Auto-gen pauses.</p>
+          <p className="text-xs text-white/40 mt-2">On-demand generation always available even when daily limit is reached. Auto-gen pauses.</p>
         </Card>
 
         <Card>
@@ -1293,7 +1304,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
               <KV label="Max Entries" value={String(cache.max_entries)} />
             </>
           )}
-          {usage && <div className="mt-2 pt-2 border-t border-[#3a3a3c]"><KV label="Cache Hit Rate" value={<span className="text-[#4ecdc4]">{usage.cache_hit_rate_pct?.toFixed(0)}%</span>} /></div>}
+          {usage && <div className="mt-2 pt-2 border-t border-[#3a3a3c]"><KV label="Cache Hit Rate" value={<span className="text-white">{usage.cache_hit_rate_pct?.toFixed(0)}%</span>} /></div>}
         </Card>
       </div>
 
@@ -1316,7 +1327,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         <F label="Enabled"><Sel v={String(form.enabled ?? false)} set={v => setForm(f => ({ ...f, enabled: v === 'true' }))} opts={[{value:'true',label:'Enabled'},{value:'false',label:'Disabled'}]} /></F>
         <F label="Model" hint="e.g. llama3.1:8b-instruct-q4_K_M">
           <input type="text" value={form.model ?? ''} onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-            className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white font-mono focus:border-[#4ecdc4] focus:outline-none" />
+            className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white font-mono focus:border-white/30 focus:outline-none" />
         </F>
         <F label="Timeout (seconds)" hint="30–600 (Ollama is slow on CPU)"><Num v={form.timeout_sec ?? 120} set={v => setForm(f => ({ ...f, timeout_sec: v }))} min={30} max={600} step={30} /></F>
         <F label="Max Tokens" hint="100–2000"><Num v={form.max_tokens ?? 500} set={v => setForm(f => ({ ...f, max_tokens: v }))} min={100} max={2000} step={100} /></F>
@@ -1326,9 +1337,9 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         <F label="API Key" hint="sk-ant-api03-… (20+ characters)">
           <input type="password" value={form.api_key ?? ''} onChange={e => setForm(f => ({ ...f, api_key: e.target.value }))}
             placeholder="sk-ant-api03-..."
-            className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white font-mono focus:border-[#4ecdc4] focus:outline-none" />
+            className="w-full bg-[#1e1e20] border border-[#3a3a3c] rounded px-3 py-1.5 text-xs text-white font-mono focus:border-white/30 focus:outline-none" />
         </F>
-        <p className="text-[10px] text-white/40">⚠ The existing key will be replaced immediately. This cannot be undone.</p>
+        <p className="text-xs text-white/40">⚠ The existing key will be replaced immediately. This cannot be undone.</p>
       </Drawer>
 
       <Drawer open={dk === 'routing'} title="Risk-Level Routing Matrix" subtitle="auto_generate forces use_llm + on_demand to true (enforced server-side)" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
@@ -1338,7 +1349,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
             <div className="grid grid-cols-3 gap-2 mt-1.5">
               {[['use_llm','Use LLM'],['auto_generate','Auto-Gen'],['on_demand','On-Demand']].map(([k,l]) => (
                 <div key={k}>
-                  <div className="text-[10px] text-white/70 mb-1">{l}</div>
+                  <div className="text-xs text-white/50 mb-1">{l}</div>
                   <Sel v={String(form[`${lv}_${k}`] ?? false)} set={v => setForm(f => ({ ...f, [`${lv}_${k}`]: v === 'true' }))} opts={[{value:'true',label:'ON'},{value:'false',label:'OFF'}]} />
                 </div>
               ))}
@@ -1433,18 +1444,23 @@ function normalizeClassifier(raw: any) {
     max_depth:     rawAd.maxDepth      ?? rawAd.max_depth     ?? 8,
   };
 
-  // Per-detector configs — already camelCase from API, component reads them dynamically
-  // so we pass them through as-is (weightFields / KV renders use Object.entries)
+  // Per-detector configs — API returns camelCase, component renders snake_case
+  // Convert each detector config to snake_case so rendering and PUT payloads are consistent
+  const snakeKeys = (obj: Record<string, any> | null): Record<string, any> | null =>
+    obj ? Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [k.replace(/([A-Z])/g, '_$1').toLowerCase(), v])
+    ) : null;
+
   return {
     global,
     decision_engine,
     risk_severity,
     anomaly_detector,
-    ea:        cc.ea        ?? null,
-    scalper:   cc.scalper   ?? null,
-    arbitrage: cc.arbitrage ?? null,
-    rebate:    cc.rebate    ?? null,
-    news:      cc.news      ?? null,
+    ea:        snakeKeys(cc.ea        ?? null),
+    scalper:   snakeKeys(cc.scalper   ?? null),
+    arbitrage: snakeKeys(cc.arbitrage ?? null),
+    rebate:    snakeKeys(cc.rebate    ?? null),
+    news:      snakeKeys(cc.news      ?? null),
   };
 }
 
@@ -1747,16 +1763,16 @@ export function ArchetypePage() {
         <div className="flex items-start justify-between mb-3">
           <div>
             <h1 className="text-base font-semibold text-white tracking-tight">Archetype Intelligence</h1>
-            <p className="text-xs text-white/70">Behaviour classifier config · detection thresholds · HDBSCAN clustering · LLM explanation engine</p>
+            <p className="text-xs text-white/40">Behaviour classifier config · detection thresholds · HDBSCAN clustering · LLM explanation engine</p>
           </div>
           <div className="flex items-center gap-2">
             {settingsError && (
-              <div className="text-xs text-red-400 bg-red-900/20 border border-red-800/40 px-3 py-1.5 rounded font-mono">
+              <div className="text-xs text-red-500 bg-red-950/20 border border-red-900/15 px-3 py-1.5 rounded font-mono">
                 ✗ {String(settingsError)}
               </div>
             )}
             {hasPendingRestart && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-800/40 px-3 py-1.5 rounded">
+              <div className="flex items-center gap-2 text-xs text-amber-500 bg-zinc-800/60 border border-white/10 px-3 py-1.5 rounded">
                 ⚠ Restart pending
               </div>
             )}
@@ -1772,8 +1788,8 @@ export function ArchetypePage() {
               className={clsx(
                 'px-4 py-2 text-sm border-b-2 transition-colors -mb-px',
                 tab === t.id
-                  ? 'text-[#4ecdc4] border-[#4ecdc4]'
-                  : 'text-white/70 border-transparent hover:text-white',
+                  ? 'text-white border-white/20'
+                  : 'text-white/50 border-transparent hover:text-white',
               )}
             >
               {t.label}

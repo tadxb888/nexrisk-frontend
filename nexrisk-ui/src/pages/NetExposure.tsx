@@ -319,7 +319,9 @@ export function NetExposurePage() {
     const api = exposureGridRef.current?.api;
     if (!api) return;
 
-    const gridWidth = api.getGridBodyClientRect()?.width ?? 0;
+    // getGridBodyClientRect was removed in AG Grid v32 — use the eGridDiv wrapper instead
+    const eGrid = (exposureGridRef.current as any)?.eGridDiv as HTMLElement | undefined;
+    const gridWidth = eGrid?.clientWidth ?? 0;
     if (gridWidth < 50) return;
 
     const displayedCols = api.getAllDisplayedColumns();

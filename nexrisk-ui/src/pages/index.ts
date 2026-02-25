@@ -6,6 +6,7 @@ export { ABookPage } from './ABookPage';
 export { CBookPage } from './CBookPage';
 export { NetExposurePage } from './NetExposure';
 export { CharterPage } from './Charter';
+export { ArchetypePage } from './Archetype';
 export { LogsPage } from './Logs';
 export {
   LiquidityProvidersPage,
