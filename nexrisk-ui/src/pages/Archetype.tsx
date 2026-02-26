@@ -7,7 +7,7 @@
 //      Clustering: /api/v1/clustering/*
 // ============================================
 
-import { useState, useCallback } from 'react';
+import React, { useState, useCallback, useContext } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { clsx } from 'clsx';
@@ -17,7 +17,7 @@ import { clusteringApi } from '@/services/api';
 // API helpers — same base as every other page
 // ─────────────────────────────────────────────
 
-// Use relative URLs so Vite proxy routes /api/* → BFF (localhost:8080) → C++ backend
+// Relative URLs — Vite proxy routes /api/* → BFF (localhost:8080) → C++ backend
 const API_BASE = '';
 
 const api = {
@@ -25,6 +25,60 @@ const api = {
   put:  (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'PUT',  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
   post: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
 };
+
+// ─────────────────────────────────────────────
+// Factory defaults + diff system
+// ─────────────────────────────────────────────
+
+// Flattens a nested object to dot-notation keys for diff comparison
+function flattenObj(obj: any, prefix = ''): Record<string, any> {
+  return Object.entries(obj ?? {}).reduce((acc, [k, v]) => {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      Object.assign(acc, flattenObj(v, key));
+    } else {
+      acc[key] = v;
+    }
+    return acc;
+  }, {} as Record<string, any>);
+}
+
+// Per-section defaults + diff hook
+function useFactoryData(section: 'classifier' | 'detection' | 'llm') {
+  const { data: defaults } = useQuery({
+    queryKey: ['factory-defaults', section],
+    queryFn: () => api.get(`/api/v1/settings/${section}/defaults`),
+    staleTime: Infinity, // factory defaults never change
+  });
+  const { data: diffRaw, refetch: refetchDiff } = useQuery({
+    queryKey: ['factory-diff', section],
+    queryFn: () => api.get(`/api/v1/settings/${section}/diff`),
+    staleTime: 5_000,
+  });
+  // diff is a flat object of changed keys → { current, default }
+  const diff: Record<string, { current: any; default: any }> = diffRaw ?? {};
+  return { defaults, diff, refetchDiff };
+}
+
+// Returns default value for a dot-notation path within factory defaults
+function getDefault(defaults: any, path: string): any {
+  if (!defaults) return undefined;
+  return path.split('.').reduce((obj, k) => obj?.[k], defaults);
+}
+
+// React context so tabs can pass diff/defaults down without prop-drilling
+const FactoryCtx = React.createContext<{
+  diff: Record<string, { current: any; default: any }>;
+  defaults: any;
+  section: string;
+  resetSubsection: (subsection: string) => Promise<void>;
+  resetAll: () => Promise<void>;
+  resetting: string | null; // subsection being reset, or 'all'
+}>({
+  diff: {}, defaults: null, section: '',
+  resetSubsection: async () => {}, resetAll: async () => {},
+  resetting: null,
+});
 
 // ─────────────────────────────────────────────
 // camelCase → snake_case for PUT payloads
@@ -36,6 +90,53 @@ const toSnake = (obj: Record<string, any>): Record<string, any> =>
       v
     ])
   );
+
+// ─────────────────────────────────────────────
+// Factory default hint + modified field highlight
+// ─────────────────────────────────────────────
+
+// Shows "Default: X" below a field when the value differs from factory
+function FactoryHint({ path, current }: { path: string; current: any }) {
+  const { defaults } = useContext(FactoryCtx);
+  const def = getDefault(defaults, path);
+  if (def === undefined) return null;
+  const isDiff = JSON.stringify(current) !== JSON.stringify(def);
+  if (!isDiff) return null;
+  return (
+    <p className="text-[11px] text-amber-600/70 mt-0.5 font-mono">
+      Default: {typeof def === 'boolean' ? (def ? 'on' : 'off') : String(def)}
+    </p>
+  );
+}
+
+// Wraps a form field — adds left border highlight if field differs from factory
+function FModified({ label, hint, path, current, children }: {
+  label: string; hint?: string; path?: string; current?: any; children: React.ReactNode;
+}) {
+  const { diff } = useContext(FactoryCtx);
+  const isModified = path ? Object.keys(diff).some(k => k.includes(path)) : false;
+  return (
+    <div className={isModified ? 'pl-2 border-l-2 border-amber-700/50' : ''}>
+      <label className="block text-xs text-white mb-1">{label}</label>
+      {children}
+      {hint && <p className="text-[11px] text-white/40 mt-0.5">{hint}</p>}
+      {path && current !== undefined && <FactoryHint path={path} current={current} />}
+    </div>
+  );
+}
+
+// Reset to factory button — used inside drawers
+function ResetBtn({ onClick, loading }: { onClick: () => void; loading: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className="px-3 text-sm py-2 rounded border border-[#3a3a3c] text-white/50 hover:text-white hover:border-amber-700/50 disabled:opacity-40 transition-colors shrink-0"
+    >
+      {loading ? 'Resetting…' : 'Reset to Factory'}
+    </button>
+  );
+}
 
 // ─────────────────────────────────────────────
 // Shared UI atoms
@@ -92,6 +193,48 @@ function Card({ children, className }: { children: React.ReactNode; className?: 
   return <div className={clsx('bg-[#252527] rounded border border-[#3a3a3c] p-4', className)}>{children}</div>;
 }
 
+// Confirm reset modal
+function ConfirmResetModal({ onConfirm, onCancel, loading }: {
+  onConfirm: () => void; onCancel: () => void; loading: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onCancel} />
+      <div className="relative bg-[#1e1e20] border border-[#3a3a3c] rounded-lg p-6 w-[360px] shadow-2xl">
+        <div className="text-sm font-semibold text-white mb-2">Reset to Factory Defaults?</div>
+        <p className="text-xs text-white/50 mb-5 leading-relaxed">
+          All settings in this section will be restored to their original factory values.
+          This cannot be undone. Current values will be lost.
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex-1 text-sm py-2 rounded bg-red-950/60 border border-red-900/40 text-red-400 hover:bg-red-950 disabled:opacity-50 transition-colors font-medium"
+          >
+            {loading ? 'Resetting…' : 'Yes, Reset All'}
+          </button>
+          <button onClick={onCancel} className="flex-1 text-sm py-2 rounded border border-[#3a3a3c] text-white/50 hover:text-white transition-colors">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Reset All button for tab headers
+function ResetAllBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="text-xs px-3 py-1.5 rounded border border-[#3a3a3c] text-white/40 hover:text-white hover:border-red-900/50 transition-colors"
+    >
+      Reset to Factory
+    </button>
+  );
+}
+
 function EditBtn({ onClick }: { onClick: () => void }) {
   return (
     <button onClick={onClick} className="text-xs text-white/50 hover:text-white border border-white/20 px-2 py-0.5 rounded transition-colors shrink-0">
@@ -105,11 +248,12 @@ function EditBtn({ onClick }: { onClick: () => void }) {
 // ─────────────────────────────────────────────
 
 function Drawer({
-  open, title, subtitle, onClose, onSave, saving, error, children,
+  open, title, subtitle, onClose, onSave, saving, error, children, onReset, resetting,
 }: {
   open: boolean; title: string; subtitle?: string;
   onClose: () => void; onSave: () => void; saving: boolean; error?: string | null;
   children: React.ReactNode;
+  onReset?: () => void; resetting?: boolean;
 }) {
   if (!open) return null;
   return (
@@ -131,7 +275,8 @@ function Drawer({
           <button onClick={onSave} disabled={saving} className="flex-1 text-sm py-2 rounded bg-[#4a7a8a] text-[#1e1e20] font-semibold hover:bg-[#4a7a8a] disabled:opacity-50 transition-colors">
             {saving ? 'Saving…' : 'Save Changes'}
           </button>
-          <button onClick={onClose} className="px-4 text-sm py-2 rounded border border-[#3a3a3c] text-white hover:text-white transition-colors">Cancel</button>
+          {onReset && <ResetBtn onClick={onReset} loading={!!resetting} />}
+          <button onClick={onClose} className="px-4 text-sm py-2 rounded border border-[#3a3a3c] text-white/50 hover:text-white transition-colors">Cancel</button>
         </div>
       </div>
     </div>
@@ -184,6 +329,30 @@ function ClassifierTab({ cfg }: { cfg: any }) {
   const [dk, setDk] = useState<DrawerKind>(null);
   const [form, setForm] = useState<Record<string, any>>({});
   const [err, setErr] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const { diff, defaults, refetchDiff } = useFactoryData('classifier');
+
+  const resetSubsection = async (subsection: string) => {
+    setResetting(subsection);
+    try {
+      await api.post(`/api/v1/settings/classifier/reset/${subsection}`, {});
+      qc.invalidateQueries({ queryKey: ['all-settings'] });
+      refetchDiff();
+      setDk(null);
+    } finally { setResetting(null); }
+  };
+
+  const resetAll = async () => {
+    setResetting('all');
+    try {
+      const subsections = ['global','ea','scalper','arbitrage','rebate','news','risk_severity','decision_engine','anomaly_detector'];
+      for (const s of subsections) await api.post(`/api/v1/settings/classifier/reset/${s}`, {});
+      qc.invalidateQueries({ queryKey: ['all-settings'] });
+      refetchDiff();
+    } finally { setResetting(null); setConfirmReset(false); }
+  };
 
   const open = useCallback((kind: DrawerKind, init: Record<string, any> = {}) => {
     setErr(null); setForm(init); setDk(kind);
@@ -214,7 +383,13 @@ function ClassifierTab({ cfg }: { cfg: any }) {
     Object.entries(det ?? {}).filter(([k]) => k.endsWith('_weight'));
 
   return (
+    <FactoryCtx.Provider value={{ diff, defaults, section: 'classifier', resetSubsection, resetAll, resetting }}>
+      {confirmReset && <ConfirmResetModal onConfirm={resetAll} onCancel={() => setConfirmReset(false)} loading={resetting === 'all'} />}
     <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      {/* Tab header with Reset All */}
+      <div className="flex items-center justify-end -mt-1 mb-1">
+        <ResetAllBtn onClick={() => setConfirmReset(true)} />
+      </div>
       {/* Row 1: Global Gate + Decision Engine */}
       <div className="grid grid-cols-4 gap-4">
         {/* Global gate */}
@@ -342,13 +517,13 @@ function ClassifierTab({ cfg }: { cfg: any }) {
 
       {/* ── Drawers ── */}
 
-      <Drawer open={dk === 'global'} title="Global Classification Gate" subtitle="Min trades before any classification fires" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'global'} title="Global Classification Gate" subtitle="Min trades before any classification fires" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('global')} resetting={resetting === 'global'}>
         <F label="Min Trades for Classification" hint="5 – 500">
           <Num v={form.min_trades_for_classification ?? 20} set={v => setForm(f => ({ ...f, min_trades_for_classification: v }))} min={5} max={500} step={1} />
         </F>
       </Drawer>
 
-      <Drawer open={dk === 'risk_severity'} title="Risk Severity Multipliers" subtitle="0.10 – 1.00 per behaviour type" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'risk_severity'} title="Risk Severity Multipliers" subtitle="0.10 – 1.00 per behaviour type" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('risk_severity')} resetting={resetting === 'risk_severity'}>
         {DETECTORS.map(d => (
           <F key={d.key} label={`${d.label} (${d.severity})`} hint="0.10 – 1.00">
             <Num v={form[d.severity] ?? 0.5} set={v => setForm(f => ({ ...f, [d.severity]: v }))} min={0.1} max={1.0} />
@@ -356,7 +531,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
         ))}
       </Drawer>
 
-      <Drawer open={dk === 'decision_engine'} title="Decision Engine" subtitle="Composite weights must sum to 1.0 · thresholds must be ascending" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'decision_engine'} title="Decision Engine" subtitle="Composite weights must sum to 1.0 · thresholds must be ascending" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('decision_engine')} resetting={resetting === 'decision_engine'}>
         <SectionLabel>Composite Weights (sum = 1.0)</SectionLabel>
         {[['behavior_weight','Behaviour Weight'],['anomaly_weight','Anomaly Weight'],['persistence_weight','Persistence Weight']].map(([k,l]) => (
           <F key={k} label={l as string}><Num v={form[k] ?? 0} set={v => setForm(f => ({ ...f, [k]: v }))} min={0} max={1} /></F>
@@ -377,7 +552,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
         </F>
       </Drawer>
 
-      <Drawer open={dk === 'anomaly'} title="Anomaly Detector" subtitle="Isolation Forest contamination — expected fraction of anomalous traders" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'anomaly'} title="Anomaly Detector" subtitle="Isolation Forest contamination — expected fraction of anomalous traders" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('anomaly_detector')} resetting={resetting === 'anomaly_detector'}>
         <F label="Contamination" hint="0.01 – 0.30">
           <Num v={form.contamination ?? 0.05} set={v => setForm(f => ({ ...f, contamination: v }))} min={0.01} max={0.30} />
         </F>
@@ -388,6 +563,8 @@ function ClassifierTab({ cfg }: { cfg: any }) {
         title={`${DETECTORS.find(d => typeof dk === 'object' && dk !== null && 'detector' in dk && d.key === (dk as { detector: string }).detector)?.label ?? ''} Detector`}
         subtitle="All _weight fields must sum to 1.0 · send them all together"
         onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}
+        onReset={typeof dk === 'object' && dk !== null && 'detector' in dk ? () => resetSubsection((dk as { detector: string }).detector) : undefined}
+        resetting={typeof dk === 'object' && dk !== null && 'detector' in dk ? resetting === (dk as { detector: string }).detector : false}
       >
         <F label="Min Trades" hint="Minimum trades before this detector fires">
           <Num v={form.min_trades ?? 10} set={v => setForm(f => ({ ...f, min_trades: v }))} min={5} max={500} step={1} />
@@ -404,6 +581,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
           ))}
       </Drawer>
     </div>
+    </FactoryCtx.Provider>
   );
 }
 
@@ -422,6 +600,30 @@ function DetectionTab({ cfg }: { cfg: any }) {
   const [dk, setDk] = useState<DetDrawerKind>(null);
   const [form, setForm] = useState<Record<string, any>>({});
   const [err, setErr] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const { diff, defaults, refetchDiff } = useFactoryData('detection');
+
+  const resetSubsection = async (subsection: string) => {
+    setResetting(subsection);
+    try {
+      await api.post(`/api/v1/settings/detection/reset/${subsection}`, {});
+      qc.invalidateQueries({ queryKey: ['all-settings'] });
+      refetchDiff();
+      setDk(null);
+    } finally { setResetting(null); }
+  };
+
+  const resetAll = async () => {
+    setResetting('all');
+    try {
+      const subsections = ['risk_scoring','processing','auto_escalation','thresholds'];
+      for (const s of subsections) await api.post(`/api/v1/settings/detection/reset/${s}`, {});
+      qc.invalidateQueries({ queryKey: ['all-settings'] });
+      refetchDiff();
+    } finally { setResetting(null); setConfirmReset(false); }
+  };
 
   const open = useCallback((kind: DetDrawerKind, init: Record<string, any> = {}) => {
     setErr(null); setForm(init); setDk(kind);
@@ -460,7 +662,12 @@ function DetectionTab({ cfg }: { cfg: any }) {
   const fmtDur = (s: number) => s >= 3600 ? `${(s/3600).toFixed(0)}h` : s >= 60 ? `${(s/60).toFixed(0)}m` : `${s}s`;
 
   return (
+    <FactoryCtx.Provider value={{ diff, defaults, section: 'detection', resetSubsection, resetAll, resetting }}>
+      {confirmReset && <ConfirmResetModal onConfirm={resetAll} onCancel={() => setConfirmReset(false)} loading={resetting === 'all'} />}
     <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      <div className="flex items-center justify-end -mt-1 mb-1">
+        <ResetAllBtn onClick={() => setConfirmReset(true)} />
+      </div>
       {/* Row 1: Risk Scoring + Processing + Auto-Escalation */}
       <div className="grid grid-cols-3 gap-4">
         <Card>
@@ -573,7 +780,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
 
       {/* ── Drawers ── */}
 
-      <Drawer open={dk === 'risk_scoring'} title="Risk Scoring" subtitle="Severity weights 0.10–1.00 · risk band boundaries must ascend" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'risk_scoring'} title="Risk Scoring" subtitle="Severity weights 0.10–1.00 · risk band boundaries must ascend" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('risk_scoring')} resetting={resetting === 'risk_scoring'}>
         <SectionLabel>Severity Weights</SectionLabel>
         {[['ea_severity','EA'],['scalper_severity','Scalper'],['arbitrage_severity','Arbitrage'],['rebate_severity','Rebate'],['news_severity','News']].map(([k,l]) => (
           <F key={k} label={l as string} hint="0.10 – 1.00"><Num v={form[k] ?? 0.5} set={v => setForm(f => ({ ...f, [k]: v }))} min={0.1} max={1.0} /></F>
@@ -584,7 +791,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
         <F label="HIGH Band Max"   hint="CRITICAL = above this"><Num v={form.high_max   ?? 75} set={v => setForm(f => ({ ...f, high_max: v }))}   min={0} max={100} step={1} /></F>
       </Drawer>
 
-      <Drawer open={dk === 'processing'} title="Pipeline Processing" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'processing'} title="Pipeline Processing" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('processing')} resetting={resetting === 'processing'}>
         <F label="Min Trades for Classification" hint="5 – 500"><Num v={form.min_trades_for_classification ?? 20} set={v => setForm(f => ({ ...f, min_trades_for_classification: v }))} min={5} max={500} step={1} /></F>
         <F label="Snapshot Interval (seconds)"  hint="10 – 300"><Num v={form.snapshot_interval_sec ?? 60}         set={v => setForm(f => ({ ...f, snapshot_interval_sec: v }))}         min={10} max={300} step={10} /></F>
         <F label="Classification Window">
@@ -592,7 +799,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
         </F>
       </Drawer>
 
-      <Drawer open={dk === 'auto_escalation'} title="Auto-Escalation" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'auto_escalation'} title="Auto-Escalation" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('auto_escalation')} resetting={resetting === 'auto_escalation'}>
         <F label="Enabled"><Sel v={String(form.enabled ?? true)} set={v => setForm(f => ({ ...f, enabled: v === 'true' }))} opts={[{value:'true',label:'Enabled'},{value:'false',label:'Disabled'}]} /></F>
         <F label="Risk Score Threshold" hint="70.0 – 100.0 — escalation fires above this automatically">
           <Num v={form.risk_score_threshold ?? 80} set={v => setForm(f => ({ ...f, risk_score_threshold: v }))} min={70} max={100} step={1} />
@@ -604,6 +811,8 @@ function DetectionTab({ cfg }: { cfg: any }) {
         title={`${typeof dk === 'object' && dk !== null && 'behavior' in dk ? (dk as { behavior: string }).behavior : ''} Threshold Ladder`}
         subtitle="confidence_min / min_duration_sec / min_trades must increase at each level"
         onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}
+        onReset={typeof dk === 'object' && dk !== null && 'behavior' in dk ? () => resetSubsection(`thresholds_${(dk as { behavior: string }).behavior.toLowerCase()}`) : undefined}
+        resetting={typeof dk === 'object' && dk !== null && 'behavior' in dk ? resetting === `thresholds_${(dk as { behavior: string }).behavior.toLowerCase()}` : false}
       >
         {LEVELS.map((lv, i) => (
           <div key={lv}>
@@ -620,6 +829,7 @@ function DetectionTab({ cfg }: { cfg: any }) {
         ))}
       </Drawer>
     </div>
+    </FactoryCtx.Provider>
   );
 }
 
@@ -1108,6 +1318,32 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
   const [dk, setDk] = useState<LLMDrawer>(null);
   const [form, setForm] = useState<Record<string, any>>({});
   const [err, setErr] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const { diff, defaults, refetchDiff } = useFactoryData('llm');
+
+  const resetSubsection = async (subsection: string) => {
+    setResetting(subsection);
+    try {
+      await api.post(`/api/v1/settings/llm/reset/${subsection}`, {});
+      qc.invalidateQueries({ queryKey: ['all-settings'] });
+      qc.invalidateQueries({ queryKey: ['llm-usage'] });
+      refetchDiff();
+      setDk(null);
+    } finally { setResetting(null); }
+  };
+
+  const resetAll = async () => {
+    setResetting('all');
+    try {
+      const subsections = ['providers','claude','ollama','routing','cost_controls','caching'];
+      for (const s of subsections) await api.post(`/api/v1/settings/llm/reset/${s}`, {});
+      qc.invalidateQueries({ queryKey: ['all-settings'] });
+      qc.invalidateQueries({ queryKey: ['llm-usage'] });
+      refetchDiff();
+    } finally { setResetting(null); setConfirmReset(false); }
+  };
 
   const open = useCallback((kind: LLMDrawer, init: Record<string, any> = {}) => {
     setErr(null); setForm(init); setDk(kind);
@@ -1154,7 +1390,12 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
   const fmtTTL     = (s: number) => s >= 3600 ? `${(s/3600).toFixed(0)}h` : `${Math.floor(s/60)}m`;
 
   return (
+    <FactoryCtx.Provider value={{ diff, defaults, section: 'llm', resetSubsection, resetAll, resetting }}>
+      {confirmReset && <ConfirmResetModal onConfirm={resetAll} onCancel={() => setConfirmReset(false)} loading={resetting === 'all'} />}
     <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      <div className="flex items-center justify-end -mt-1 mb-1">
+        <ResetAllBtn onClick={() => setConfirmReset(true)} />
+      </div>
       {/* Usage banner */}
       {usage && (
         <Card>
@@ -1310,12 +1551,12 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
 
       {/* ── Drawers ── */}
 
-      <Drawer open={dk === 'providers'} title="Provider Selection" subtitle="Default and fallback must differ" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'providers'} title="Provider Selection" subtitle="Default and fallback must differ" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('providers')} resetting={resetting === 'providers'}>
         <F label="Default Provider"><Sel v={form.defaultProvider ?? 'claude'} set={v => setForm(f => ({ ...f, defaultProvider: v }))} opts={[{value:'claude',label:'Claude'},{value:'ollama',label:'Ollama'},{value:'template',label:'Template'}]} /></F>
         <F label="Fallback Provider"><Sel v={form.fallbackProvider ?? 'template'} set={v => setForm(f => ({ ...f, fallbackProvider: v }))} opts={[{value:'claude',label:'Claude'},{value:'ollama',label:'Ollama'},{value:'template',label:'Template'}]} /></F>
       </Drawer>
 
-      <Drawer open={dk === 'claude'} title="Claude Configuration" subtitle="Does not change the API key — use the Key button" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'claude'} title="Claude Configuration" subtitle="Does not change the API key — use the Key button" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('claude')} resetting={resetting === 'claude'}>
         <F label="Enabled"><Sel v={String(form.enabled ?? true)} set={v => setForm(f => ({ ...f, enabled: v === 'true' }))} opts={[{value:'true',label:'Enabled'},{value:'false',label:'Disabled'}]} /></F>
         <F label="Model"><Sel v={form.model ?? 'haiku'} set={v => setForm(f => ({ ...f, model: v }))} opts={[{value:'haiku',label:'Haiku (cheapest)'},{value:'sonnet',label:'Sonnet'},{value:'opus',label:'Opus'}]} /></F>
         <F label="Timeout (seconds)" hint="5–120"><Num v={form.timeout_sec ?? 30} set={v => setForm(f => ({ ...f, timeout_sec: v }))} min={5} max={120} step={5} /></F>
@@ -1323,7 +1564,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         <F label="Temperature" hint="0.0–1.0"><Num v={form.temperature ?? 0.3} set={v => setForm(f => ({ ...f, temperature: v }))} min={0} max={1} step={0.1} /></F>
       </Drawer>
 
-      <Drawer open={dk === 'ollama'} title="Ollama Configuration" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'ollama'} title="Ollama Configuration" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('ollama')} resetting={resetting === 'ollama'}>
         <F label="Enabled"><Sel v={String(form.enabled ?? false)} set={v => setForm(f => ({ ...f, enabled: v === 'true' }))} opts={[{value:'true',label:'Enabled'},{value:'false',label:'Disabled'}]} /></F>
         <F label="Model" hint="e.g. llama3.1:8b-instruct-q4_K_M">
           <input type="text" value={form.model ?? ''} onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
@@ -1342,7 +1583,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         <p className="text-xs text-white/40">⚠ The existing key will be replaced immediately. This cannot be undone.</p>
       </Drawer>
 
-      <Drawer open={dk === 'routing'} title="Risk-Level Routing Matrix" subtitle="auto_generate forces use_llm + on_demand to true (enforced server-side)" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'routing'} title="Risk-Level Routing Matrix" subtitle="auto_generate forces use_llm + on_demand to true (enforced server-side)" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('routing')} resetting={resetting === 'routing'}>
         {RISK_LEVELS.map((lv, i) => (
           <div key={lv}>
             <span className="text-xs font-semibold" style={{ color: RISK_CLR[lv] }}>{lv}</span>
@@ -1359,7 +1600,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         ))}
       </Drawer>
 
-      <Drawer open={dk === 'cost_controls'} title="Cost Controls" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'cost_controls'} title="Cost Controls" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('cost_controls')} resetting={resetting === 'cost_controls'}>
         <F label="Daily Cost Limit (USD)" hint="1.00–500.00 — auto-gen pauses above this, on-demand still works">
           <Num v={form.daily_cost_limit_usd ?? 10} set={v => setForm(f => ({ ...f, daily_cost_limit_usd: v }))} min={1} max={500} step={1} />
         </F>
@@ -1368,12 +1609,13 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         </F>
       </Drawer>
 
-      <Drawer open={dk === 'caching'} title="Explanation Cache" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err}>
+      <Drawer open={dk === 'caching'} title="Explanation Cache" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('caching')} resetting={resetting === 'caching'}>
         <F label="Enabled"><Sel v={String(form.enabled ?? true)} set={v => setForm(f => ({ ...f, enabled: v === 'true' }))} opts={[{value:'true',label:'Enabled'},{value:'false',label:'Disabled'}]} /></F>
         <F label="TTL (seconds)" hint="300–86400"><Num v={form.ttl_seconds ?? 3600} set={v => setForm(f => ({ ...f, ttl_seconds: v }))} min={300} max={86400} step={300} /></F>
         <F label="Max Entries" hint="100–10000"><Num v={form.max_entries ?? 1000} set={v => setForm(f => ({ ...f, max_entries: v }))} min={100} max={10000} step={100} /></F>
       </Drawer>
     </div>
+    </FactoryCtx.Provider>
   );
 }
 
