@@ -197,8 +197,8 @@ const MOCK_CLUSTERS = [
   { cluster_id: -1, member_count: 3, label_hint: 'NOISE', archetype_code: 'UNKNOWN', archetype_name: 'Outliers / Noise', risk_severity: 0.50, avg_risk_score: 45, description: 'Traders not fitting established patterns - requires manual review', members: [7005, 7008, 7010] },
 ];
 
-// Use mock data flag - set to false when API is ready
-const USE_MOCK_DATA = true;
+// ── Live API mode ──
+const USE_MOCK_DATA = false;
 
 // ============================================
 // Types
@@ -390,7 +390,7 @@ function TraderRow({ trader, selected, onClick }: TraderRowProps) {
       {/* Classification + Strategies */}
       <div className="flex items-center gap-1.5 text-xs text-text-secondary flex-shrink-0">
         <span className="font-mono">{trader.classification}</span>
-        {trader.strategies_count && trader.strategies_count > 1 && (
+        {(trader.strategies_count ?? 0) > 1 && (
           <span className="text-accent">• {trader.strategies_count} strats</span>
         )}
       </div>
@@ -615,33 +615,73 @@ function TraderDetailPanel({ login }: TraderDetailPanelProps) {
   // Copy state - must be before any conditional returns
   const [copied, setCopied] = useState(false);
 
-  // Use mock data or fetch from API
+  // ── Mock shortcuts (dev only) ──
   const mockExplanation = USE_MOCK_DATA ? MOCK_EXPLANATIONS[login] : null;
-  const mockFeatures = USE_MOCK_DATA ? MOCK_FEATURES[login] : null;
-  const mockTrader = USE_MOCK_DATA ? MOCK_TRADERS.find(t => t.login === login) : null;
+  const mockFeatures   = USE_MOCK_DATA ? MOCK_FEATURES[login] : null;
+  const mockTrader     = USE_MOCK_DATA ? MOCK_TRADERS.find(t => t.login === login) : null;
 
-  // Fetch trader dashboard data (use mock if available)
+  // ── Dashboard ──
+  // GET /api/v1/traders/{login}/dashboard
+  // Response is nested; we normalise it into a flat shape the panel expects.
   const { data: dashboardData, isLoading: dashboardLoading } = useQuery({
     queryKey: ['trader-dashboard', login],
     queryFn: () => tradersApi.getDashboard(login),
     enabled: !USE_MOCK_DATA && !!login,
   });
 
-  // Fetch explanation (use mock if available)
+  const normalizedTrader = dashboardData ? {
+    login:              (dashboardData as any).trader?.login ?? login,
+    name:               (dashboardData as any).trader?.name ?? `Trader ${login}`,
+    group:              (dashboardData as any).trader?.group,
+    risk_level:         (dashboardData as any).risk_assessment?.risk_level ?? 'LOW',
+    risk_score:         (dashboardData as any).risk_assessment?.risk_score ?? 0,
+    confidence:         (dashboardData as any).risk_assessment?.confidence ?? 0,
+    classification:     (dashboardData as any).risk_assessment?.classification ?? 'UNKNOWN',
+    recommended_action: (dashboardData as any).risk_assessment?.recommended_action ?? 'MONITOR',
+    strategies_count:   (dashboardData as any).risk_assessment?.strategies_count,
+  } : null;
+
+  // ── Explanation ──
+  // GET /api/v1/explanations/trader/{login}
   const { data: explanationData, isLoading: explanationLoading } = useQuery({
     queryKey: ['explanation', login],
     queryFn: () => explanationsApi.getTraderExplanation(login),
     enabled: !USE_MOCK_DATA && !!login,
   });
 
-  // Fetch features for fallback metrics (use mock if available)
+  // ── Features (Gap 2 resolved: field names now match) ──
+  // GET /api/v1/traders/{login}/features?window=1d
+  // Returns avg_hold_seconds, timing_regularity, lot_entropy as top-level fields.
   const { data: featuresData } = useQuery({
     queryKey: ['trader-features', login],
     queryFn: () => tradersApi.getFeatures(login, '1d'),
     enabled: !USE_MOCK_DATA && !!login,
   });
 
-  // Generate explanation mutation
+  // ── Features — response is flat (no 'features' wrapper key) ──
+  // Nested fields: win_rate/profit_factor in profit_metrics, burst_score in execution
+  const rawFeatures = USE_MOCK_DATA ? mockFeatures : featuresData as any;
+  const features = rawFeatures ? {
+    avg_hold_seconds:    rawFeatures.avg_hold_seconds ?? rawFeatures.mean_holding_time_sec ?? rawFeatures.holding_behavior?.mean_holding_time_sec,
+    win_rate:            rawFeatures.win_rate ?? rawFeatures.profit_metrics?.win_rate,
+    profit_factor:       rawFeatures.profit_factor ?? rawFeatures.profit_metrics?.profit_factor,
+    timing_regularity:   rawFeatures.timing_regularity ?? rawFeatures.timing_regularity_score ?? rawFeatures.execution?.timing_regularity_score,
+    lot_entropy:         rawFeatures.lot_entropy ?? rawFeatures.order_structure?.lot_size_entropy,
+    burst_score:         rawFeatures.burst_score ?? rawFeatures.execution?.burst_score,
+  } : null;
+  // GET /api/v1/traders/{login}/strategies
+  // Only needed when multiple strategies are detected.
+  const strategiesCount = (USE_MOCK_DATA ? mockTrader : normalizedTrader)?.strategies_count ?? 0;
+  const { data: strategiesData } = useQuery({
+    queryKey: ['trader-strategies', login],
+    // NOTE: add tradersApi.getStrategies(login) to your API service:
+    //   getStrategies: (login) => api.get(`/api/v1/traders/${login}/strategies`)
+    queryFn: () => (tradersApi as any).getStrategies(login),
+    enabled: !USE_MOCK_DATA && !!login && strategiesCount > 1,
+  });
+
+  // ── Generate-explanation mutation (Gap 4 resolved: all risk levels) ──
+  // POST /api/v1/explanations/trader/{login}/generate
   const generateMutation = useMutation({
     mutationFn: () => explanationsApi.generateExplanation(login),
     onSuccess: () => {
@@ -649,11 +689,9 @@ function TraderDetailPanel({ login }: TraderDetailPanelProps) {
     },
   });
 
-  // Use mock or real data
-  const trader = USE_MOCK_DATA ? mockTrader : dashboardData;
+  // ── Resolved data sources ──
+  const trader    = USE_MOCK_DATA ? mockTrader     : normalizedTrader;
   const explanation = USE_MOCK_DATA ? mockExplanation : explanationData;
-  const features = USE_MOCK_DATA ? mockFeatures : featuresData?.features;
-
   if (!USE_MOCK_DATA && dashboardLoading) {
     return (
       <div className="h-full flex items-center justify-center text-text-muted">
@@ -673,8 +711,12 @@ function TraderDetailPanel({ login }: TraderDetailPanelProps) {
   const { current, claude_explanations, actions, behavior_change } = explanation || {};
   const hasExplanation = claude_explanations && claude_explanations.length > 0;
   const riskLevel = current?.risk_level || trader.risk_level || 'LOW';
-  // Show Explain button for MEDIUM and LOW when no explanation exists
-  const showExplainButton = !hasExplanation && (riskLevel === 'MEDIUM' || riskLevel === 'LOW');
+  // Gap 4 resolved: generate endpoint works for all risk levels.
+  // Show Explain button whenever no fresh Claude explanation exists.
+  // Show Explain button when no explanation exists OR the existing one is stale
+  // (stale = classification, risk level, or triggered_rules changed since last generation)
+  const isStale = hasExplanation && claude_explanations[0].is_stale === true;
+  const showExplainButton = !hasExplanation || isStale;
 
   // Format timestamp for Fresh/Stale badge
   const formatExplanationTime = (dateStr: string) => {
@@ -791,6 +833,40 @@ Model: CH-nexrisk-4.5
           </div>
         </div>
       </div>
+
+      {/* Multi-Strategy Alert (Gap 3) */}
+      {strategiesCount > 1 && (
+        <div className="px-3 py-2 border-b border-border">
+          <div className="flex items-start gap-2 px-2 py-1.5 rounded border bg-accent-subtle border-accent">
+            <Zap className="w-3.5 h-3.5 text-accent mt-0.5 flex-shrink-0" />
+            <div className="text-xs">
+              <span className="font-medium text-accent">
+                {strategiesData
+                  ? `${(strategiesData as any).strategy_count} strategies detected`
+                  : `${strategiesCount} strategies detected`}
+              </span>
+              {strategiesData && (
+                <span className="text-text-muted ml-2">
+                  • {((strategiesData as any).toxic_strategy_pct * 100).toFixed(0)}% toxic
+                </span>
+              )}
+              {strategiesData && (strategiesData as any).strategies?.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {(strategiesData as any).strategies.map((s: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 text-text-secondary">
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" />
+                      <span className="font-mono">{s.classification ?? s.name ?? s}</span>
+                      {s.confidence != null && (
+                        <span className="text-text-muted ml-auto">{(s.confidence * 100).toFixed(0)}%</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Behavior Trend - Compact */}
       {behavior_change && (
@@ -910,12 +986,12 @@ Model: CH-nexrisk-4.5
         <div className="grid grid-cols-3 gap-1.5">
           <MetricTile 
             label="Hold Time" 
-            value={formatDuration(features?.avg_hold_seconds)}
+            value={formatDuration(features?.avg_hold_seconds ?? features?.mean_holding_time_sec)}
             icon={<Clock className="w-2.5 h-2.5" />}
           />
           <MetricTile 
             label="Win Rate" 
-            value={`${((features?.win_rate || 0) * 100).toFixed(0)}%`}
+            value={`${(((features?.win_rate) || 0) * 100).toFixed(0)}%`}
             icon={<Target className="w-2.5 h-2.5" />}
           />
           <MetricTile 
@@ -925,17 +1001,17 @@ Model: CH-nexrisk-4.5
           />
           <MetricTile 
             label="Timing Reg" 
-            value={(features?.timing_regularity || 0).toFixed(2)}
+            value={(features?.timing_regularity ?? features?.timing_regularity_score ?? 0).toFixed(2)}
             icon={<Activity className="w-2.5 h-2.5" />}
           />
           <MetricTile 
             label="Lot Entropy" 
-            value={(features?.lot_entropy || 0).toFixed(2)}
+            value={(features?.lot_entropy ?? 0).toFixed(2)}
             icon={<BarChart3 className="w-2.5 h-2.5" />}
           />
           <MetricTile 
             label="Burst Score" 
-            value={(features?.burst_score || 0).toFixed(1)}
+            value={(features?.burst_score ?? 0).toFixed(1)}
             icon={<Zap className="w-2.5 h-2.5" />}
           />
         </div>
@@ -950,9 +1026,13 @@ Model: CH-nexrisk-4.5
 
 interface ClusterDetailPanelProps {
   cluster: ClusterProfile;
+  /** Latest clustering run_id — used for the live explain endpoint */
+  runId?: string | null;
+  /** Full trader list from the parent — used for member name/score lookup */
+  traders?: any[];
 }
 
-function ClusterDetailPanel({ cluster }: ClusterDetailPanelProps) {
+function ClusterDetailPanel({ cluster, runId, traders = [] }: ClusterDetailPanelProps) {
   const [explanation, setExplanation] = useState<{
     behavior_description: string;
     risk_indicators: string[];
@@ -969,33 +1049,35 @@ function ClusterDetailPanel({ cluster }: ClusterDetailPanelProps) {
   const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 
-  // Mock explanation generation
-  const handleExplain = () => {
+  // Wire to POST /api/v1/clustering/runs/{runId}/clusters/{n}/explain
+  const handleExplain = async () => {
+    if (!runId) return;
     setIsExplaining(true);
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      const result = await clusteringApi.explainCluster(runId, cluster.cluster_id);
+      // Normalise response — backend returns the explanation fields directly or
+      // nested under an 'explanation' key depending on provider.
+      const r = (result as any)?.explanation ?? result;
       setExplanation({
-        behavior_description: `This cluster of ${cluster.member_count} traders exhibits ${cluster.archetype_name?.toLowerCase() || 'distinct'} characteristics with consistent behavioral patterns across members.`,
-        risk_indicators: [
-          `Average risk score of ${cluster.avg_risk_score?.toFixed(0) || 'N/A'} indicates ${(cluster.risk_severity || 0) >= 0.6 ? 'elevated' : 'moderate'} risk exposure`,
-          `Cluster severity rating: ${((cluster.risk_severity || 0) * 100).toFixed(0)}%`,
-          `${cluster.member_count} traders share similar execution patterns`,
-          cluster.cluster_id === -1 ? 'Outlier status requires individual review' : 'Established cluster with predictable behavior'
-        ],
-        suggested_archetype_code: cluster.archetype_code || 'UNKNOWN',
-        confidence: 0.87,
-        reasoning: `Based on centroid analysis, this cluster most closely matches the ${cluster.archetype_code || 'UNKNOWN'} archetype profile. The combination of trading frequency, hold times, and profit patterns supports this classification.`,
-        generated_at: new Date().toISOString()
+        behavior_description: r.behavior_description ?? r.summary ?? '',
+        risk_indicators:      Array.isArray(r.risk_indicators) ? r.risk_indicators : [],
+        suggested_archetype_code: r.suggested_archetype_code ?? cluster.archetype_code ?? 'UNKNOWN',
+        confidence:           r.confidence ?? 0,
+        reasoning:            r.reasoning ?? '',
+        generated_at:         r.generated_at ?? new Date().toISOString(),
       });
+    } catch (err) {
+      console.error('Cluster explain failed:', err);
+    } finally {
       setIsExplaining(false);
-    }, 2000);
+    }
   };
 
   // Copy cluster analysis to clipboard
   const handleCopyCluster = () => {
     const membersList = cluster.members?.map(m => {
-      const trader = MOCK_TRADERS.find(t => t.login === m);
-      return `  #${m}${trader ? ` - ${trader.name} (Risk: ${trader.risk_score?.toFixed(0)})` : ''}`;
+      const t = traders.find((x: any) => x.login === m);
+      return `  #${m}${t ? ` - ${t.name} (Risk: ${t.risk_score?.toFixed(0)})` : ''}`;
     }).join('\n') || 'No members';
 
     const header = `═══════════════════════════════════════
@@ -1175,7 +1257,7 @@ Model: CH-nexrisk-4.5
         <h4 className="text-xs font-medium text-text-muted mb-2">Cluster Members</h4>
         <div className="space-y-1">
           {cluster.members?.map((login) => {
-            const trader = MOCK_TRADERS.find(t => t.login === login);
+            const t = traders.find((x: any) => x.login === login);
             return (
               <div 
                 key={login}
@@ -1183,13 +1265,13 @@ Model: CH-nexrisk-4.5
               >
                 <div>
                   <span className="font-mono text-xs text-text-primary">#{login}</span>
-                  {trader && (
-                    <span className="text-[11px] text-text-muted ml-2">{trader.name}</span>
+                  {t && (
+                    <span className="text-[11px] text-text-muted ml-2">{t.name}</span>
                   )}
                 </div>
-                {trader && (
+                {t && (
                   <span className="text-[11px] font-mono text-text-secondary">
-                    {trader.risk_score?.toFixed(0)}
+                    {t.risk_score?.toFixed(0)}
                   </span>
                 )}
               </div>
@@ -1252,12 +1334,10 @@ export function FocusPage() {
     }
   }, [searchParams, setSelectedTrader]);
 
-  // Use mock or real data
-  const tradersData = USE_MOCK_DATA 
-    ? { traders: MOCK_TRADERS, total: MOCK_TRADERS.length }
-    : null;
-
-  // Fetch traders (only if not using mock)
+  // ── Traders ──
+  // GET /api/v1/traders?limit=500
+  // Gap 1 resolved: response now includes risk_level, confidence,
+  // recommended_action, has_explanation, strategies_count on every row.
   const { data: apiTradersData, isLoading: tradersLoading, refetch: refetchTraders } = useQuery({
     queryKey: ['traders'],
     queryFn: () => tradersApi.getAll({ limit: 500 }),
@@ -1265,17 +1345,69 @@ export function FocusPage() {
     refetchInterval: 60000,
   });
 
-  const traders = USE_MOCK_DATA ? tradersData?.traders : apiTradersData?.traders;
-  const clusterProfiles = USE_MOCK_DATA ? MOCK_CLUSTERS : [];
+  const traders = USE_MOCK_DATA ? (MOCK_TRADERS as any[]) : ((apiTradersData as any)?.traders ?? []);
 
-  // Group traders by risk level
+  // ── Clustering (Gap 1 side-car) ──
+  // Step 1: get latest run_id
+  const { data: runsData } = useQuery({
+    queryKey: ['clustering-runs'],
+    queryFn: () => clusteringApi.getRuns(1),
+    enabled: !USE_MOCK_DATA,
+    refetchInterval: 300000, // 5 min — runs don't change often
+    staleTime: 60000,
+  });
+  const latestRunId: string | null = (runsData as any)?.runs?.[0]?.run_id ?? null;
+
+  // Step 2: cluster profiles for the run
+  const { data: profilesData } = useQuery({
+    queryKey: ['clustering-profiles', latestRunId],
+    queryFn: () => clusteringApi.getRunProfiles(latestRunId!),
+    enabled: !USE_MOCK_DATA && !!latestRunId,
+    staleTime: 60000,
+  });
+
+  // Step 3: run detail includes assignments[], used to build members lists
+  // NOTE: add clusteringApi.getRun(runId) to your service if not present:
+  //   getRun: (runId) => api.get(`/api/v1/clustering/runs/${runId}`)
+  const { data: runDetailData } = useQuery({
+    queryKey: ['clustering-run-detail', latestRunId],
+    queryFn: () => (clusteringApi as any).getRun(latestRunId!),
+    enabled: !USE_MOCK_DATA && !!latestRunId,
+    staleTime: 60000,
+  });
+
+  // Merge profiles + assignments into enriched ClusterProfile[]
+  const rawProfiles: any[] = (profilesData as any)?.profiles ?? [];
+  const assignments: any[] = (runDetailData as any)?.assignments ?? [];
+
+  const liveClusterProfiles: ClusterProfile[] = rawProfiles.map(p => ({
+    cluster_id:     p.cluster_id,
+    member_count:   p.member_count,
+    status:         p.status,
+    label_hint:     p.label_hint,
+    archetype_code: p.mapped_archetype?.archetype_code ?? p.label_hint,
+    archetype_name: p.mapped_archetype?.display_name  ?? p.label_hint,
+    risk_severity:  p.risk_severity,
+    avg_risk_score: p.avg_risk_score,
+    description:    p.description,
+    members: assignments
+      .filter(a => a.cluster_id === p.cluster_id)
+      .map(a => a.trader_login),
+  }));
+
+  const clusterProfiles = USE_MOCK_DATA ? MOCK_CLUSTERS : liveClusterProfiles;
+
+  // Group traders by risk level — exclude unclassified (UNKNOWN) accounts
+  // that exist in MT5 but haven't been classified by the risk engine yet.
   const tradersByRisk = useMemo(() => {
-    const list = traders || [];
+    const list = (traders || []).filter(
+      (t: Trader) => t.classification && t.classification !== 'UNKNOWN'
+    );
     return {
       CRITICAL: list.filter((t: Trader) => t.risk_level === 'CRITICAL'),
-      HIGH: list.filter((t: Trader) => t.risk_level === 'HIGH'),
-      MEDIUM: list.filter((t: Trader) => t.risk_level === 'MEDIUM'),
-      LOW: list.filter((t: Trader) => t.risk_level === 'LOW'),
+      HIGH:     list.filter((t: Trader) => t.risk_level === 'HIGH'),
+      MEDIUM:   list.filter((t: Trader) => t.risk_level === 'MEDIUM'),
+      LOW:      list.filter((t: Trader) => t.risk_level === 'LOW'),
     };
   }, [traders]);
 
@@ -1450,7 +1582,11 @@ export function FocusPage() {
           {selectedTrader ? (
             <TraderDetailPanel login={selectedTrader} />
           ) : selectedCluster ? (
-            <ClusterDetailPanel cluster={selectedCluster} />
+            <ClusterDetailPanel
+              cluster={selectedCluster}
+              runId={USE_MOCK_DATA ? null : latestRunId}
+              traders={traders}
+            />
           ) : null}
         </div>
       )}

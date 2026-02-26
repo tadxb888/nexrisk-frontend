@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { nexriskApi, snakeToCamel } from '../services/nexrisk-api.js';
+import { nexriskApi } from '../services/nexrisk-api.js';
 
 // Request schemas
 const listTradersQuery = z.object({
@@ -45,9 +45,7 @@ export async function tradersRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(response.status).send(response.error);
       }
 
-      // Transform response to camelCase
-      const data = snakeToCamel(response.data as Record<string, unknown>);
-      return reply.send(data);
+      return reply.send(response.data);
     }
   );
 
@@ -69,8 +67,7 @@ export async function tradersRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(response.status).send(response.error);
       }
 
-      const data = snakeToCamel(response.data as Record<string, unknown>);
-      return reply.send(data);
+      return reply.send(response.data);
     }
   );
 
@@ -92,8 +89,7 @@ export async function tradersRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(response.status).send(response.error);
       }
 
-      const data = snakeToCamel(response.data as Record<string, unknown>);
-      return reply.send(data);
+      return reply.send(response.data);
     }
   );
 
@@ -119,8 +115,7 @@ export async function tradersRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(response.status).send(response.error);
       }
 
-      const data = snakeToCamel(response.data as Record<string, unknown>);
-      return reply.send(data);
+      return reply.send(response.data);
     }
   );
 
@@ -145,8 +140,7 @@ export async function tradersRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(response.status).send(response.error);
       }
 
-      const data = snakeToCamel(response.data as Record<string, unknown>);
-      return reply.send(data);
+      return reply.send(response.data);
     }
   );
 }
