@@ -7,7 +7,7 @@
 //      Clustering: /api/v1/clustering/*
 // ============================================
 
-import React, { useState, useCallback, useContext } from 'react';
+import React, { useState, useCallback, useContext, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { clsx } from 'clsx';
@@ -1623,13 +1623,14 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
 // ROOT PAGE
 // ─────────────────────────────────────────────
 
-type TabId = 'classifier' | 'detection' | 'clustering' | 'llm';
+type TabId = 'classifier' | 'detection' | 'clustering' | 'llm' | 'history';
 
 const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: 'classifier', label: 'Classifier', hint: 'EA · Scalper · Arbitrage · Rebate · News detector weights' },
   { id: 'detection',  label: 'Detection',  hint: 'MONITOR → WARN → RESTRICT → ESCALATE ladders' },
   { id: 'clustering', label: 'Clustering', hint: 'HDBSCAN config · run history · cluster archetype mapping' },
   { id: 'llm',        label: 'LLM',        hint: 'Provider routing · cost controls · caching' },
+  { id: 'history',    label: 'Change History', hint: 'Audit trail for all settings changes' },
 ];
 
 
@@ -1992,6 +1993,41 @@ export function ArchetypePage() {
   const settingsError = null;
   const allSettings = { classifier: classifierRaw, detection: detectionRaw, llm: llmRaw };
 
+  // ── Export helpers ──────────────────────────────────────────────────────────
+  const exportJSON = (data: unknown, filename: string) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportCurrent = async () => {
+    try {
+      const [classifier, detection, llm] = await Promise.all([
+        api.get('/api/v1/settings/classifier'),
+        api.get('/api/v1/settings/detection'),
+        api.get('/api/v1/settings/llm'),
+      ]);
+      exportJSON({ classifier, detection, llm, exported_at: new Date().toISOString() },
+        `nexrisk-settings-${new Date().toISOString().slice(0,10)}.json`);
+    } catch { /* silent */ }
+  };
+
+  const handleExportDefaults = async () => {
+    try {
+      const [classifier, detection, llm] = await Promise.all([
+        api.get('/api/v1/settings/classifier/defaults'),
+        api.get('/api/v1/settings/detection/defaults'),
+        api.get('/api/v1/settings/llm/defaults'),
+      ]);
+      exportJSON({ classifier, detection, llm, exported_at: new Date().toISOString() },
+        `nexrisk-factory-defaults-${new Date().toISOString().slice(0,10)}.json`);
+    } catch { /* silent */ }
+  };
+
   const classifierCfg: any = normalizeClassifier(classifierRaw) ?? DEFAULT_CLASSIFIER;
   const detectionCfg:  any = normalizeDetection(detectionRaw)   ?? DEFAULT_DETECTION;
   const llmCfg:        any = normalizeLLM(llmRaw)               ?? DEFAULT_LLM;
@@ -2008,6 +2044,24 @@ export function ArchetypePage() {
             <p className="text-xs text-white/40">Behaviour classifier config · detection thresholds · HDBSCAN clustering · LLM explanation engine</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportDefaults}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-[#3a3a3c] text-white/50 hover:text-white hover:border-white/20 transition-colors"
+            >
+              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Export Factory Defaults
+            </button>
+            <button
+              onClick={handleExportCurrent}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-[#3a3a3c] text-white/50 hover:text-white hover:border-white/20 transition-colors"
+            >
+              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Export Current Settings
+            </button>
             {settingsError && (
               <div className="text-xs text-red-500 bg-red-950/20 border border-red-900/15 px-3 py-1.5 rounded font-mono">
                 ✗ {String(settingsError)}
@@ -2048,9 +2102,301 @@ export function ArchetypePage() {
         {tab === 'detection'  && <DetectionTab  cfg={detectionCfg}  />}
         {tab === 'clustering' && <ClusteringTab />}
         {tab === 'llm'        && <LLMTab cfg={llmCfg} usage={llmUsageNorm} />}
+        {tab === 'history'    && <ChangeHistoryTab />}
       </div>
     </div>
   );
 }
 
 export default ArchetypePage;
+
+// ─────────────────────────────────────────────
+// CHANGE HISTORY TAB
+// ─────────────────────────────────────────────
+
+type HistorySection = 'classifier' | 'detection' | 'llm';
+
+interface HistoryEntry {
+  id:         number;
+  subsection: string;
+  changeType: string;
+  oldValues:  Record<string, unknown> | null;
+  newValues:  Record<string, unknown> | null;
+  changedBy:  string;
+  changedAt:  string;
+  reason?:    string;
+}
+
+const CHANGE_TYPE_COLORS: Record<string, { color: string; bg: string; border: string }> = {
+  UPDATE:         { color: '#7a9ab5', bg: 'rgba(74,111,165,0.08)',  border: 'rgba(74,111,165,0.30)' },
+  RESET:          { color: '#7c9e8a', bg: 'rgba(46,125,79,0.08)',   border: 'rgba(46,125,79,0.25)'  },
+  RESET_SECTION:  { color: '#7c9e8a', bg: 'rgba(46,125,79,0.08)',   border: 'rgba(46,125,79,0.25)'  },
+  CREATE:         { color: '#8a9e7c', bg: 'rgba(46,125,79,0.08)',   border: 'rgba(46,125,79,0.25)'  },
+  DELETE:         { color: '#9e7c7c', bg: 'rgba(192,57,43,0.08)',   border: 'rgba(192,57,43,0.25)'  },
+};
+
+function getChangeColor(ct: string) {
+  return CHANGE_TYPE_COLORS[ct] ?? { color: '#a0a4b8', bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.12)' };
+}
+
+function fmtDateTime(iso: string) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+    + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+function HistoryEntryCard({ entry }: { entry: HistoryEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const c = getChangeColor(entry.changeType);
+  const hasValues = (entry.oldValues && Object.keys(entry.oldValues).length > 0)
+                 || (entry.newValues && Object.keys(entry.newValues).length > 0);
+
+  return (
+    <div
+      className="rounded border"
+      style={{ borderColor: c.border, borderLeft: `3px solid ${c.color}`, background: 'rgba(37,37,39,0.8)' }}
+    >
+      <div
+        className={clsx('px-4 py-3', hasValues && 'cursor-pointer')}
+        onClick={() => hasValues && setExpanded(e => !e)}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            {/* Change type badge */}
+            <span
+              className="text-xs font-semibold px-2 py-0.5 rounded uppercase tracking-wider shrink-0"
+              style={{ background: c.bg, color: c.color, border: `1px solid ${c.border}` }}
+            >
+              {entry.changeType.replace(/_/g, ' ')}
+            </span>
+            {/* Subsection */}
+            <span className="text-xs px-1.5 py-0.5 rounded bg-[#2a2a2c] border border-[#3a3a3c] text-white/60 font-mono shrink-0">
+              {entry.subsection.includes('.') ? entry.subsection.split('.').pop()!.replace(/([A-Z])/g, ' $1').trim() : entry.subsection.replace(/_/g, ' ')}
+            </span>
+            {/* Expand hint */}
+            {hasValues && (
+              <span className="text-xs text-white/30 ml-1">
+                {expanded ? '▾' : '▸'} {expanded ? 'hide diff' : 'show diff'}
+              </span>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-xs font-semibold text-white">{entry.changedBy}</div>
+            <div className="text-xs text-white/40 mt-0.5 font-mono">{fmtDateTime(entry.changedAt)}</div>
+          </div>
+        </div>
+
+        {entry.reason && (
+          <div className="mt-2 text-xs italic text-white/40 truncate">"{entry.reason}"</div>
+        )}
+      </div>
+
+      {/* Diff — only shown when expanded */}
+      {expanded && hasValues && (
+        <div className="px-4 pb-4 flex gap-3 flex-wrap">
+          {entry.oldValues && Object.keys(entry.oldValues).length > 0 && (
+            <div className="flex-1 rounded p-2.5 font-mono text-xs min-w-[160px]"
+              style={{ background: 'rgba(192,57,43,0.06)', border: '1px solid rgba(192,57,43,0.20)' }}>
+              <div className="font-semibold mb-1.5 text-red-400/80">Before</div>
+              {Object.entries(entry.oldValues).map(([k, v]) => (
+                <div key={k} className="flex gap-2 leading-5">
+                  <span className="text-white/40">{k}:</span>
+                  <span className="text-red-400/80">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {entry.newValues && Object.keys(entry.newValues).length > 0 && (
+            <div className="flex-1 rounded p-2.5 font-mono text-xs min-w-[160px]"
+              style={{ background: 'rgba(46,125,79,0.06)', border: '1px solid rgba(46,125,79,0.20)' }}>
+              <div className="font-semibold mb-1.5" style={{ color: '#7c9e8a' }}>After</div>
+              {Object.entries(entry.newValues).map(([k, v]) => (
+                <div key={k} className="flex gap-2 leading-5">
+                  <span className="text-white/40">{k}:</span>
+                  <span style={{ color: '#7c9e8a' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChangeHistoryTab() {
+  const [section, setSection]     = useState<HistorySection>('classifier');
+  const [fromDate, setFromDate]   = useState('');
+  const [toDate,   setToDate]     = useState('');
+  const [filterSub,  setFilterSub]  = useState('ALL');
+  const [filterType, setFilterType] = useState('ALL');
+  const [filterBy,   setFilterBy]   = useState('ALL');
+  const [limit,      setLimit]      = useState('200');
+
+  // Build query params
+  const queryParams = () => {
+    const p = new URLSearchParams({ limit: limit === 'ALL' ? '9999' : limit });
+    if (fromDate) p.set('from', new Date(fromDate + 'T00:00:00').toISOString());
+    if (toDate)   p.set('to',   new Date(toDate   + 'T23:59:59').toISOString());
+    return p.toString();
+  };
+
+  const { data: raw, isLoading, error, refetch } = useQuery({
+    queryKey: ['settings-history', section, fromDate, toDate, limit],
+    queryFn:  () => api.get(`/api/v1/settings/${section}/history?${queryParams()}`),
+    staleTime: 30_000,
+  });
+
+  const history: HistoryEntry[] = (raw as any)?.history ?? [];
+
+  // Derive filter options from loaded data
+  const allSubsections = useMemo(() => [...new Set(history.map(e => e.subsection))].sort(), [history]);
+  const allChangeTypes = useMemo(() => [...new Set(history.map(e => e.changeType))].sort(), [history]);
+  const allOperators   = useMemo(() => [...new Set(history.map(e => e.changedBy))].sort(), [history]);
+
+  // Reset sub-filters when section changes
+  const switchSection = (s: HistorySection) => {
+    setSection(s); setFilterSub('ALL'); setFilterType('ALL'); setFilterBy('ALL');
+  };
+
+  const filtered = useMemo(() => history.filter(e => {
+    if (filterSub  !== 'ALL' && e.subsection  !== filterSub)  return false;
+    if (filterType !== 'ALL' && e.changeType !== filterType) return false;
+    if (filterBy   !== 'ALL' && e.changedBy  !== filterBy)   return false;
+    return true;
+  }), [history, filterSub, filterType, filterBy]);
+
+  const hasFilters = filterSub !== 'ALL' || filterType !== 'ALL' || filterBy !== 'ALL' || fromDate || toDate;
+  const clearFilters = () => {
+    setFromDate(''); setToDate('');
+    setFilterSub('ALL'); setFilterType('ALL'); setFilterBy('ALL'); setLimit('200');
+  };
+
+  const selCls = "bg-[#1a1a1c] border border-[#3a3a3c] rounded text-xs text-white px-2 py-1.5 focus:border-white/30 focus:outline-none w-full";
+  const inputCls = "bg-[#1a1a1c] border border-[#3a3a3c] rounded text-xs text-white px-2 py-1.5 focus:border-white/30 focus:outline-none w-full";
+
+  return (
+    <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+      {/* Section sub-tabs */}
+      <div className="flex items-center gap-1 bg-[#1a1a1c] rounded border border-[#3a3a3c] p-1 w-fit">
+        {(['classifier', 'detection', 'llm'] as HistorySection[]).map(s => (
+          <button
+            key={s}
+            onClick={() => switchSection(s)}
+            className={clsx(
+              'px-4 py-1.5 rounded text-xs font-medium transition-colors capitalize',
+              section === s
+                ? 'bg-[#2e2e30] text-white border border-[#4a4a4c]'
+                : 'text-white/40 hover:text-white'
+            )}
+          >
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Filter bar */}
+      <div className="bg-[#1e1e20] rounded border border-[#3a3a3c] p-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 mb-3">
+
+          {/* From date */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">From</div>
+            <input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); }}
+              className={inputCls} />
+          </div>
+
+          {/* To date */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">To</div>
+            <input type="date" value={toDate} onChange={e => { setToDate(e.target.value); }}
+              className={inputCls} />
+          </div>
+
+          {/* Subsection */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Subsection</div>
+            <select value={filterSub} onChange={e => setFilterSub(e.target.value)} className={selCls}>
+              <option value="ALL">All subsections</option>
+              {allSubsections.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+            </select>
+          </div>
+
+          {/* Change type */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Change Type</div>
+            <select value={filterType} onChange={e => setFilterType(e.target.value)} className={selCls}>
+              <option value="ALL">All types</option>
+              {allChangeTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+            </select>
+          </div>
+
+          {/* Operator */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Operator</div>
+            <select value={filterBy} onChange={e => setFilterBy(e.target.value)} className={selCls}>
+              <option value="ALL">All operators</option>
+              {allOperators.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+
+          {/* Limit */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Show</div>
+            <select value={limit} onChange={e => setLimit(e.target.value)} className={selCls}>
+              <option value="50">50 records</option>
+              <option value="100">100 records</option>
+              <option value="200">200 records</option>
+              <option value="500">500 records</option>
+              <option value="ALL">All records</option>
+            </select>
+          </div>
+
+          {/* Refresh */}
+          <div className="flex flex-col justify-end">
+            <button onClick={() => refetch()}
+              className="text-xs px-3 py-1.5 rounded border border-[#4a7a8a]/60 text-white/60 hover:text-white hover:border-[#4a7a8a] transition-colors">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Count + clear */}
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-white/40">
+            {isLoading ? 'Loading…' : `${filtered.length} of ${history.length} change${history.length !== 1 ? 's' : ''}${hasFilters ? ' (filtered)' : ''}`}
+          </span>
+          {hasFilters && (
+            <button onClick={clearFilters} className="text-xs text-white/30 hover:text-white transition-colors">
+              ✕ Clear filters
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Results */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16 text-white/30 text-sm">
+          Loading change history…
+        </div>
+      ) : error ? (
+        <div className="flex items-center justify-center py-16 text-red-500/60 text-sm">
+          Failed to load history — check backend connectivity
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="text-4xl mb-3 opacity-10">◎</div>
+          <div className="text-sm text-white/30">
+            {history.length === 0 ? 'No changes recorded yet' : 'No changes match the current filters'}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(entry => <HistoryEntryCard key={entry.id} entry={entry} />)}
+        </div>
+      )}
+    </div>
+  );
+}

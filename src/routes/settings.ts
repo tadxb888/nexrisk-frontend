@@ -204,6 +204,14 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  fastify.get(
+  '/settings/classifier/history',
+  { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+  async (request, reply) => {
+    return proxyGet(`/api/v1/settings/classifier/history`, reply, request.query as Record<string, unknown>);
+  }
+);
+
   // ══════════════════════════════════════════════════════════
   // DETECTION
   // ══════════════════════════════════════════════════════════
@@ -319,6 +327,14 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
       return proxyWrite('POST', `/api/v1/settings/detection/reset/${subsection}`, {}, reply);
     }
   );
+
+  fastify.get(
+  '/settings/detection/history',
+  { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+  async (request, reply) => {
+    return proxyGet(`/api/v1/settings/detection/history`, reply, request.query as Record<string, unknown>);
+  }
+);
 
   // ══════════════════════════════════════════════════════════
   // LLM
@@ -478,4 +494,12 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
       return proxyWrite('POST', `/api/v1/settings/llm/reset/${subsection}`, {}, reply);
     }
   );
+
+  fastify.get(
+  '/settings/llm/history',
+  { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+  async (request, reply) => {
+    return proxyGet(`/api/v1/settings/llm/history`, reply, request.query as Record<string, unknown>);
+  }
+);
 }
