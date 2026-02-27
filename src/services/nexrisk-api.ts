@@ -61,7 +61,7 @@ export async function nexriskFetch<T>(
     const response = await request(url, {
       method,
       headers: {
-        'Content-Type': 'application/json',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
         Accept: 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,

@@ -2,7 +2,7 @@
 // NexRisk API Service Layer
 // ============================================
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
 // Generic fetch wrapper
 async function fetchAPI<T>(
@@ -14,7 +14,7 @@ async function fetchAPI<T>(
   const response = await fetch(url, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
     },
   });
@@ -422,4 +422,200 @@ export const groupsApi = {
       }[];
       total: number;
     }>('/api/v1/groups'),
+};
+
+// ============================================
+// MT5 Node & Book Management API
+// ============================================
+
+export interface MT5NodeAPI {
+  id: number;
+  node_name: string;
+  node_type: string;
+  server_address: string;
+  manager_login: number;
+  pump_flags: string[];
+  groups_filter: string[];
+  reconnect_interval_sec: number;
+  heartbeat_interval_sec: number;
+  is_enabled: boolean;
+  is_master: boolean;
+  connection_status: string;
+  last_connected_at: string;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  has_password: boolean;
+}
+
+export interface MT5GroupAPI {
+  group: string;
+  company: string;
+  currency: string;
+  currency_digits: number;
+  margin_mode: number;
+  margin_call: number;
+  margin_stopout: number;
+  leverage: number;
+  limit_orders: number;
+  limit_positions: number;
+  trade_flags: number;
+}
+
+export interface BookAssignmentAPI {
+  assignment_id: number;
+  group_name: string;
+  description: string;
+  assigned_by: string;
+  created_at: string;
+}
+
+export interface NodeBookAPI {
+  book_name: string;
+  display_name: string;
+  color_hex: string;
+  group_count: number;
+  groups: BookAssignmentAPI[];
+}
+
+export const mt5Api = {
+  // ── Node Registry ──────────────────────────────────────────
+  getNodes: () =>
+    fetchAPI<{ nodes: MT5NodeAPI[]; total: number; connected_count: number; generated_at: string }>(
+      '/api/v1/mt5/nodes'
+    ),
+
+  getNodeStatus: () =>
+    fetchAPI<{
+      nodes: {
+        node_id: number;
+        node_name: string;
+        node_type: string;
+        is_master: boolean;
+        is_enabled: boolean;
+        connection_status: string;
+        last_connected_at: string;
+        last_error: string;
+      }[];
+      total: number;
+      connected_count: number;
+      primary_connected: boolean;
+      generated_at: string;
+    }>('/api/v1/mt5/nodes/status'),
+
+  getNode: (id: number) =>
+    fetchAPI<MT5NodeAPI>(`/api/v1/mt5/nodes/${id}`),
+
+  createNode: (data: {
+    node_name: string;
+    node_type: string;
+    server_address: string;
+    manager_login: number;
+    password: string;
+    pump_flags?: string[];
+    groups_filter?: string[];
+    reconnect_interval_sec?: number;
+    heartbeat_interval_sec?: number;
+    is_enabled?: boolean;
+    is_master?: boolean;
+    created_by?: string;
+    auto_connect?: boolean;
+  }) =>
+    fetchAPI<{ success: boolean; message: string; node: Partial<MT5NodeAPI> }>(
+      '/api/v1/mt5/nodes',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+
+  updateNode: (id: number, data: Partial<{
+    node_name: string;
+    node_type: string;
+    server_address: string;
+    manager_login: number;
+    password: string;
+    pump_flags: string[];
+    groups_filter: string[];
+    reconnect_interval_sec: number;
+    heartbeat_interval_sec: number;
+    is_enabled: boolean;
+    is_master: boolean;
+  }>) =>
+    fetchAPI<{ success: boolean; message: string; node: MT5NodeAPI; restart_required?: boolean }>(
+      `/api/v1/mt5/nodes/${id}`,
+      { method: 'PUT', body: JSON.stringify(data) }
+    ),
+
+  deleteNode: (id: number) =>
+    fetchAPI<{ success: boolean; message: string; deleted_id: number; deleted_name: string }>(
+      `/api/v1/mt5/nodes/${id}`,
+      { method: 'DELETE' }
+    ),
+
+  connectNode: (id: number) =>
+    fetchAPI<{ success: boolean; node_id: number; message: string; connection_status: string; last_error: string }>(
+      `/api/v1/mt5/nodes/${id}/connect`,
+      { method: 'POST' }
+    ),
+
+  disconnectNode: (id: number) =>
+    fetchAPI<{ success: boolean; node_id: number; message: string; warning?: string }>(
+      `/api/v1/mt5/nodes/${id}/disconnect`,
+      { method: 'POST' }
+    ),
+
+  testNode: (id: number) =>
+    fetchAPI<{ success: boolean; node_id: number; latency_ms: number; message: string }>(
+      `/api/v1/mt5/nodes/${id}/test`,
+      { method: 'POST' }
+    ),
+
+  testRaw: (data: { server_address: string; manager_login: number; password: string }) =>
+    fetchAPI<{ success: boolean; server_address: string; manager_login: number; latency_ms: number; message: string }>(
+      '/api/v1/mt5/nodes/test',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+
+  // ── Node Data ──────────────────────────────────────────────
+  getNodeGroups: (id: number) =>
+    fetchAPI<{ node_id: number; groups: MT5GroupAPI[]; total: number; generated_at: string }>(
+      `/api/v1/mt5/nodes/${id}/groups`
+    ),
+
+  // ── Book Management ────────────────────────────────────────
+  getNodeBooks: (id: number) =>
+    fetchAPI<{
+      node_id: number;
+      books: NodeBookAPI[];
+      total_books: number;
+      total_assignments: number;
+      generated_at: string;
+    }>(`/api/v1/mt5/nodes/${id}/books`),
+
+  assignGroups: (
+    nodeId: number,
+    book: string,
+    groups: string[],
+    assignedBy: string = 'admin'
+  ) =>
+    fetchAPI<{
+      success: boolean;
+      node_id: number;
+      book_name: string;
+      inserted: number;
+      updated: number;
+      total: number;
+      assignments: { assignment_id: number; group_name: string; status: string }[];
+    }>(
+      `/api/v1/mt5/nodes/${nodeId}/books/${book}/groups`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ groups, assigned_by: assignedBy }),
+      }
+    ),
+
+  removeAssignment: (nodeId: number, assignmentId: number) =>
+    fetchAPI<{ success: boolean; deleted_id: number; group_name: string; book_name: string; message: string }>(
+      `/api/v1/mt5/nodes/${nodeId}/books/assignments/${assignmentId}`,
+      { method: 'DELETE' }
+    ),
 };
