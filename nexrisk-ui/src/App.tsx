@@ -22,7 +22,7 @@ import {
   PriceRulesPage,
   ExecutionReportPage,
   CommandCenterPage,
-  FlowHedgingPage,
+  FlowHedgingPage, 
   BusinessPage,
   // Settings Pages
   SettingsPage,
@@ -32,6 +32,8 @@ import {
   AuditSettingsPage,
   NotificationsSettingsPage,
   RiskLogicSettingsPage,
+  // MT5
+  NodeManagementPage,
 } from '@/pages';
 
 // Create React Query client
@@ -75,6 +77,9 @@ function App() {
             {/* Reports */}
             <Route path="/execution-report" element={<ExecutionReportPage />} />
             <Route path="/logs" element={<LogsPage />} />
+
+            {/* MT5 Servers */}
+            <Route path="/mt5-servers" element={<NodeManagementPage />} />
 
             {/* Settings */}
             <Route path="/settings" element={<SettingsPage />} />
