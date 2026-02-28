@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { mt5Api, type MT5Position, type MT5NodeAPI } from '@/services/api';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 
@@ -50,6 +51,8 @@ interface HedgeExposureRow {
   riskLevel: 'Low' | 'Medium' | 'High' | 'Critical';
   marketMovePercent: number;
   plImpact: number;
+  isBBook: boolean;  // true = internal B-Book row, not an LP
+  sortOrder: number; // 0 = B-Book (always first), 1 = LP rows
 }
 
 interface ABookHedge {
@@ -222,13 +225,118 @@ function generateHedgeExposureData(hedges: ABookHedge[]): HedgeExposureRow[] {
         avgPrice: data.avgPrice,
         brokerFloatingPL: Math.round((Math.random() - 0.4) * 5000 * 100) / 100,
         unhedgedLots,
-        breakEvenPrice: Math.round(breakEvenPrice * 100000) / 100000,
+        breakEvenPrice: Math.round(breakEvenPrice * 100000) / 100000, // VWAP of price_open
         probableIdp30: trends[Math.floor(Math.random() * 3)],
         bevh: Math.round(bevh * 100) / 100,
         riskLevel: riskLevels[riskIdx],
         marketMovePercent,
         plImpact,
+        isBBook: false,
+        sortOrder: 1,
       });
+    });
+  });
+
+  return rows;
+}
+
+// ======================
+// B-BOOK EXPOSURE AGGREGATOR
+// Aggregates live MT5 B-Book positions (from the same endpoint as BBookPage) by symbol.
+// lpLabel: 'B-Book-{nodeName}' for a single server, 'B-Book-MT5-All Servers' for many.
+// ======================
+function aggregateBBookPositions(positions: MT5Position[], lpLabel: string): HedgeExposureRow[] {
+  if (!positions.length) return [];
+
+  const riskLevels: Array<'Low' | 'Medium' | 'High' | 'Critical'> = ['Low', 'Medium', 'High', 'Critical'];
+  const trends: Array<'Up' | 'Down' | 'Neutral'> = ['Up', 'Down', 'Neutral'];
+
+  // Aggregate by symbol
+  const bySymbol = new Map<string, {
+    netVol: number;
+    totalProfit: number;
+    totalSwap: number;
+    totalComm: number;
+    weightedCurrentPriceSum: number; // for avgPrice (Mkt Px)
+    weightedOpenPriceSum: number;    // for breakEvenPrice (VWAP of entry prices)
+    totalVolForPrice: number;
+  }>();
+
+  for (const p of positions) {
+    const sign = p.action === 'BUY' ? 1 : -1;
+    const vol  = p.volume_lots * sign;
+    const cur  = bySymbol.get(p.symbol);
+    if (cur) {
+      cur.netVol                  += vol;
+      cur.totalProfit             += p.profit;
+      cur.totalSwap               += p.swap;
+      cur.totalComm               += p.commission;
+      cur.weightedCurrentPriceSum += p.price_current * p.volume_lots;
+      cur.weightedOpenPriceSum    += p.price_open    * p.volume_lots;
+      cur.totalVolForPrice        += p.volume_lots;
+    } else {
+      bySymbol.set(p.symbol, {
+        netVol: vol,
+        totalProfit: p.profit,
+        totalSwap: p.swap,
+        totalComm: p.commission,
+        weightedCurrentPriceSum: p.price_current * p.volume_lots,
+        weightedOpenPriceSum:    p.price_open    * p.volume_lots,
+        totalVolForPrice: p.volume_lots,
+      });
+    }
+  }
+
+  const rows: HedgeExposureRow[] = [];
+  let idx = 0;
+
+  bySymbol.forEach((data, symbol) => {
+    const isJPY = symbol.includes('JPY');
+    const isXAU = symbol.includes('XAU');
+    const isBTC = symbol.includes('BTC');
+    const lotSize   = isXAU ? 100 : isBTC ? 1 : 100000;
+    const pipValue  = isJPY ? 0.01 : isXAU ? 0.1 : isBTC ? 1 : 0.0001;
+
+    // avgPrice = VWAP of price_current (mark-to-market)
+    const avgPrice       = data.totalVolForPrice > 0 ? data.weightedCurrentPriceSum / data.totalVolForPrice : 0;
+    // breakEvenPrice = VWAP of price_open (average entry price of all positions in this symbol)
+    const breakEvenPrice = data.totalVolForPrice > 0 ? data.weightedOpenPriceSum / data.totalVolForPrice : 0;
+
+    const clientNetVol   = Math.round(data.netVol * 100) / 100;
+    // Broker takes the OPPOSITE side of every client trade in B-Book
+    const brokerNetVol   = Math.round(-clientNetVol * 100) / 100;
+    // Notional Amount = vol × lotSize (no price — quantity of base currency units)
+    const clientNetNotional = Math.round(clientNetVol * lotSize);
+    const brokerNetNotional = Math.round(brokerNetVol * lotSize);
+    const unhedgedLots      = Math.abs(brokerNetVol);
+    // Client profit is broker loss and vice versa — negate
+    const brokerFloatingPL  = Math.round(-(data.totalProfit + data.totalSwap + data.totalComm) * 100) / 100;
+    const marketMovePercent = Math.round((Math.random() * 2 + 0.1) * 100) / 100;
+    const plImpact          = Math.round(unhedgedLots * lotSize * marketMovePercent * pipValue * 100) / 100;
+    const riskIdx           = unhedgedLots > 5 ? 3 : unhedgedLots > 2 ? 2 : unhedgedLots > 0.5 ? 1 : 0;
+
+    rows.push({
+      id: `bbook-${symbol}-${idx++}`,
+      symbol,
+      lp: lpLabel,
+      lpAccount: 'Internal',
+      clientNetVol,
+      hedgeNetVol: 0,
+      brokerNetVol,
+      clientNetNotional,
+      hedgeNetNotional: 0,
+      brokerNetNotional,
+      avgPrice: Math.round(avgPrice * 100000) / 100000,
+      brokerFloatingPL,
+      unhedgedLots,
+      breakEvenPrice: Math.round(breakEvenPrice * 100000) / 100000, // VWAP of price_open
+      probableIdp30: trends[Math.floor(Math.random() * 3)],
+      bevh: Math.round(unhedgedLots * 100) / 100,
+      riskLevel: riskLevels[riskIdx],
+      marketMovePercent,
+      plImpact,
+      isBBook: true,
+      sortOrder: 0,
     });
   });
 
@@ -280,6 +388,8 @@ function generatePredictionData(symbol: string, basePrice: number): PredictionRo
 // ======================
 export function NetExposurePage() {
   const exposureGridRef = useRef<AgGridReact<HedgeExposureRow>>(null);
+  // Track which symbol groups the user has expanded — restored after each data refresh
+  const expandedGroupsRef = useRef<Set<string>>(new Set());
 
   const [selectedExposureRow, setSelectedExposureRow] = useState<HedgeExposureRow | null>(null);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
@@ -291,7 +401,39 @@ export function NetExposurePage() {
   const [domTif, setDomTif] = useState<'IOC' | 'FOK' | 'GTC'>('IOC');
 
   const [hedges] = useState<ABookHedge[]>(() => generateMockHedges(100));
-  const hedgeExposureData = useMemo(() => generateHedgeExposureData(hedges), [hedges]);
+
+  // B-Book live data
+  const [bBookPositions, setBBookPositions] = useState<MT5Position[]>([]);
+  const [masterNode, setMasterNode] = useState<MT5NodeAPI | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchBBook() {
+      try {
+        const node = await mt5Api.getMasterNode();
+        if (cancelled || !node) return;
+        setMasterNode(node);
+        const res = await mt5Api.getBookPositions(node.id, 'B');
+        if (!cancelled) setBBookPositions(res.positions ?? []);
+      } catch {
+        // silently fall through — no B-Book rows shown if fetch fails
+      }
+    }
+    fetchBBook();
+    const interval = setInterval(fetchBBook, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  const bBookLpLabel = useMemo(() => {
+    if (!masterNode) return 'B-Book';
+    return `B-Book-${masterNode.node_name}`;
+  }, [masterNode]);
+
+  const hedgeExposureData = useMemo(() => {
+    const lpRows    = generateHedgeExposureData(hedges);
+    const bBookRows = aggregateBBookPositions(bBookPositions, bBookLpLabel);
+    return [...lpRows, ...bBookRows];
+  }, [hedges, bBookPositions, bBookLpLabel]);
 
   // Get available LPs for the selected symbol
   const availableLps = useMemo(() => {
@@ -381,6 +523,22 @@ export function NetExposurePage() {
     setTimeout(() => fitColumns(), 50);
   }, [volumeDisplayMode, fitColumns]);
 
+  // After each data refresh, restore previously expanded groups
+  useEffect(() => {
+    const api = exposureGridRef.current?.api;
+    if (!api) return;
+    setTimeout(() => {
+      api.forEachNode((node) => {
+        if (node.group && node.key) {
+          // If user had this group expanded, keep it expanded; otherwise respect default
+          if (expandedGroupsRef.current.has(node.key)) {
+            node.setExpanded(true);
+          }
+        }
+      });
+    }, 0);
+  }, [hedgeExposureData]);
+
   // ======================
   // COLUMN DEFINITIONS - NEW SIMPLER STRUCTURE
   // ======================
@@ -394,7 +552,7 @@ export function NetExposurePage() {
       } else if (absVal >= 1000) {
         formatted = `${(absVal / 1000).toFixed(1)}K`;
       } else {
-        formatted = absVal.toFixed(0);
+        formatted = absVal.toFixed(2);
       }
       return `${val < 0 ? '-' : '+'}$${formatted}`;
     };
@@ -409,7 +567,20 @@ export function NetExposurePage() {
 
     return [
       { field: 'symbol', headerName: 'Symbol', rowGroup: true, hide: true },
-      { field: 'lp', headerName: 'LP', filter: 'agSetColumnFilter' },
+      {
+        field: 'lp',
+        headerName: 'LP',
+        filter: 'agSetColumnFilter',
+        cellRenderer: (p: { value: string; data?: HedgeExposureRow }) => {
+          if (!p.data?.isBBook) return p.value;
+          return (
+            <span className="flex items-center gap-1.5">
+              <span style={{ color: '#4ecdc4', fontWeight: 600 }}>{p.value}</span>
+              <span style={{ fontSize: '9px', backgroundColor: '#1a3a3a', color: '#4ecdc4', border: '1px solid #4ecdc4', borderRadius: '3px', padding: '0 4px', lineHeight: '14px' }}>B</span>
+            </span>
+          );
+        },
+      },
       { field: 'lpAccount', headerName: 'Account', filter: 'agTextColumnFilter' },
       {
         field: volumeDisplayMode === 'Lots' ? 'brokerNetVol' : 'brokerNetNotional',
@@ -445,7 +616,7 @@ export function NetExposurePage() {
         valueFormatter: (p) => {
           if (p.value == null) return '';
           const val = Number(p.value);
-          return `${val >= 0 ? '+' : ''}$${val.toFixed(0)}`;
+          return `${val >= 0 ? '+' : ''}$${val.toFixed(2)}`;
         },
         cellStyle: (p) => (p.value != null ? plColor(Number(p.value)) : {}),
       },
@@ -454,12 +625,19 @@ export function NetExposurePage() {
         headerName: 'Signal',
         valueGetter: (p) => {
           if (!p.data) return '—';
-          // Generate signal based on row data
+          if (p.data.isBBook) return '—'; // no signal for B-Book rows
           const signals = ['Hdg@15m', 'Hdg@30m', 'Hdg@1h', 'Hdg@2h', 'Opp@15m', 'Opp@30m', 'Opp@1h', 'Opp@2h', '—'];
           const idx = Math.abs(p.data.id.charCodeAt(4) || 0) % signals.length;
           return signals[idx];
         },
         cellStyle: (p) => ({ color: signalColor(p.value || '—') }),
+      },
+      // Hidden sort column — keeps B-Book (sortOrder:0) pinned above LP rows (sortOrder:1)
+      {
+        field: 'sortOrder',
+        hide: true,
+        initialSort: 'asc',
+        sortable: true,
       },
     ];
   }, [volumeDisplayMode]);
@@ -483,6 +661,15 @@ export function NetExposurePage() {
     []
   );
 
+  const onRowGroupOpened = useCallback((event: { node: { group: boolean; key?: string; expanded: boolean } }) => {
+    if (!event.node.group || !event.node.key) return;
+    if (event.node.expanded) {
+      expandedGroupsRef.current.add(event.node.key);
+    } else {
+      expandedGroupsRef.current.delete(event.node.key);
+    }
+  }, []);
+
   const onExposureGridReady = useCallback(
     (event: GridReadyEvent<HedgeExposureRow>) => {
       setTimeout(() => {
@@ -498,13 +685,12 @@ export function NetExposurePage() {
 
   const onExposureRowClicked = useCallback((event: RowClickedEvent<HedgeExposureRow>) => {
     if (event.data) {
-      // LP row clicked - set both symbol and LP
+      if (event.data.isBBook) return; // B-Book rows do not invoke Market Depth
       setSelectedExposureRow(event.data);
       setSelectedSymbol(event.data.symbol);
       setSelectedLp(event.data.lp);
       setDomQuantity(Math.abs(event.data.brokerNetNotional).toString());
     } else if (event.node.group && event.node.key) {
-      // Symbol row clicked - set symbol, clear LP
       setSelectedSymbol(event.node.key);
       setSelectedLp(null);
       setSelectedExposureRow(null);
@@ -514,13 +700,12 @@ export function NetExposurePage() {
 
   const onExposureCellClicked = useCallback((event: { data?: HedgeExposureRow; node?: { group?: boolean; key?: string } }) => {
     if (event.data) {
-      // LP row clicked - set both symbol and LP
+      if (event.data.isBBook) return; // B-Book rows do not invoke Market Depth
       setSelectedExposureRow(event.data);
       setSelectedSymbol(event.data.symbol);
       setSelectedLp(event.data.lp);
       setDomQuantity(Math.abs(event.data.brokerNetNotional).toString());
     } else if (event.node?.group && event.node?.key) {
-      // Symbol row clicked - set symbol, clear LP
       setSelectedSymbol(event.node.key);
       setSelectedLp(null);
       setSelectedExposureRow(null);
@@ -636,11 +821,18 @@ export function NetExposurePage() {
                 columnDefs={exposureColDefs}
                 defaultColDef={defaultColDef}
                 autoGroupColumnDef={autoGroupColumnDef}
-                groupDefaultExpanded={0}
+                groupDefaultExpanded={-1}
                 suppressAggFuncInHeader={true}
                 autoSizeStrategy={{ type: 'fitCellContents' }}
                 rowHeight={28}
                 headerHeight={36}
+                getRowStyle={(params) => {
+                  if (params.data?.isBBook) {
+                    return { backgroundColor: '#1e2d2d', borderLeft: '2px solid #4ecdc4', cursor: 'default' };
+                  }
+                  return undefined;
+                }}
+                onRowGroupOpened={onRowGroupOpened}
                 onGridReady={onExposureGridReady}
                 onFirstDataRendered={onFirstDataRendered}
                 onGridSizeChanged={onGridSizeChanged}

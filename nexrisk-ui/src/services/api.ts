@@ -479,6 +479,41 @@ export interface NodeBookAPI {
   groups: BookAssignmentAPI[];
 }
 
+export interface MT5Position {
+  position_id: number;
+  login: number;
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  volume_lots: number;
+  price_open: number;
+  price_current: number;
+  price_sl: number;
+  price_tp: number;
+  profit: number;
+  swap: number;
+  commission: number;
+  time_create: number;
+  time_update: number;
+  comment: string;
+}
+
+export interface BookPositionsResponse {
+  node_id: number;
+  book_name: string;
+  groups_queried: string[];
+  positions: MT5Position[];
+  total: number;
+  unique_logins: number;
+  summary: {
+    total_positions: number;
+    unique_traders: number;
+    total_profit: number;
+    total_volume: number;
+  };
+  generated_at: string;
+  message?: string;
+}
+
 export const mt5Api = {
   // ── Node Registry ──────────────────────────────────────────
   getNodes: () =>
@@ -576,10 +611,44 @@ export const mt5Api = {
     ),
 
   // ── Node Data ──────────────────────────────────────────────
+  getNodeSymbols: (id: number) =>
+    fetchAPI<{
+      node_id: number;
+      symbols: {
+        symbol:           string;
+        description:      string;
+        path:             string;
+        currency_base:    string;
+        currency_profit:  string;
+        digits:           number;
+        contract_size:    number;
+        volume_min:       number;
+        volume_max:       number;
+        margin_initial:   number;
+        swap_long:        number;
+        swap_short:       number;
+        spread:           number;
+        trade_mode:       number;
+        calc_mode:        number;
+      }[];
+      total:        number;
+      generated_at: string;
+    }>(`/api/v1/mt5/nodes/${id}/symbols`),
+
   getNodeGroups: (id: number) =>
     fetchAPI<{ node_id: number; groups: MT5GroupAPI[]; total: number; generated_at: string }>(
       `/api/v1/mt5/nodes/${id}/groups`
     ),
+
+  getNodePositions: (nodeId: number, params?: { login?: number; group?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.login !== undefined) sp.set('login', String(params.login));
+    if (params?.group) sp.set('group', params.group);
+    const q = sp.toString();
+    return fetchAPI<{ node_id: number; positions: MT5Position[]; total: number; generated_at: string }>(
+      `/api/v1/mt5/nodes/${nodeId}/positions${q ? `?${q}` : ''}`
+    );
+  },
 
   // ── Book Management ────────────────────────────────────────
   getNodeBooks: (id: number) =>
@@ -618,4 +687,20 @@ export const mt5Api = {
       `/api/v1/mt5/nodes/${nodeId}/books/assignments/${assignmentId}`,
       { method: 'DELETE' }
     ),
+
+  getBookPositions: (nodeId: number, book: 'A' | 'B' | 'C') =>
+    fetchAPI<BookPositionsResponse>(
+      `/api/v1/mt5/nodes/${nodeId}/books/${book}/positions`
+    ),
+
+  getMasterNode: async (): Promise<MT5NodeAPI | undefined> => {
+    const { nodes } = await fetchAPI<{ nodes: MT5NodeAPI[]; total: number; connected_count: number; generated_at: string }>(
+      '/api/v1/mt5/nodes'
+    );
+    return (
+      nodes.find(n => n.is_master && n.connection_status === 'CONNECTED') ??
+      nodes.find(n => n.is_master) ??
+      nodes.find(n => n.connection_status === 'CONNECTED')
+    );
+  },
 };

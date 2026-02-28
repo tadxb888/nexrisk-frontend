@@ -27,6 +27,15 @@ const listNodesQuery = z.object({
   type:         z.string().optional(),
 });
 
+const nodePositionsQuery = z.object({
+  login: z.coerce.number().int().positive().optional(),
+  group: z.string().optional(),
+});
+
+const bookUsersQuery = z.object({
+  snapshots: z.string().optional(),
+});
+
 // ── Route module ─────────────────────────────────────────────
 
 export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
@@ -149,7 +158,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
-      const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/connect`, {});
+      const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/connect`);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
@@ -163,7 +172,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
-      const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/disconnect`, {});
+      const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/disconnect`);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
@@ -178,13 +187,28 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
-      const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/test`, {});
+      const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/test`);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
   );
 
   // ── Node Data ──────────────────────────────────────────────
+
+  /**
+   * GET /api/v1/mt5/nodes/:id/symbols
+   * Fetch live MT5 symbols from a connected node
+   */
+  fastify.get(
+    '/mt5/nodes/:id/symbols',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.get(`/api/v1/mt5/nodes/${id}/symbols`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
 
   /**
    * GET /api/v1/mt5/nodes/:id/groups
@@ -196,6 +220,25 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.get(`/api/v1/mt5/nodes/${id}/groups`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/mt5/nodes/:id/positions
+   * Fetch all open positions from a node (optionally filter by login or group)
+   */
+  fastify.get(
+    '/mt5/nodes/:id/positions',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('positions.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const query = nodePositionsQuery.parse(request.query);
+      const params: Record<string, unknown> = {};
+      if (query.login !== undefined) params.login = query.login;
+      if (query.group  !== undefined) params.group  = query.group;
+      const response = await nexriskApi.get(`/api/v1/mt5/nodes/${id}/positions`, params);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
@@ -248,6 +291,42 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
       );
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.code(201).send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/mt5/nodes/:id/books/:book/positions  ⭐
+   * All live positions for traders in this book's groups — core B/A/C-Book endpoint
+   */
+  fastify.get(
+    '/mt5/nodes/:id/books/:book/positions',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('positions.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, book } = bookParams.parse(request.params);
+      const response = await nexriskApi.get(`/api/v1/mt5/nodes/${id}/books/${book}/positions`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/mt5/nodes/:id/books/:book/users
+   * All traders in this book's groups (with optional balance snapshots)
+   */
+  fastify.get(
+    '/mt5/nodes/:id/books/:book/users',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('positions.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, book } = bookParams.parse(request.params);
+      const query = bookUsersQuery.parse(request.query);
+      const params: Record<string, unknown> = {};
+      if (query.snapshots !== undefined) params.snapshots = query.snapshots;
+      const response = await nexriskApi.get(
+        `/api/v1/mt5/nodes/${id}/books/${book}/users`,
+        params
+      );
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
     }
   );
 

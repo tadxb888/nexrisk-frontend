@@ -4,7 +4,7 @@
 // ============================================
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { mt5Api, type MT5NodeAPI } from '@/services/api';
+import { mt5Api, type MT5NodeAPI, type MT5GroupAPI } from '@/services/api';
 import { clsx } from 'clsx';
 
 // ============================================================
@@ -81,7 +81,7 @@ const IcoInfo = () => (
 // ============================================================
 type NodeType = 'MASTER' | 'STANDBY' | 'BACKUP' | 'CLIENT' | 'PARTNER';
 type ConnStatus = 'CONNECTED' | 'CONNECTING' | 'RECONNECTING' | 'DISCONNECTED' | 'ERROR';
-type Tab = 'nodes' | 'books';
+type Tab = 'nodes' | 'books' | 'groups' | 'symbols';
 type Book = 'A' | 'B' | 'C';
 
 interface MT5Node {
@@ -788,6 +788,454 @@ function DisconnectMasterModal({ node, onClose, onConfirm }: {
 }
 
 // ============================================================
+// GROUPS TAB
+// ============================================================
+
+const MARGIN_MODE: Record<number, string> = {
+  0: 'Forex',  1: 'CFD',  2: 'Futures',  3: 'CFD Index',
+  4: 'CFD Leverage',  5: 'Exchange Stocks',  6: 'Exchange Futures',
+};
+
+// Decode MT5 trade_flags bitmask into readable labels
+const TRADE_FLAG_LABELS: [number, string][] = [
+  [0x001, 'Trade Allowed'],   [0x002, 'Expert Allowed'],
+  [0x004, 'Email Allowed'],   [0x008, 'Reports Allowed'],
+  [0x010, 'OTP Required'],    [0x020, 'PasswordChange Required'],
+  [0x040, 'Trailing Allowed'],[0x080, 'Margin Call'],
+];
+
+function decodeTradeFlags(flags: number): string[] {
+  const result: string[] = [];
+  for (const [bit, label] of TRADE_FLAG_LABELS) {
+    if (flags & bit) result.push(label);
+  }
+  return result.length ? result : [`0x${flags.toString(16).toUpperCase()}`];
+}
+
+function GroupsTab({ nodes }: { nodes: MT5Node[] }) {
+  const connected = nodes.filter(n => n.connection_status === 'CONNECTED');
+  const [nodeId,     setNodeId]     = useState<number | null>(connected[0]?.id ?? null);
+  const [groups,     setGroups]     = useState<MT5GroupAPI[]>([]);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
+  const [search,     setSearch]     = useState('');
+  const [folderFilter, setFolderFilter] = useState('');
+  const [selected,   setSelected]   = useState<MT5GroupAPI | null>(null);
+  const [fetched,    setFetched]    = useState<number | null>(null);
+
+  const selectedNode = nodes.find(n => n.id === nodeId) ?? null;
+
+  const fetchGroups = async () => {
+    if (!nodeId) return;
+    setLoading(true); setError(null); setSelected(null);
+    try {
+      const res = await mt5Api.getNodeGroups(nodeId);
+      setGroups(res.groups);
+      setFetched(nodeId);
+    } catch (e: unknown) {
+      setError((e as Error).message || 'Failed to fetch groups');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Extract top-level folder (e.g. "demo" from "demo\\forex-hedge-usd-01")
+  const folders = Array.from(new Set(groups.map(g => g.group.split('\\')[0]))).sort();
+
+  const filtered = groups.filter(g => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || g.group.toLowerCase().includes(q) || g.company.toLowerCase().includes(q);
+    const matchFolder = !folderFilter || g.group.startsWith(folderFilter);
+    return matchSearch && matchFolder;
+  });
+
+  return (
+    <div className="flex flex-col h-full gap-4">
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <label className="text-xs text-text-muted whitespace-nowrap">Source Node</label>
+        <select value={nodeId ?? ''} onChange={e => { setNodeId(Number(e.target.value)); setGroups([]); setFetched(null); setSelected(null); }}
+          className="input text-sm" style={{ minWidth: 220 }}>
+          {connected.length === 0
+            ? <option value="">No connected nodes</option>
+            : connected.map(n => <option key={n.id} value={n.id}>{n.node_name} [{n.node_type}]</option>)}
+        </select>
+        {selectedNode && (
+          <span className="text-xs px-2 py-0.5 rounded font-medium"
+            style={{ backgroundColor: '#0f2a15', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+            {selectedNode.connection_status}
+          </span>
+        )}
+        <button onClick={fetchGroups} disabled={!nodeId || loading}
+          className="btn text-xs flex items-center gap-1.5"
+          style={{ backgroundColor: '#1a3a2a', color: '#66e07a', border: '1px solid #2f6a3d', opacity: (!nodeId || loading) ? 0.5 : 1 }}>
+          <IcoRefresh />
+          {loading ? 'Fetching…' : fetched === nodeId ? 'Refresh' : 'Fetch Groups'}
+        </button>
+        {groups.length > 0 && (
+          <>
+            <input type="text" placeholder="Search group or company…"
+              value={search} onChange={e => setSearch(e.target.value)}
+              className="input text-xs flex-1" style={{ minWidth: 200 }} />
+            <select value={folderFilter} onChange={e => setFolderFilter(e.target.value)}
+              className="input text-xs" style={{ minWidth: 140 }}>
+              <option value="">All folders</option>
+              {folders.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <span className="text-xs text-text-muted whitespace-nowrap">
+              {filtered.length} / {groups.length}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded text-xs"
+          style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+          <IcoWarning />{error}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && groups.length === 0 && !error && (
+        <div className="flex items-center justify-center flex-1">
+          <span className="text-sm text-text-muted">
+            {connected.length === 0 ? 'No connected nodes available' : 'Select a node and click Fetch Groups'}
+          </span>
+        </div>
+      )}
+
+      {/* List + Detail */}
+      {groups.length > 0 && (
+        <div className="flex gap-4 flex-1 overflow-hidden">
+
+          {/* Group list */}
+          <div className="panel flex flex-col overflow-hidden flex-shrink-0" style={{ width: 340 }}>
+            <div className="px-3 py-2 border-b border-border flex items-center justify-between flex-shrink-0">
+              <span className="text-xs font-semibold text-text-primary">Groups</span>
+              <span className="text-xs font-mono text-text-muted">{filtered.length}</span>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {filtered.length === 0
+                ? <p className="text-xs text-text-muted p-3">No groups match filter</p>
+                : filtered.map(g => (
+                  <button key={g.group} onClick={() => setSelected(g)}
+                    className="w-full text-left px-3 py-2 border-b border-border transition-colors"
+                    style={{
+                      backgroundColor: selected?.group === g.group ? '#1a2a3a' : 'transparent',
+                      borderLeft: selected?.group === g.group ? '2px solid #4a9eff' : '2px solid transparent',
+                    }}
+                    onMouseEnter={e => { if (selected?.group !== g.group) e.currentTarget.style.backgroundColor = '#1e1e22'; }}
+                    onMouseLeave={e => { if (selected?.group !== g.group) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-mono font-semibold text-text-primary truncate" style={{ maxWidth: 220 }}>
+                        {g.group.split('\\').pop()}
+                      </span>
+                      <span className="text-xs font-mono text-text-muted whitespace-nowrap">{g.currency}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-xs text-text-muted truncate" style={{ maxWidth: 200 }}>{g.company}</span>
+                      <span className="text-xs text-text-muted font-mono">1:{g.leverage}</span>
+                    </div>
+                  </button>
+                ))
+              }
+            </div>
+          </div>
+
+          {/* Detail panel */}
+          <div className="panel flex flex-col overflow-hidden flex-1">
+            {!selected ? (
+              <div className="flex items-center justify-center flex-1">
+                <span className="text-sm text-text-muted">Select a group to view all properties</span>
+              </div>
+            ) : (
+              <>
+                {/* Header */}
+                <div className="px-4 py-3 border-b border-border flex-shrink-0">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <span className="text-base font-bold font-mono text-text-primary">{selected.group.split('\\').pop()}</span>
+                      <p className="text-xs text-text-muted font-mono mt-0.5">{selected.group}</p>
+                      <p className="text-xs text-text-secondary mt-0.5">{selected.company}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs px-2 py-0.5 rounded font-mono"
+                        style={{ backgroundColor: '#1a1a2e', color: '#a5c8f0', border: '1px solid #1e4270' }}>
+                        {MARGIN_MODE[selected.margin_mode] ?? `Mode ${selected.margin_mode}`}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded font-mono"
+                        style={{ backgroundColor: '#1a2a1a', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+                        {selected.currency}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Property grid */}
+                <div className="overflow-y-auto flex-1 p-4 space-y-4">
+
+                  {/* Core properties */}
+                  <div className="grid grid-cols-3 gap-3">
+                    {([
+                      { label: 'Currency',        value: selected.currency },
+                      { label: 'Currency Digits',  value: String(selected.currency_digits) },
+                      { label: 'Leverage',         value: `1:${selected.leverage}` },
+                      { label: 'Margin Mode',      value: `${MARGIN_MODE[selected.margin_mode] ?? selected.margin_mode} (${selected.margin_mode})` },
+                      { label: 'Margin Call',      value: `${selected.margin_call.toFixed(1)}%`,  color: '#e0d066' },
+                      { label: 'Margin Stop-Out',  value: `${selected.margin_stopout.toFixed(1)}%`, color: '#ff6b6b' },
+                      { label: 'Order Limit',      value: selected.limit_orders    === 0 ? 'Unlimited' : String(selected.limit_orders) },
+                      { label: 'Position Limit',   value: selected.limit_positions === 0 ? 'Unlimited' : String(selected.limit_positions) },
+                      { label: 'Trade Flags (raw)', value: `0x${selected.trade_flags.toString(16).toUpperCase().padStart(4,'0')}` },
+                    ] as { label: string; value: string; color?: string }[]).map(({ label, value, color }) => (
+                      <div key={label} className="rounded p-3"
+                        style={{ backgroundColor: '#1a1a1e', border: '1px solid #2a2a2e' }}>
+                        <p className="text-xs text-text-muted mb-1">{label}</p>
+                        <p className="text-sm font-mono font-semibold" style={{ color: color ?? '#e8e8f0' }}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Trade flags decoded */}
+                  <div>
+                    <p className="text-xs text-text-muted mb-2">Trade Flags</p>
+                    <div className="flex flex-wrap gap-2">
+                      {decodeTradeFlags(selected.trade_flags).map(f => (
+                        <span key={f} className="text-xs px-2 py-0.5 rounded font-mono"
+                          style={{ backgroundColor: '#1a2a1a', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SYMBOLS TAB
+// ============================================================
+
+const TRADE_MODE: Record<number, string> = {
+  0: 'Disabled', 1: 'Long Only', 2: 'Short Only',
+  3: 'Close Only', 4: 'Full Access', 5: 'Long+Close', 6: 'Short+Close',
+};
+const CALC_MODE: Record<number, string> = {
+  0: 'Forex', 1: 'Futures', 2: 'CFD', 3: 'CFD Index',
+  4: 'CFD Leverage', 5: 'Exchange Stocks', 6: 'Exchange Futures',
+  7: 'Exchange Options', 8: 'Exchange Options Margin', 9: 'Bonds',
+  10: 'Stocks', 11: 'FORTS Options', 12: 'Exchange Bond',
+};
+
+type MT5Symbol = {
+  symbol: string; description: string; path: string;
+  currency_base: string; currency_profit: string;
+  digits: number; contract_size: number;
+  volume_min: number; volume_max: number; margin_initial: number;
+  swap_long: number; swap_short: number; spread: number;
+  trade_mode: number; calc_mode: number;
+};
+
+function SymbolsTab({ nodes }: { nodes: MT5Node[] }) {
+  const connected = nodes.filter(n => n.connection_status === 'CONNECTED');
+  const [nodeId,     setNodeId]     = useState<number | null>(connected[0]?.id ?? null);
+  const [symbols,    setSymbols]    = useState<MT5Symbol[]>([]);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
+  const [search,     setSearch]     = useState('');
+  const [pathFilter, setPathFilter] = useState('');
+  const [selected,   setSelected]   = useState<MT5Symbol | null>(null);
+  const [fetched,    setFetched]    = useState<number | null>(null);
+
+  const selectedNode = nodes.find(n => n.id === nodeId) ?? null;
+
+  const fetchSymbols = async () => {
+    if (!nodeId) return;
+    setLoading(true); setError(null); setSelected(null);
+    try {
+      const res = await mt5Api.getNodeSymbols(nodeId);
+      setSymbols(res.symbols);
+      setFetched(nodeId);
+    } catch (e: unknown) {
+      setError((e as Error).message || 'Failed to fetch symbols');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const paths = Array.from(new Set(symbols.map(s => s.path.split('\\')[0]))).sort();
+
+  const filtered = symbols.filter(s => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || s.symbol.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
+    const matchPath   = !pathFilter || s.path.startsWith(pathFilter);
+    return matchSearch && matchPath;
+  });
+
+  return (
+    <div className="flex flex-col h-full gap-4">
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <label className="text-xs text-text-muted whitespace-nowrap">Source Node</label>
+        <select value={nodeId ?? ''} onChange={e => { setNodeId(Number(e.target.value)); setSymbols([]); setFetched(null); setSelected(null); }}
+          className="input text-sm" style={{ minWidth: 220 }}>
+          {connected.length === 0
+            ? <option value="">No connected nodes</option>
+            : connected.map(n => <option key={n.id} value={n.id}>{n.node_name} [{n.node_type}]</option>)}
+        </select>
+        {selectedNode && (
+          <span className="text-xs px-2 py-0.5 rounded font-medium"
+            style={{ backgroundColor: '#0f2a15', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+            {selectedNode.connection_status}
+          </span>
+        )}
+        <button onClick={fetchSymbols} disabled={!nodeId || loading}
+          className="btn text-xs flex items-center gap-1.5"
+          style={{ backgroundColor: '#1a3a2a', color: '#66e07a', border: '1px solid #2f6a3d', opacity: (!nodeId || loading) ? 0.5 : 1 }}>
+          <IcoRefresh />
+          {loading ? 'Fetching…' : fetched === nodeId ? 'Refresh' : 'Fetch Symbols'}
+        </button>
+        {symbols.length > 0 && (
+          <>
+            <input type="text" placeholder="Search symbol or description…"
+              value={search} onChange={e => setSearch(e.target.value)}
+              className="input text-xs flex-1" style={{ minWidth: 200 }} />
+            <select value={pathFilter} onChange={e => setPathFilter(e.target.value)}
+              className="input text-xs" style={{ minWidth: 140 }}>
+              <option value="">All paths</option>
+              {paths.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <span className="text-xs text-text-muted whitespace-nowrap">
+              {filtered.length} / {symbols.length}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded text-xs"
+          style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+          <IcoWarning />{error}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && symbols.length === 0 && !error && (
+        <div className="flex flex-col items-center justify-center flex-1">
+          <span className="text-sm text-text-muted">
+            {connected.length === 0 ? 'No connected nodes available' : 'Select a node and click Fetch Symbols'}
+          </span>
+        </div>
+      )}
+
+      {/* List + Detail */}
+      {symbols.length > 0 && (
+        <div className="flex gap-4 flex-1 overflow-hidden">
+
+          {/* Symbol list */}
+          <div className="panel flex flex-col overflow-hidden flex-shrink-0" style={{ width: 340 }}>
+            <div className="px-3 py-2 border-b border-border flex items-center justify-between flex-shrink-0">
+              <span className="text-xs font-semibold text-text-primary">Symbols</span>
+              <span className="text-xs font-mono text-text-muted">{filtered.length}</span>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {filtered.length === 0
+                ? <p className="text-xs text-text-muted p-3">No symbols match filter</p>
+                : filtered.map(s => (
+                  <button key={s.symbol} onClick={() => setSelected(s)}
+                    className="w-full text-left px-3 py-2 border-b border-border transition-colors"
+                    style={{
+                      backgroundColor: selected?.symbol === s.symbol ? '#1a2a3a' : 'transparent',
+                      borderLeft: selected?.symbol === s.symbol ? '2px solid #4a9eff' : '2px solid transparent',
+                    }}
+                    onMouseEnter={e => { if (selected?.symbol !== s.symbol) e.currentTarget.style.backgroundColor = '#1e1e22'; }}
+                    onMouseLeave={e => { if (selected?.symbol !== s.symbol) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-mono font-semibold text-text-primary">{s.symbol}</span>
+                      <span className="text-xs text-text-muted font-mono">{s.currency_base}/{s.currency_profit}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-xs text-text-muted truncate" style={{ maxWidth: 180 }}>{s.description}</span>
+                      <span className="text-xs text-text-muted font-mono">{s.path.split('\\').pop()}</span>
+                    </div>
+                  </button>
+                ))
+              }
+            </div>
+          </div>
+
+          {/* Detail panel */}
+          <div className="panel flex flex-col overflow-hidden flex-1">
+            {!selected ? (
+              <div className="flex items-center justify-center flex-1">
+                <span className="text-sm text-text-muted">Select a symbol to view all properties</span>
+              </div>
+            ) : (
+              <>
+                <div className="px-4 py-3 border-b border-border flex-shrink-0">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <span className="text-base font-bold font-mono text-text-primary">{selected.symbol}</span>
+                      <p className="text-xs text-text-secondary mt-0.5">{selected.description}</p>
+                      <p className="text-xs text-text-muted mt-0.5">{selected.path}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs px-2 py-0.5 rounded font-mono"
+                        style={{ backgroundColor: '#1a1a2e', color: '#a5c8f0', border: '1px solid #1e4270' }}>
+                        {CALC_MODE[selected.calc_mode] ?? `Mode ${selected.calc_mode}`}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded font-mono"
+                        style={{ backgroundColor: '#1a2a1a', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+                        {TRADE_MODE[selected.trade_mode] ?? `Trade ${selected.trade_mode}`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="overflow-y-auto flex-1 p-4">
+                  <div className="grid grid-cols-3 gap-3">
+                    {([
+                      { label: 'Base Currency',   value: selected.currency_base },
+                      { label: 'Profit Currency', value: selected.currency_profit },
+                      { label: 'Digits',          value: String(selected.digits) },
+                      { label: 'Contract Size',   value: selected.contract_size.toLocaleString() },
+                      { label: 'Volume Min',      value: selected.volume_min.toFixed(2) },
+                      { label: 'Volume Max',      value: selected.volume_max.toLocaleString() },
+                      { label: 'Margin Initial',  value: selected.margin_initial === 0 ? '—' : selected.margin_initial.toFixed(2) },
+                      { label: 'Spread',          value: selected.spread === 0 ? 'Variable' : `${selected.spread} pts` },
+                      { label: 'Swap Long',       value: selected.swap_long.toFixed(4),  color: selected.swap_long  < 0 ? '#ff6b6b' : '#66e07a' },
+                      { label: 'Swap Short',      value: selected.swap_short.toFixed(4), color: selected.swap_short < 0 ? '#ff6b6b' : '#66e07a' },
+                      { label: 'Trade Mode',      value: `${TRADE_MODE[selected.trade_mode] ?? selected.trade_mode} (${selected.trade_mode})` },
+                      { label: 'Calc Mode',       value: `${CALC_MODE[selected.calc_mode]  ?? selected.calc_mode}  (${selected.calc_mode})` },
+                    ] as { label: string; value: string; color?: string }[]).map(({ label, value, color }) => (
+                      <div key={label} className="rounded p-3"
+                        style={{ backgroundColor: '#1a1a1e', border: '1px solid #2a2a2e' }}>
+                        <p className="text-xs text-text-muted mb-1">{label}</p>
+                        <p className="text-sm font-mono font-semibold" style={{ color: color ?? '#e8e8f0' }}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // NODES TAB
 // ============================================================
 function NodesTab({ nodes, onEdit, onDelete, onConnect, onDisconnect, onPromote, onAdd }: {
@@ -832,71 +1280,121 @@ function NodesTab({ nodes, onEdit, onDelete, onConnect, onDisconnect, onPromote,
 // ============================================================
 // BOOK CONFIG — assignment rows with inline re-assign
 // ============================================================
-function ReassignDropdown({ currentBook, onReassign, onClose }: {
-  currentBook: Book;
-  onReassign: (b: Book) => void;
-  onClose: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, [onClose]);
-  return (
-    <div ref={ref} className="absolute right-0 top-full mt-1 z-20 rounded border border-border shadow-lg"
-      style={{ backgroundColor: '#2a2a2c', minWidth: 120 }}>
-      {(['A','B','C'] as Book[]).filter(b => b !== currentBook).map(b => (
-        <button key={b} onClick={() => { onReassign(b); onClose(); }}
-          className="w-full text-left px-3 py-1.5 text-xs hover:bg-surface-hover transition-colors flex items-center gap-2">
-          <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: BOOK_COLOR[b], display: 'inline-block', flexShrink: 0 }} />
-          Move to {b}-Book
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function AssignRow({ a, onRemove, onReassign }: {
-  a: Assignment;
-  onRemove:   (id: number) => void;
-  onReassign: (id: number, b: Book) => void;
-}) {
-  const [dd, setDd] = useState(false);
-  return (
-    <div className="flex items-center gap-2 py-1.5 text-xs border-b border-border last:border-0">
-      <span className="font-mono text-text-secondary truncate flex-1" title={a.group_name}>{shortPath(a.group_name)}</span>
-      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4 }}>
-        <button onClick={() => setDd(s => !s)}
-          className="text-xs px-1.5 py-0.5 rounded hover:bg-surface-hover transition-colors"
-          style={{ color: '#a0a0b0' }}>
-          Re-assign
-        </button>
-        {dd && <ReassignDropdown currentBook={a.book} onReassign={b => onReassign(a.id, b)} onClose={() => setDd(false)} />}
-        <button onClick={() => onRemove(a.id)} className="text-text-muted hover:text-red-400 transition-colors px-1">
-          <IcoX size={11} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function BookPanel({ book, rows, onRemove, onReassign }: {
   book: Book; rows: Assignment[];
   onRemove:   (id: number) => void;
   onReassign: (id: number, b: Book) => void;
 }) {
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [ddOpen,   setDdOpen]   = useState(false);
+  const ddRef = useRef<HTMLDivElement>(null);
+
+  // Clear selection when rows change (after assign/remove)
+  useEffect(() => setSelected(new Set()), [rows.length]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!ddOpen) return;
+    const h = (e: MouseEvent) => { if (ddRef.current && !ddRef.current.contains(e.target as Node)) setDdOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [ddOpen]);
+
+  const allChecked  = rows.length > 0 && selected.size === rows.length;
+  const someChecked = selected.size > 0 && !allChecked;
+
+  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(rows.map(r => r.id)));
+  const toggleOne = (id: number) => setSelected(prev => {
+    const n = new Set(prev);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  });
+
+  const handleRemove = () => {
+    selected.forEach(id => onRemove(id));
+    setSelected(new Set());
+  };
+
+  const handleReassign = (newBook: Book) => {
+    selected.forEach(id => onReassign(id, newBook));
+    setSelected(new Set());
+    setDdOpen(false);
+  };
+
+  const hasSelection = selected.size > 0;
+
   return (
     <div className="panel overflow-hidden flex-1"
       style={{ borderLeft: `3px solid ${BOOK_COLOR[book]}` }}>
-      <div className="px-3 py-2 border-b border-border flex items-center justify-between">
-        <span className="text-sm font-semibold text-text-primary">{book}-Book</span>
-        <span className="text-xs font-mono text-text-muted">{rows.length} group{rows.length !== 1 ? 's' : ''}</span>
+
+      {/* Header */}
+      <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+        {/* Select-all checkbox */}
+        {rows.length > 0 && (
+          <input type="checkbox" checked={allChecked}
+            ref={el => { if (el) el.indeterminate = someChecked; }}
+            onChange={toggleAll}
+            className="rounded"
+            style={{ width: 13, height: 13, accentColor: BOOK_COLOR[book], cursor: 'pointer', flexShrink: 0 }} />
+        )}
+
+        <span className="text-sm font-semibold text-text-primary flex-1">{book}-Book</span>
+
+        {/* Actions — only visible when something is selected */}
+        {hasSelection && (
+          <div className="flex items-center gap-1.5">
+            {/* Re-assign */}
+            <div style={{ position: 'relative' }} ref={ddRef}>
+              <button onClick={() => setDdOpen(s => !s)}
+                className="text-xs px-2 py-1 rounded border border-border hover:bg-surface-hover transition-colors"
+                style={{ color: '#a0a0b0' }}>
+                Re-assign
+              </button>
+              {ddOpen && (
+                <div className="absolute right-0 top-full mt-1 z-20 rounded border border-border shadow-lg"
+                  style={{ backgroundColor: '#2a2a2c', minWidth: 160, whiteSpace: 'nowrap' }}>
+                  {(['A','B','C'] as Book[]).filter(b => b !== book).map(b => (
+                    <button key={b} onClick={() => handleReassign(b)}
+                      className="w-full text-left px-3 py-2 text-xs hover:bg-surface-hover transition-colors flex items-center gap-2">
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: BOOK_COLOR[b], display: 'inline-block', flexShrink: 0 }} />
+                      Move to {b}-Book
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Remove */}
+            <button onClick={handleRemove}
+              className="text-xs px-2 py-1 rounded border transition-colors"
+              style={{ color: '#ff6b6b', borderColor: '#7a2f36', backgroundColor: 'transparent' }}
+              onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2c1417')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}>
+              Remove
+            </button>
+          </div>
+        )}
+
+        <span className="text-xs font-mono text-text-muted" style={{ flexShrink: 0 }}>
+          {rows.length} group{rows.length !== 1 ? 's' : ''}
+        </span>
       </div>
+
+      {/* Rows */}
       <div className="px-3 py-1.5 overflow-y-auto" style={{ maxHeight: 140 }}>
         {rows.length === 0
           ? <p className="text-xs text-text-muted py-2">No groups assigned</p>
-          : rows.map(a => <AssignRow key={a.id} a={a} onRemove={onRemove} onReassign={onReassign} />)}
+          : rows.map(a => (
+            <div key={a.id}
+              className="flex items-center gap-2 py-1.5 text-xs border-b border-border last:border-0">
+              <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleOne(a.id)}
+                style={{ width: 13, height: 13, accentColor: BOOK_COLOR[book], cursor: 'pointer', flexShrink: 0 }} />
+              <span className="font-mono text-text-secondary truncate flex-1" title={a.group_name}>
+                {shortPath(a.group_name)}
+              </span>
+            </div>
+          ))
+        }
       </div>
     </div>
   );
@@ -1349,8 +1847,9 @@ export function NodeManagementPage() {
   const handlePromoteConfirm = async () => {
     if (!promoteModal) return;
     try {
-      // Mark new node as primary — backend handles demotion of old primary
-      await mt5Api.updateNode(promoteModal.id, { is_master: true, node_type: 'MASTER' });
+      // Promote STANDBY → MASTER. The backend automatically demotes the existing
+      // MASTER to STANDBY — no need to send a second request.
+      await mt5Api.updateNode(promoteModal.id, { node_type: 'MASTER' });
       await loadNodes();
       showToast(`${promoteModal.node_name} promoted to MASTER`);
     } catch (e: unknown) {
@@ -1426,8 +1925,10 @@ export function NodeManagementPage() {
         {/* Tabs */}
         <div className="flex">
           {([
-            { id: 'nodes' as Tab, label: 'Node Registry' },
-            { id: 'books' as Tab, label: 'Book Configuration' },
+            { id: 'nodes'   as Tab, label: 'Node Registry' },
+            { id: 'books'   as Tab, label: 'Book Configuration' },
+            { id: 'groups'  as Tab, label: 'Groups' },
+            { id: 'symbols' as Tab, label: 'Symbols' },
           ]).map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={clsx(
@@ -1459,7 +1960,9 @@ export function NodeManagementPage() {
                 onPromote={n => setPromoteModal(n)}
                 onAdd={() => setFormModal({ mode: 'add' })} />
             )}
-            {tab === 'books' && <BookMappingTab nodes={nodes} />}
+            {tab === 'books'   && <BookMappingTab nodes={nodes} />}
+            {tab === 'groups'  && <GroupsTab nodes={nodes} />}
+            {tab === 'symbols' && <SymbolsTab nodes={nodes} />}
           </>
         )}
       </div>
