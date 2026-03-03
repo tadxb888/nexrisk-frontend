@@ -2,25 +2,6 @@
 // Placeholder Pages
 // ============================================
 
-export function LiquidityProvidersPage() {
-  return (
-    <div className="h-full flex flex-col p-4">
-      <div className="mb-4">
-        <h1 className="text-lg font-medium text-text-primary">Liquidity Providers</h1>
-        <p className="text-sm text-text-secondary">
-          Configure and monitor liquidity provider connections
-        </p>
-      </div>
-      <div className="flex-1 flex items-center justify-center panel">
-        <div className="text-center">
-          <p className="text-text-muted mb-2">LP Configuration Module</p>
-          <p className="text-sm text-text-secondary">Coming soon</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function HedgeRulesPage() {
   return (
     <div className="h-full flex flex-col p-4">

@@ -7,10 +7,10 @@ export { CBookPage } from './CBookPage';
 export { NetExposurePage } from './NetExposure';
 export { CharterPage } from './Charter';
 export { ArchetypePage } from './Archetype';
-export { NodeManagementPage } from './NodeManagement';
 export { LogsPage } from './Logs';
+export { LiquidityProvidersPage } from './LiquidityProviders';
+export { NodeManagementPage } from './NodeManagement';
 export {
-  LiquidityProvidersPage,
   HedgeRulesPage,
   PriceRulesPage,
   ExecutionReportPage,
