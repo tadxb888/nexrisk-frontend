@@ -15,6 +15,20 @@ import type {
 import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
 
+// NexDay calls go through the BFF (same base as all other API calls)
+const NEXDAY_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080';
+
+async function nexdayFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${NEXDAY_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    throw new Error((err as any).error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ======================
 // THEME (Quartz dark)
 // ======================
@@ -343,46 +357,6 @@ function aggregateBBookPositions(positions: MT5Position[], lpLabel: string): Hed
   return rows;
 }
 
-const SYMBOL_DESCRIPTIONS: Record<string, string> = {
-  EURUSD: 'EUR USD Spot',
-  GBPUSD: 'GBP USD Spot',
-  USDJPY: 'USD JPY Spot',
-  XAUUSD: 'Gold Spot',
-  BTCUSD: 'Bitcoin USD',
-  AUDUSD: 'AUD USD Spot',
-  NZDUSD: 'NZD USD Spot',
-  USDCAD: 'USD CAD Spot',
-  USDCHF: 'USD CHF Spot',
-};
-
-function generatePredictionData(symbol: string, basePrice: number): PredictionRow {
-  const trends: Array<'Up' | 'Down' | 'Neutral'> = ['Up', 'Down', 'Neutral'];
-  const now = new Date();
-  const targetTime = new Date(now);
-  targetTime.setMinutes(Math.floor(now.getMinutes() / 15) * 15, 0, 0);
-
-  const variance = symbol.includes('JPY') ? 0.5 : symbol.includes('XAU') ? 10 : symbol.includes('BTC') ? 500 : 0.002;
-
-  return {
-    id: `pred-${symbol}`,
-    symbol,
-    description: SYMBOL_DESCRIPTIONS[symbol] || symbol,
-    targetTime: targetTime.toISOString(),
-    pred15High: Math.round((basePrice + variance * (0.5 + Math.random() * 0.5)) * 10000) / 10000,
-    pred15Trend: trends[Math.floor(Math.random() * 3)],
-    pred15Low: Math.round((basePrice - variance * (0.5 + Math.random() * 0.5)) * 10000) / 10000,
-    pred30High: Math.round((basePrice + variance * (0.8 + Math.random() * 0.5)) * 10000) / 10000,
-    pred30Trend: trends[Math.floor(Math.random() * 3)],
-    pred30Low: Math.round((basePrice - variance * (0.8 + Math.random() * 0.5)) * 10000) / 10000,
-    pred1hHigh: Math.round((basePrice + variance * (1.0 + Math.random() * 0.8)) * 10000) / 10000,
-    pred1hTrend: trends[Math.floor(Math.random() * 3)],
-    pred1hLow: Math.round((basePrice - variance * (1.0 + Math.random() * 0.8)) * 10000) / 10000,
-    pred2hHigh: Math.round((basePrice + variance * (1.5 + Math.random() * 1.0)) * 10000) / 10000,
-    pred2hTrend: trends[Math.floor(Math.random() * 3)],
-    pred2hLow: Math.round((basePrice - variance * (1.5 + Math.random() * 1.0)) * 10000) / 10000,
-  };
-}
-
 // ======================
 // COMPONENT
 // ======================
@@ -438,7 +412,7 @@ export function NetExposurePage() {
   // Get available LPs for the selected symbol
   const availableLps = useMemo(() => {
     if (!selectedSymbol) return [];
-    return [...new Set(hedgeExposureData.filter(r => r.symbol === selectedSymbol).map(r => r.lp))].sort();
+    return [...new Set(hedgeExposureData.filter(r => r.symbol === selectedSymbol && !r.isBBook).map(r => r.lp))].sort();
   }, [selectedSymbol, hedgeExposureData]);
 
   // Get the active row based on symbol + LP selection
@@ -447,12 +421,102 @@ export function NetExposurePage() {
     return hedgeExposureData.find(r => r.symbol === selectedSymbol && r.lp === selectedLp) || null;
   }, [selectedSymbol, selectedLp, hedgeExposureData]);
 
-  const predictionData = useMemo<PredictionRow[]>(() => {
-    if (!selectedSymbol) return [];
-    const exposureRow = hedgeExposureData.find((r) => r.symbol === selectedSymbol);
-    const basePrice = exposureRow?.avgPrice || 1.1;
-    return [generatePredictionData(selectedSymbol, basePrice)];
-  }, [selectedSymbol, hedgeExposureData]);
+  // ── Signal column — fetched in batch after exposure data loads ──
+  const [signalMap, setSignalMap] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    const symbols = [...new Set(
+      hedgeExposureData.filter(r => !r.isBBook).map(r => r.symbol)
+    )];
+    if (!symbols.length) return;
+    let cancelled = false;
+    nexdayFetch<{ signals: Record<string, { signal: string }> }>(
+      `/api/v1/predictions/signals?mt5_symbols=${symbols.join(',')}`
+    )
+      .then(res => {
+        if (cancelled) return;
+        const map = new Map<string, string>();
+        for (const [sym, val] of Object.entries(res.signals ?? {})) {
+          if (val?.signal) map.set(sym, val.signal);
+        }
+        setSignalMap(map);
+      })
+      .catch(() => { /* silent — signal column shows — on error */ });
+    return () => { cancelled = true; };
+  }, [hedgeExposureData]);
+
+  // ── Intraday monitor — fetched on symbol selection ──────────
+  const [intradayData,     setIntradayData]     = useState<PredictionRow | null>(null);
+  const [intradayLoading,  setIntradayLoading]  = useState(false);
+  const [intradayUnmapped, setIntradayUnmapped] = useState(false);
+
+  useEffect(() => {
+    if (!selectedSymbol) {
+      setIntradayData(null);
+      setIntradayUnmapped(false);
+      return;
+    }
+    let cancelled = false;
+    setIntradayLoading(true);
+    setIntradayUnmapped(false);
+
+    nexdayFetch<{
+      mapped: boolean;
+      generated_at: string;
+      timeframes?: {
+        '15min'?: { predicted_high: number; predicted_low: number; trend: number; momentum: string; target_time: string };
+        '30min'?: { predicted_high: number; predicted_low: number; trend: number; momentum: string; target_time: string };
+        '1hour'?: { predicted_high: number; predicted_low: number; trend: number; momentum: string; target_time: string };
+        '2hour'?: { predicted_high: number; predicted_low: number; trend: number; momentum: string; target_time: string };
+      };
+    }>(`/api/v1/predictions/intraday/${selectedSymbol}`)
+      .then(res => {
+        if (cancelled) return;
+        if (!res.mapped || !res.timeframes) {
+          setIntradayUnmapped(true);
+          setIntradayData(null);
+          return;
+        }
+        const tfs = res.timeframes;
+        const t15 = tfs['15min'];
+        const t30 = tfs['30min'];
+        const t1h = tfs['1hour'];
+        const t2h = tfs['2hour'];
+        // trend is numeric: >0 = Up, <0 = Down, 0 = Neutral
+        const trend = (t?: { trend: number }): 'Up' | 'Down' | 'Neutral' =>
+          !t ? 'Neutral' : t.trend > 0 ? 'Up' : t.trend < 0 ? 'Down' : 'Neutral';
+
+        // Use target_time from 15min timeframe; fall back to generated_at if still epoch
+        const rawTarget = t15?.target_time ?? '';
+        const isEpoch = !rawTarget || rawTarget.startsWith('1970');
+        const targetTime = isEpoch ? res.generated_at : rawTarget;
+
+        setIntradayData({
+          id:           `pred-${selectedSymbol}`,
+          symbol:       selectedSymbol,
+          description:  selectedSymbol,
+          targetTime,
+          pred15High:   t15?.predicted_high ?? 0,
+          pred15Trend:  trend(t15),
+          pred15Low:    t15?.predicted_low  ?? 0,
+          pred30High:   t30?.predicted_high ?? 0,
+          pred30Trend:  trend(t30),
+          pred30Low:    t30?.predicted_low  ?? 0,
+          pred1hHigh:   t1h?.predicted_high ?? 0,
+          pred1hTrend:  trend(t1h),
+          pred1hLow:    t1h?.predicted_low  ?? 0,
+          pred2hHigh:   t2h?.predicted_high ?? 0,
+          pred2hTrend:  trend(t2h),
+          pred2hLow:    t2h?.predicted_low  ?? 0,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) { setIntradayUnmapped(true); setIntradayData(null); }
+      })
+      .finally(() => { if (!cancelled) setIntradayLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [selectedSymbol]);
 
   // ======================
   // AUTO-FIT COLUMNS
@@ -625,10 +689,8 @@ export function NetExposurePage() {
         headerName: 'Signal',
         valueGetter: (p) => {
           if (!p.data) return '—';
-          if (p.data.isBBook) return '—'; // no signal for B-Book rows
-          const signals = ['Hdg@15m', 'Hdg@30m', 'Hdg@1h', 'Hdg@2h', 'Opp@15m', 'Opp@30m', 'Opp@1h', 'Opp@2h', '—'];
-          const idx = Math.abs(p.data.id.charCodeAt(4) || 0) % signals.length;
-          return signals[idx];
+          if (p.data.isBBook) return '—';
+          return signalMap.get(p.data.symbol) ?? '—';
         },
         cellStyle: (p) => ({ color: signalColor(p.value || '—') }),
       },
@@ -640,7 +702,7 @@ export function NetExposurePage() {
         sortable: true,
       },
     ];
-  }, [volumeDisplayMode]);
+  }, [volumeDisplayMode, signalMap]);
 
   const defaultColDef = useMemo<ColDef>(
     () => ({
@@ -870,6 +932,22 @@ export function NetExposurePage() {
                   {selectedSymbol && <span className="text-xs text-[#4ecdc4] bg-[#333] px-2 py-0.5 rounded">{selectedSymbol}</span>}
                 </div>
                 <div className="flex items-center gap-3 text-xs text-[#666]">
+                  {intradayData && (
+                    <span>
+                      Target:{' '}
+                      <span className="text-[#a0a0b0]">
+                        {new Date(intradayData.targetTime).toLocaleString('en-US', {
+                          timeZone: 'America/New_York',
+                          month: 'numeric',
+                          day: 'numeric',
+                          year: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true,
+                        })} ET
+                      </span>
+                    </span>
+                  )}
                   <span>
                     Current:{' '}
                     {new Date().toLocaleString('en-US', {
@@ -886,7 +964,17 @@ export function NetExposurePage() {
                 </div>
               </div>
 
-              {selectedSymbol && predictionData[0] ? (
+              {intradayLoading ? (
+                <div className="h-20 flex items-center justify-center text-[#555] text-sm border border-[#555] rounded">
+                  Loading predictions…
+                </div>
+              ) : intradayUnmapped ? (
+                <div className="h-20 flex items-center justify-center gap-2 text-[#888] text-sm border border-[#555] rounded">
+                  <span style={{ color: '#e0a020' }}>⚠</span>
+                  No NexDay mapping for <span className="font-mono text-[#4ecdc4]">{selectedSymbol}</span>
+                  — configure it in Settings → Predictions
+                </div>
+              ) : selectedSymbol && intradayData ? (
                 <table className="w-full text-xs border border-[#555]" style={{ tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
                   <colgroup>
                     <col style={{ width: '25%' }} />
@@ -916,9 +1004,9 @@ export function NetExposurePage() {
                       {[0, 1, 2, 3].map((i) => (
                         <th key={i} className="border-r border-[#555] last:border-r-0 p-0">
                           <div className="grid grid-cols-3 text-[#999] font-normal">
-                            <span className="py-1 px-2 text-right border-r border-[#444]">High</span>
-                            <span className="py-1 px-2 text-center border-r border-[#444]">Trend</span>
-                            <span className="py-1 px-2 text-right">Low</span>
+                            <span className="py-1 px-2 text-right border-r border-[#444]">pHigh</span>
+                            <span className="py-1 px-2 text-center border-r border-[#444]">pTrend</span>
+                            <span className="py-1 px-2 text-right">pLow</span>
                           </div>
                         </th>
                       ))}
@@ -928,38 +1016,38 @@ export function NetExposurePage() {
                     <tr style={{ backgroundColor: '#313032' }}>
                       <td className="border-r border-[#555] p-0">
                         <div className="grid grid-cols-3 text-white font-mono">
-                          <span className="py-2 px-2 text-right border-r border-[#444]">{predictionData[0].pred15High.toFixed(4)}</span>
-                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', predictionData[0].pred15Trend === 'Up' ? 'text-[#4ecdc4]' : predictionData[0].pred15Trend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
-                            {predictionData[0].pred15Trend}
+                          <span className="py-2 px-2 text-right border-r border-[#444]">{intradayData.pred15High.toFixed(4)}</span>
+                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', intradayData.pred15Trend === 'Up' ? 'text-[#4ecdc4]' : intradayData.pred15Trend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
+                            {intradayData.pred15Trend}
                           </span>
-                          <span className="py-2 px-2 text-right">{predictionData[0].pred15Low.toFixed(4)}</span>
+                          <span className="py-2 px-2 text-right">{intradayData.pred15Low.toFixed(4)}</span>
                         </div>
                       </td>
                       <td className="border-r border-[#555] p-0">
                         <div className="grid grid-cols-3 text-white font-mono">
-                          <span className="py-2 px-2 text-right border-r border-[#444]">{predictionData[0].pred30High.toFixed(4)}</span>
-                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', predictionData[0].pred30Trend === 'Up' ? 'text-[#4ecdc4]' : predictionData[0].pred30Trend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
-                            {predictionData[0].pred30Trend}
+                          <span className="py-2 px-2 text-right border-r border-[#444]">{intradayData.pred30High.toFixed(4)}</span>
+                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', intradayData.pred30Trend === 'Up' ? 'text-[#4ecdc4]' : intradayData.pred30Trend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
+                            {intradayData.pred30Trend}
                           </span>
-                          <span className="py-2 px-2 text-right">{predictionData[0].pred30Low.toFixed(4)}</span>
+                          <span className="py-2 px-2 text-right">{intradayData.pred30Low.toFixed(4)}</span>
                         </div>
                       </td>
                       <td className="border-r border-[#555] p-0">
                         <div className="grid grid-cols-3 text-white font-mono">
-                          <span className="py-2 px-2 text-right border-r border-[#444]">{predictionData[0].pred1hHigh.toFixed(4)}</span>
-                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', predictionData[0].pred1hTrend === 'Up' ? 'text-[#4ecdc4]' : predictionData[0].pred1hTrend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
-                            {predictionData[0].pred1hTrend}
+                          <span className="py-2 px-2 text-right border-r border-[#444]">{intradayData.pred1hHigh.toFixed(4)}</span>
+                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', intradayData.pred1hTrend === 'Up' ? 'text-[#4ecdc4]' : intradayData.pred1hTrend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
+                            {intradayData.pred1hTrend}
                           </span>
-                          <span className="py-2 px-2 text-right">{predictionData[0].pred1hLow.toFixed(4)}</span>
+                          <span className="py-2 px-2 text-right">{intradayData.pred1hLow.toFixed(4)}</span>
                         </div>
                       </td>
                       <td className="p-0">
                         <div className="grid grid-cols-3 text-white font-mono">
-                          <span className="py-2 px-2 text-right border-r border-[#444]">{predictionData[0].pred2hHigh.toFixed(4)}</span>
-                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', predictionData[0].pred2hTrend === 'Up' ? 'text-[#4ecdc4]' : predictionData[0].pred2hTrend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
-                            {predictionData[0].pred2hTrend}
+                          <span className="py-2 px-2 text-right border-r border-[#444]">{intradayData.pred2hHigh.toFixed(4)}</span>
+                          <span className={clsx('py-2 px-2 text-center border-r border-[#444]', intradayData.pred2hTrend === 'Up' ? 'text-[#4ecdc4]' : intradayData.pred2hTrend === 'Down' ? 'text-[#ff6b6b]' : 'text-[#999]')}>
+                            {intradayData.pred2hTrend}
                           </span>
-                          <span className="py-2 px-2 text-right">{predictionData[0].pred2hLow.toFixed(4)}</span>
+                          <span className="py-2 px-2 text-right">{intradayData.pred2hLow.toFixed(4)}</span>
                         </div>
                       </td>
                     </tr>
