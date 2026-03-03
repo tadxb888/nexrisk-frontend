@@ -13,6 +13,8 @@ import { checkNexRiskHealth } from './services/nexrisk-api.js';
 import { riskMatrixRoutes } from './routes/risk-matrix.js';
 import { settingsRoutes } from './routes/settings.js';
 import { mt5Routes } from './routes/mt5.js';
+import { predictionsRoutes } from './routes/predictions.js';
+import { fixBridgeRoutes } from './routes/fix-bridge.js';
 
 /**
  * Create and configure Fastify server
@@ -135,6 +137,9 @@ async function buildServer() {
       await api.register(riskMatrixRoutes);
       await api.register(settingsRoutes);
       await api.register(mt5Routes);
+      await api.register(predictionsRoutes);
+      await api.register(fixBridgeRoutes);
+      
     },
     { prefix: '/api/v1' } 
   );
