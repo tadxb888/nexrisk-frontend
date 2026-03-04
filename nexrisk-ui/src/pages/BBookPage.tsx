@@ -6,7 +6,7 @@ import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
 
 import { BBookCharts } from '@/components/charts/BBookCharts';
-import { mt5Api, type MT5Position, type MT5NodeAPI } from '@/services/api';
+import { mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAPI, type BBookWsEvent } from '@/services/api';
 
 // ======================
 // THEME (Quartz dark)
@@ -50,9 +50,21 @@ export type BBookStreamMsg = {
 };
 
 // ======================
+// WS CONNECTION STATUS
+// ======================
+type WsStatus = 'connecting' | 'live' | 'reconnecting' | 'error';
+
+const WS_BADGE: Record<WsStatus, { color: string; label: string }> = {
+  connecting:   { color: '#e0a020', label: 'Connecting…'   },
+  live:         { color: '#66e07a', label: 'Live'           },
+  reconnecting: { color: '#e0a020', label: 'Reconnecting…' },
+  error:        { color: '#ff6b6b', label: 'Disconnected'  },
+};
+
+// ======================
 // FIELD MAPPING
 // ======================
-function mapPosition(raw: MT5Position, nodeName: string): BBookPosition {
+function mapPosition(raw: MT5PositionWithNode): BBookPosition {
   return {
     login:         raw.login,
     symbol:        raw.symbol,
@@ -67,10 +79,10 @@ function mapPosition(raw: MT5Position, nodeName: string): BBookPosition {
     profit:        -raw.profit,  // broker P&L is inverse of client
     swap:          raw.swap,
     commission:    raw.commission,
-    hedge:         'No',    // populated in a future hedge-rules pass
-    lp:            null,    // populated once LP routing is live
-    group:         '',      // not available per-position from this endpoint
-    server:        nodeName,
+    hedge:         'No',
+    lp:            null,
+    group:         '',
+    server:        raw.nodeName,
   };
 }
 
@@ -97,6 +109,82 @@ const fmtPrice = (p: ValueFormatterParams) => {
 const getRowId = (r: BBookPosition) => `${r.position_id}|${r.login}|${r.symbol}`;
 
 // ======================
+// useBBookWebSocket hook
+// ======================
+/**
+ * Manages the WebSocket connection to the B-Book feed.
+ * Reconnects with exponential back-off (1s → 2s → 4s … cap 30s).
+ * On every (re)connect the backend automatically sends a SNAPSHOT,
+ * so no separate REST fetch is needed on reconnect.
+ */
+function useBBookWebSocket(opts: {
+  onSnapshot:  (positions: BBookPosition[]) => void;
+  onUpsert:    (position: BBookPosition)    => void;
+  onMerge:     (delta: Partial<MT5PositionWithNode> & { position_id: number }) => void;
+  onRemove:    (positionId: number)         => void;
+  onStatus:    (s: WsStatus)                => void;
+}) {
+  const retryRef      = useRef(0);
+  const mountedRef    = useRef(true);
+  const timerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cleanupRef    = useRef<(() => void) | null>(null);
+
+  const connect = useCallback(() => {
+    if (!mountedRef.current) return;
+    opts.onStatus('connecting');
+
+    const cleanup = connectBBookWebSocket(
+      (ev: BBookWsEvent) => {
+        if (ev.type === 'SNAPSHOT') {
+          const raw = ev.data as MT5PositionWithNode[];
+          opts.onSnapshot(raw.map(mapPosition));
+
+        } else if (ev.type === 'POSITION_ADD') {
+          // Full position object — safe to map fully
+          opts.onUpsert(mapPosition(ev.data as MT5PositionWithNode));
+
+        } else if (ev.type === 'POSITION_CHANGE') {
+          // Backend sends only changed fields — merge into existing row
+          const d = ev.data as Partial<MT5PositionWithNode> & { position_id: number };
+          opts.onMerge(d);
+
+        } else if (ev.type === 'POSITION_DELETE') {
+          const d = ev.data as { position_id: number };
+          opts.onRemove(d.position_id);
+        }
+        // subscribed / pong ACKs silently ignored
+      },
+      (status) => {
+        if (status === 'open') {
+          retryRef.current = 0;
+          opts.onStatus('live');
+        } else if (status === 'closed' || status === 'error') {
+          if (!mountedRef.current) return;
+          opts.onStatus(status === 'error' ? 'error' : 'reconnecting');
+          const delay = Math.min(1000 * 2 ** retryRef.current, 30_000);
+          retryRef.current++;
+          timerRef.current = setTimeout(() => {
+            if (mountedRef.current) connect();
+          }, delay);
+        }
+      }
+    );
+
+    cleanupRef.current = cleanup;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    mountedRef.current = true;
+    connect();
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      cleanupRef.current?.();
+    };
+  }, [connect]);
+}
+
+// ======================
 // COMPONENT
 // ======================
 export function BBookPage() {
@@ -104,72 +192,110 @@ export function BBookPage() {
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
 
   // ── Data state ──────────────────────────────────────────────
-  const [positions, setPositions] = useState<BBookPosition[]>([]);
-  const [masterNode, setMasterNode] = useState<MT5NodeAPI | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [positions,   setPositions]   = useState<BBookPosition[]>([]);
+  const [activeNodes, setActiveNodes] = useState<MT5NodeAPI[]>([]);
+  const [wsStatus,    setWsStatus]    = useState<WsStatus>('connecting');
+  const [error,       setError]       = useState<string | null>(null);
+  const [lastEventAt, setLastEventAt] = useState<Date | null>(null);
 
   // Filter state
-  const [groupInput, setGroupInput] = useState('');
-  const [symbolInput, setSymbolInput] = useState('');
+  const [groupInput,   setGroupInput]   = useState('');
+  const [symbolInput,  setSymbolInput]  = useState('');
   const [filterServer, setFilterServer] = useState<string>('ALL');
 
-  // Row index for streaming updates
+  // Row index for O(1) upsert/remove
   const rowIndexRef = useRef<Map<string, BBookPosition>>(new Map());
-
   useEffect(() => {
     const m = new Map<string, BBookPosition>();
     for (const r of positions) m.set(getRowId(r), r);
     rowIndexRef.current = m;
   }, [positions]);
 
-  // ── Initial fetch ───────────────────────────────────────────
+  // Force AG Grid to refresh cells when positions array is replaced wholesale
+  // (AG Grid delta-matches by row ID and skips unchanged rows otherwise)
+  useEffect(() => {
+    gridRef.current?.api?.refreshCells({ force: true });
+  }, [positions]);
+
+  // One-time node list fetch (nodes don't change at position frequency)
+  useEffect(() => {
+    mt5Api.getNodes()
+      .then(({ nodes }) => setActiveNodes(nodes.filter(n => n.connection_status === 'CONNECTED')))
+      .catch(() => { /* non-fatal — node badges just won't show */ });
+  }, []);
+
+  // ── WebSocket handlers ───────────────────────────────────────
+  const handleSnapshot = useCallback((snap: BBookPosition[]) => {
+    setPositions(snap);
+    setLastEventAt(new Date());
+    setError(null);
+  }, []);
+
+  const handleUpsert = useCallback((pos: BBookPosition) => {
+    setPositions(prev => {
+      const key = getRowId(pos);
+      const idx = prev.findIndex(p => getRowId(p) === key);
+      if (idx === -1) return [...prev, pos];
+      const next = [...prev];
+      next[idx] = pos;
+      return next;
+    });
+    setLastEventAt(new Date());
+  }, []);
+
+  const handleMerge = useCallback((delta: Partial<MT5PositionWithNode> & { position_id: number }) => {
+    setPositions(prev => {
+      const idx = prev.findIndex(p => p.position_id === delta.position_id);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...prev[idx],
+        ...(delta.price_current !== undefined && { price_current: delta.price_current }),
+        ...(delta.profit        !== undefined && { profit: -delta.profit }),
+        ...(delta.swap          !== undefined && { swap: delta.swap }),
+        ...(delta.commission    !== undefined && { commission: delta.commission }),
+      };
+      return next;
+    });
+    setLastEventAt(new Date());
+  }, []);
+
+  const handleRemove = useCallback((positionId: number) => {
+    setPositions(prev => prev.filter(p => p.position_id !== positionId));
+    setLastEventAt(new Date());
+  }, []);
+
+  useBBookWebSocket({
+    onSnapshot: handleSnapshot,
+    onUpsert:   handleUpsert,
+    onMerge:    handleMerge,
+    onRemove:   handleRemove,
+    onStatus:   setWsStatus,
+  });
+
+  // Manual force-refresh via REST (fallback if WS gets out of sync)
   const fetchPositions = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
-      // Step 1: resolve the master/primary node
-      const node = await mt5Api.getMasterNode();
-      if (!node) {
-        setError('No connected master node found. Please connect an MT5 node in Node Management.');
-        setPositions([]);
-        setLoading(false);
-        return;
-      }
-      setMasterNode(node);
-
-      // Step 2: fetch all B-Book positions in one call
-      const data = await mt5Api.getBookPositions(node.id, 'B');
-
-      if (!data.positions || data.positions.length === 0) {
-        setPositions([]);
-        setLastRefresh(new Date());
-        setLoading(false);
-        return;
-      }
-
-      setPositions(data.positions.map(p => mapPosition(p, node.node_name)));
-      setLastRefresh(new Date());
+      const { positions: raw, nodes } = await mt5Api.getAllBBookPositions();
+      setActiveNodes(nodes);
+      setPositions(raw.map(p => mapPosition(p)));
+      setLastEventAt(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load B-Book positions');
-    } finally {
-      setLoading(false);
     }
   }, []);
 
+  // Fetch on mount so positions load immediately regardless of WS snapshot timing
   useEffect(() => {
     fetchPositions();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchPositions, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchPositions]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Derived filter options ──────────────────────────────────
   const uniqueLogins  = useMemo(() => Array.from(new Set(positions.map(p => String(p.login)))).sort(), [positions]);
   const uniqueSymbols = useMemo(() => Array.from(new Set(positions.map(p => p.symbol))).sort(), [positions]);
   const uniqueGroups  = useMemo(() => Array.from(new Set(positions.map(p => p.group).filter(Boolean))).sort(), [positions]);
-  const uniqueServers = useMemo(() => ['ALL', ...Array.from(new Set(positions.map(p => p.server))).sort()], [positions]);
+  const uniqueServers = useMemo(() => ['ALL', ...activeNodes.map(n => n.node_name).sort()], [activeNodes]);
 
   // ── Filtered positions ──────────────────────────────────────
   const filteredPositions = useMemo(() => {
@@ -218,7 +344,7 @@ export function BBookPage() {
       ),
     },
     { field: 'volume',        headerName: 'Volume',   filter: 'agNumberColumnFilter', valueFormatter: fmtNum(2),  width: 100, type: 'rightAligned' },
-    { field: 'price_open',    headerName: 'Open',     filter: 'agNumberColumnFilter', valueFormatter: fmtPrice,   width: 110, type: 'rightAligned' },
+    { field: 'price_open',    headerName: 'Open Price', filter: 'agNumberColumnFilter', valueFormatter: fmtPrice,   width: 110, type: 'rightAligned' },
     { field: 'sl',            headerName: 'S/L',      filter: 'agNumberColumnFilter', valueFormatter: fmtPrice,   width: 110, type: 'rightAligned' },
     { field: 'tp',            headerName: 'T/P',      filter: 'agNumberColumnFilter', valueFormatter: fmtPrice,   width: 110, type: 'rightAligned' },
     { field: 'price_current', headerName: 'Current',  filter: 'agNumberColumnFilter', valueFormatter: fmtPrice,   width: 110, type: 'rightAligned' },
@@ -315,6 +441,7 @@ export function BBookPage() {
   }, [filteredPositions]);
 
   const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '' || filterServer !== 'ALL';
+  const badge = WS_BADGE[wsStatus];
 
   // ======================
   // RENDER
@@ -330,15 +457,16 @@ export function BBookPage() {
         </div>
 
         <div className="flex items-center gap-6 text-xs">
-          {/* Node badge */}
-          {masterNode && (
+          {/* Node badges — one per active node */}
+          {activeNodes.length > 0 && (
             <>
-              <div className="flex items-center gap-1.5">
-                <span className={clsx(
-                  'w-1.5 h-1.5 rounded-full',
-                  masterNode.connection_status === 'CONNECTED' ? 'bg-[#66e07a]' : 'bg-[#ff6b6b]'
-                )} />
-                <span className="text-[#999] font-mono text-[10px]">{masterNode.node_name}</span>
+              <div className="flex items-center gap-2">
+                {activeNodes.map(n => (
+                  <div key={n.id} className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#66e07a]" />
+                    <span className="text-[#999] font-mono text-[10px]">{n.node_name}</span>
+                  </div>
+                ))}
               </div>
               <div className="w-px h-4 bg-[#808080]" />
             </>
@@ -363,15 +491,23 @@ export function BBookPage() {
           </div>
           <div><span className="text-[#999]">Hedged:</span><span className="ml-1 font-mono text-white">{stats.hedgedCount}</span></div>
 
-          {/* Refresh */}
-          <button
-            onClick={fetchPositions}
-            disabled={loading}
-            className="text-[10px] text-[#999] hover:text-white transition-colors disabled:opacity-40"
-            title={lastRefresh ? `Last refresh: ${lastRefresh.toLocaleTimeString()}` : 'Refresh positions'}
-          >
-            {loading ? '↻ Loading…' : '↻ Refresh'}
-          </button>
+          <div className="w-px h-4 bg-[#808080]" />
+
+          {/* WS status badge + manual refresh */}
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: badge.color }} />
+            <span className="font-mono text-[10px]" style={{ color: badge.color }}>{badge.label}</span>
+            {lastEventAt && wsStatus === 'live' && (
+              <span className="text-[#666] font-mono text-[10px]">{lastEventAt.toLocaleTimeString()}</span>
+            )}
+            <button
+              onClick={fetchPositions}
+              className="text-[10px] text-[#999] hover:text-white transition-colors ml-1"
+              title="Force full refresh via REST"
+            >
+              ↻
+            </button>
+          </div>
         </div>
       </div>
 
@@ -443,27 +579,27 @@ export function BBookPage() {
       {/* Content */}
       <div className="flex-1 flex flex-col overflow-hidden p-2">
 
-        {/* Loading overlay */}
-        {loading && positions.length === 0 && (
+        {/* Loading overlay — only on initial connect */}
+        {wsStatus === 'connecting' && positions.length === 0 && (
           <div className="flex-1 flex items-center justify-center text-[#999] text-sm">
-            <span className="font-mono">Loading B-Book positions…</span>
+            <span className="font-mono">Connecting to live feed…</span>
           </div>
         )}
 
-        {/* Empty state — no groups assigned */}
-        {!loading && !error && positions.length === 0 && (
+        {/* Empty state */}
+        {wsStatus === 'live' && !error && positions.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
             <p className="text-[#999] text-sm">No positions in B-Book</p>
             <p className="text-[#666] text-xs">
-              {masterNode
+              {activeNodes.length > 0
                 ? 'Assign MT5 groups to the B-Book in Node Management, or there are no open positions.'
-                : 'No connected master node found. Go to Node Management to connect your MT5 server.'}
+                : 'No connected MT5 nodes found. Go to Node Management to connect your MT5 server.'}
             </p>
           </div>
         )}
 
         {/* Grid */}
-        {(positions.length > 0 || loading) && (
+        {positions.length > 0 && (
           <div style={{ flex: 1, width: '100%' }}>
             <AgGridReact<BBookPosition>
               ref={gridRef}

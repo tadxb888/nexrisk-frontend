@@ -479,6 +479,10 @@ export interface NodeBookAPI {
   groups: BookAssignmentAPI[];
 }
 
+export interface MT5PositionWithNode extends MT5Position {
+  nodeName: string;
+}
+
 export interface MT5Position {
   position_id: number;
   login: number;
@@ -703,4 +707,111 @@ export const mt5Api = {
       nodes.find(n => n.connection_status === 'CONNECTED')
     );
   },
+
+  // Fetches B-Book positions from ALL connected nodes in parallel and merges them.
+  // Each position is tagged with its source node name via the nodeName field.
+  // Returns { positions, nodes } so callers know which nodes contributed.
+  getAllBBookPositions: async (): Promise<{
+    positions: MT5PositionWithNode[];
+    nodes: MT5NodeAPI[];
+  }> => {
+    const { nodes } = await fetchAPI<{ nodes: MT5NodeAPI[]; total: number; connected_count: number; generated_at: string }>(
+      '/api/v1/mt5/nodes'
+    );
+    // Filter by is_enabled only — connection_status from backend is unreliable.
+    // Promise.allSettled below will silently skip any node that truly can't be reached.
+    const connected = nodes.filter(n => n.is_enabled);
+    if (!connected.length) return { positions: [], nodes: [] };
+
+    const results = await Promise.allSettled(
+      connected.map(async n => {
+        const res = await fetchAPI<{ positions: MT5Position[]; total: number; generated_at: string }>(
+          `/api/v1/mt5/nodes/${n.id}/books/B/positions`
+        );
+        return { node: n, positions: (res.positions ?? []).map(p => ({ ...p, nodeName: n.node_name })) };
+      })
+    );
+
+    const positions: MT5PositionWithNode[] = [];
+    const respondingNodes: MT5NodeAPI[] = []; // ALL nodes that responded, even with 0 positions
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        positions.push(...r.value.positions);
+        respondingNodes.push(r.value.node);
+      }
+    }
+    return { positions, nodes: respondingNodes };
+  },
+};
+// ============================================
+// WebSocket — real-time feeds
+// ============================================
+
+const WS_BASE = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:8081';
+
+export type WsEnvelope<T = unknown> = {
+  topic:        string;
+  type:         string;
+  data:         T;
+  timestamp_ms: number;
+};
+
+export type BBookWsEvent =
+  | { type: 'SNAPSHOT';        data: MT5PositionWithNode[]         }
+  | { type: 'POSITION_ADD';    data: MT5PositionWithNode            }
+  | { type: 'POSITION_CHANGE'; data: MT5PositionWithNode            }
+  | { type: 'POSITION_DELETE'; data: { position_id: number }        }
+  | { type: 'subscribed';      data: { topics: string[] }           }
+  | { type: 'pong';            data: { timestamp_ms: number }       };
+
+/**
+ * Opens a managed WebSocket to the B-Book real-time feed.
+ * Returns a cleanup function — call it from useEffect cleanup to close gracefully.
+ */
+export function connectBBookWebSocket(
+  onMessage: (event: BBookWsEvent) => void,
+  onStatus?: (status: 'open' | 'closed' | 'error') => void
+): () => void {
+  const ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+
+  ws.onopen = () => {
+    onStatus?.('open');
+    ws.send(JSON.stringify({ type: 'subscribe', topics: ['mt5.position'] }));
+  };
+
+  ws.onmessage = (ev: MessageEvent<string>) => {
+    try {
+      onMessage(JSON.parse(ev.data) as BBookWsEvent);
+    } catch { /* ignore parse errors */ }
+  };
+
+  ws.onerror  = () => onStatus?.('error');
+  ws.onclose  = () => onStatus?.('closed');
+
+  return () => {
+    ws.onclose = null;   // prevent status callback firing on intentional close
+    ws.close(1000, 'Client disconnecting');
+  };
+}
+
+/** REST endpoint that mirrors WebSocketManager::GetStatsJSON() */
+export const wsApi = {
+  getStats: () =>
+    fetchAPI<{
+      connected_clients:            number;
+      total_msgs_sent:              number;
+      total_connections_accepted:   number;
+      total_connections_rejected:   number;
+      zmq_events_received:          number;
+      port:                         number;
+      io_threads:                   number;
+      max_connections:              number;
+      clients: {
+        remote_addr:   string;
+        msgs_sent:     number;
+        bytes_sent:    number;
+        subscriptions: string[];
+        connected_sec: number;
+      }[];
+    }>('/api/v1/ws/stats'),
 };

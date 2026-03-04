@@ -2385,28 +2385,42 @@ export function NodeManagementPage() {
 
   useEffect(() => { loadNodes(); }, [loadNodes]);
 
-  // ── Status polling every 10 seconds ──────────────────────
+  // ── Real-time node status via WebSocket mt5.node_status ──
   useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        const res = await mt5Api.getNodeStatus();
-        setNodes(prev => prev.map(n => {
-          const s = res.nodes.find(x => x.node_id === n.id);
-          if (!s) return n;
-          return {
-            ...n,
-            connection_status: s.connection_status as ConnStatus,
-            last_connected_at: s.last_connected_at ?? n.last_connected_at,
-            last_error: s.last_error ?? n.last_error,
-            is_master: s.is_master,
-          };
-        }));
-      } catch {
-        // Silent — don't interrupt the UI for polling errors
-      }
-    }, 10_000);
-    return () => clearInterval(timer);
-  }, []);
+    const WS_BASE = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:8081';
+    let ws: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let destroyed = false;
+    function connect() {
+      if (destroyed) return;
+      ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+      ws.onopen = () => {
+        ws?.send(JSON.stringify({ type: 'subscribe', topics: ['mt5.node_status'] }));
+      };
+      ws.onmessage = (ev: MessageEvent<string>) => {
+        try {
+          const envelope = JSON.parse(ev.data);
+          // Envelope shape: { topic, type: 'EVENT', data: { type, node_id, status, ... } }
+          if (envelope?.data?.type === 'NODE_STATUS_CHANGE') {
+            const { node_id, status } = envelope.data as { node_id: number; status: ConnStatus };
+            setNodes(prev => prev.map(n =>
+              n.id === node_id ? { ...n, connection_status: status } : n
+            ));
+          }
+        } catch { /* ignore parse errors */ }
+      };
+      ws.onclose = () => {
+        if (!destroyed) retryTimer = setTimeout(connect, 5000);
+      };
+      ws.onerror = () => ws?.close();
+    }
+    connect();
+    return () => {
+      destroyed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      ws?.close(1000, 'Component unmounting');
+    };
+  }, []); // empty deps — connect once on mount
 
   // ── CRUD handlers ─────────────────────────────────────────
   const handleSave = async (form: FormData) => {
@@ -2470,6 +2484,8 @@ export function NodeManagementPage() {
       setNodes(prev => prev.map(n => n.id === node.id ? { ...n, connection_status: 'ERROR' } : n));
       showToast((e as Error).message || 'Connection failed', 'error');
     }
+    // Re-fetch from backend to get true live state
+    await loadNodes();
   };
 
   const handleDisconnect = async (node: MT5Node) => {
@@ -2490,6 +2506,8 @@ export function NodeManagementPage() {
     } catch (e: unknown) {
       showToast((e as Error).message || 'Disconnect failed', 'error');
     }
+    // Re-fetch from backend to get true live state
+    await loadNodes();
   };
 
   const handlePromoteConfirm = async () => {
