@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { mt5Api, type MT5Position, type MT5NodeAPI } from '@/services/api';
+import { mt5Api, type MT5Position, type MT5PositionWithNode, type MT5NodeAPI } from '@/services/api';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 
@@ -259,7 +259,7 @@ function generateHedgeExposureData(hedges: ABookHedge[]): HedgeExposureRow[] {
 // Aggregates live MT5 B-Book positions (from the same endpoint as BBookPage) by symbol.
 // lpLabel: 'B-Book-{nodeName}' for a single server, 'B-Book-MT5-All Servers' for many.
 // ======================
-function aggregateBBookPositions(positions: MT5Position[], lpLabel: string): HedgeExposureRow[] {
+function aggregateBBookPositions(positions: MT5PositionWithNode[], lpLabel: string): HedgeExposureRow[] {
   if (!positions.length) return [];
 
   const riskLevels: Array<'Low' | 'Medium' | 'High' | 'Critical'> = ['Low', 'Medium', 'High', 'Critical'];
@@ -376,19 +376,19 @@ export function NetExposurePage() {
 
   const [hedges] = useState<ABookHedge[]>(() => generateMockHedges(100));
 
-  // B-Book live data
-  const [bBookPositions, setBBookPositions] = useState<MT5Position[]>([]);
-  const [masterNode, setMasterNode] = useState<MT5NodeAPI | null>(null);
+  // B-Book live data — ALL connected nodes in parallel
+  const [bBookPositions, setBBookPositions] = useState<MT5PositionWithNode[]>([]);
+  const [bBookNodes,     setBBookNodes]     = useState<MT5NodeAPI[]>([]);
+  const [filterServer,   setFilterServer]   = useState<string>('ALL');
 
   useEffect(() => {
     let cancelled = false;
     async function fetchBBook() {
       try {
-        const node = await mt5Api.getMasterNode();
-        if (cancelled || !node) return;
-        setMasterNode(node);
-        const res = await mt5Api.getBookPositions(node.id, 'B');
-        if (!cancelled) setBBookPositions(res.positions ?? []);
+        const { positions, nodes } = await mt5Api.getAllBBookPositions();
+        if (cancelled) return;
+        setBBookPositions(positions);
+        setBBookNodes(nodes);
       } catch {
         // silently fall through — no B-Book rows shown if fetch fails
       }
@@ -399,15 +399,27 @@ export function NetExposurePage() {
   }, []);
 
   const bBookLpLabel = useMemo(() => {
-    if (!masterNode) return 'B-Book';
-    return `B-Book-${masterNode.node_name}`;
-  }, [masterNode]);
+    if (!bBookNodes.length) return 'B-Book';
+    if (bBookNodes.length === 1) return `B-Book-${bBookNodes[0].node_name}`;
+    return 'B-Book-MT5-All Servers';
+  }, [bBookNodes]);
 
+  // Server selector options — built from responding nodes so always populated
+  const serverOptions = useMemo(
+    () => ['ALL', ...bBookNodes.map(n => n.node_name).sort()],
+    [bBookNodes]
+  );
+
+  // When a specific server is selected, re-aggregate B-Book from only that server's positions
   const hedgeExposureData = useMemo(() => {
-    const lpRows    = generateHedgeExposureData(hedges);
-    const bBookRows = aggregateBBookPositions(bBookPositions, bBookLpLabel);
-    return [...lpRows, ...bBookRows];
-  }, [hedges, bBookPositions, bBookLpLabel]);
+    const lpRows = generateHedgeExposureData(hedges);
+    if (filterServer === 'ALL') {
+      return [...lpRows, ...aggregateBBookPositions(bBookPositions, bBookLpLabel)];
+    }
+    const filtered = bBookPositions.filter(p => p.nodeName === filterServer);
+    const label = `B-Book-${filterServer}`;
+    return [...lpRows, ...aggregateBBookPositions(filtered, label)];
+  }, [hedges, bBookPositions, bBookLpLabel, filterServer]);
 
   // Get available LPs for the selected symbol
   const availableLps = useMemo(() => {
@@ -846,6 +858,19 @@ export function NetExposurePage() {
           >
             Collapse All
           </button>
+
+          <div className="h-4 w-px bg-[#555]" />
+
+          {/* Server selector */}
+          <select
+            value={filterServer}
+            onChange={(e) => setFilterServer(e.target.value)}
+            className="bg-[#232225] border border-[#555] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
+          >
+            {serverOptions.map(s => (
+              <option key={s} value={s}>{s === 'ALL' ? 'All Servers' : s}</option>
+            ))}
+          </select>
 
           <div className="h-4 w-px bg-[#555]" />
 

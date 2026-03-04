@@ -15,6 +15,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { mt5Routes } from './routes/mt5.js';
 import { predictionsRoutes } from './routes/predictions.js';
 import { fixBridgeRoutes } from './routes/fix-bridge.js';
+import { mt5WsRoutes } from './routes/mt5-ws.js';
 
 /**
  * Create and configure Fastify server
@@ -149,6 +150,9 @@ async function buildServer() {
   // =========================================================================
 
   await registerWebSocket(fastify);
+
+  // MT5 real-time WebSocket proxy (no /api/v1 prefix — raw WS path)
+  await fastify.register(mt5WsRoutes);
 
   // WebSocket stats endpoint (for monitoring)
   fastify.get(
