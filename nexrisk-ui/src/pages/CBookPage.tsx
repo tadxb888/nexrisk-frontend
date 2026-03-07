@@ -286,19 +286,25 @@ const DOM_DEPTH = 5; // Brief specifies 5 levels
 
 function enrichBook(data: any): BookData | null {
   if (!data) return null;
-  // bids[]/asks[] are correctly labelled from both WS and REST sources.
+  // The C++ backend contaminates bids[]/asks[] arrays with cross-side entries.
+  // best_bid and best_ask are always correct. Use them as guards to filter the arrays.
+  const refBid: number | null = data.best_bid ?? null;
+  const refAsk: number | null = data.best_ask ?? null;
   const rawBids: any[] = data.bids || [];
   const rawAsks: any[] = data.asks || [];
+  // Only keep bid entries at or below best_bid (if known), ask entries at or above best_ask
   const bids: BookLevel[] = rawBids
     .map((b: any) => ({ price: b.price, size: b.size }))
+    .filter((b: BookLevel) => refAsk == null || b.price < refAsk)  // exclude cross-side contamination
     .sort((a: BookLevel, b: BookLevel) => b.price - a.price)
     .slice(0, DOM_DEPTH);
   const asks: BookLevel[] = rawAsks
     .map((a: any) => ({ price: a.price, size: a.size }))
+    .filter((a: BookLevel) => refBid == null || a.price > refBid)  // exclude cross-side contamination
     .sort((a: BookLevel, b: BookLevel) => a.price - b.price)
     .slice(0, DOM_DEPTH);
-  const bestBid = bids[0]?.price ?? data.best_bid ?? null;
-  const bestAsk = asks[0]?.price ?? data.best_ask ?? null;
+  const bestBid = refBid ?? bids[0]?.price ?? null;
+  const bestAsk = refAsk ?? asks[0]?.price ?? null;
   if (bestBid == null || bestAsk == null) return null;
   const spread  = +(bestAsk - bestBid).toFixed(5);
   return { symbol: data.symbol ?? '', best_bid: bestBid, best_ask: bestAsk, spread, bids, asks, last_update_ts: data.last_update_ts ?? Date.now() };
@@ -349,7 +355,7 @@ export function CBookPage() {
   const [livePositions, setLivePositions] = useState<CBookOrder[]>([]);
   const [sessionOrders, setSessionOrders] = useState<CBookOrder[]>([]);
   const [posLoading, setPosLoading]       = useState(false);
-  const [timePeriod, setTimePeriod]       = useState<'today' | 'week' | 'month'>('week');
+  const [timePeriod, setTimePeriod]       = useState<'today' | 'week' | 'month'>('today');
   const instrCacheRef = useRef<Record<string, Record<string, FIXInstrument>>>({});
 
   // ── Close-mode ────────────────────────────────────────────────────────────
@@ -472,11 +478,17 @@ export function CBookPage() {
   }, [domLpId]);
 
   // ── Grid: fetch positions for selected LP ────────────────────────────────
+  // Initial load goes through React state (shows loading indicator).
+  // Subsequent 15-second polls bypass React state entirely — they call
+  // gridApi.applyTransaction() directly so no React re-render occurs and
+  // the grid never scrolls or jumps.
   useEffect(() => {
     if (!gridLpId) { setLivePositions([]); return; }
     let cancelled = false;
+    let firstLoad = true;
+
     const fetchPositions = async () => {
-      setPosLoading(true);
+      if (firstLoad) setPosLoading(true);
       try {
         if (!instrCacheRef.current[gridLpId]) {
           const ir = await bff<{ success: boolean; data: { instruments: FIXInstrument[] } }>(`/api/v1/fix/lp/${gridLpId}/instruments`);
@@ -486,20 +498,39 @@ export function CBookPage() {
             instrCacheRef.current[gridLpId] = map;
           }
         }
-        // Brief Section 4.4 / 11: GET /fix/positions/{lp_id}
         const r = await bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${gridLpId}`);
         if (cancelled || !r.success) return;
         const instrMap = instrCacheRef.current[gridLpId] ?? {};
-        // Brief Section 3.2: use position_id + open_price > 0 for open detection (NOT side/qty)
-        setLivePositions(
-          r.data.positions
-            .filter((p) => p.position_id !== '' && p.open_price > 0)
-            .map((p) => positionToCBook(p, gridLpId, instrMap))
-        );
+        const incoming = r.data.positions
+          .filter((p) => p.position_id !== '' && p.open_price > 0)
+          .map((p) => positionToCBook(p, gridLpId, instrMap));
+
+        if (firstLoad) {
+          // Initial load: go through React state so the grid mounts with data
+          setLivePositions(incoming);
+        } else {
+          // Subsequent polls: update the grid directly without touching React state
+          const api = gridRef.current?.api;
+          if (!api) { setLivePositions(incoming); return; }
+          const existingIds = new Set<string>();
+          api.forEachNode((node) => { if (node.data) existingIds.add(node.data.id); });
+          const incomingIds = new Set(incoming.map((r) => r.id));
+          const toAdd    = incoming.filter((r) => !existingIds.has(r.id));
+          const toUpdate = incoming.filter((r) =>  existingIds.has(r.id));
+          const toRemove = [...existingIds].filter((id) => !incomingIds.has(id))
+            .map((id) => ({ id } as CBookOrder));
+          if (toAdd.length || toUpdate.length || toRemove.length) {
+            api.applyTransaction({ add: toAdd, update: toUpdate, remove: toRemove });
+          }
+        }
       } catch {
-        if (!cancelled) setLivePositions([]);
+        if (cancelled) return;
+        if (firstLoad) setLivePositions([]);
       } finally {
-        if (!cancelled) setPosLoading(false);
+        if (!cancelled) {
+          if (firstLoad) setPosLoading(false);
+          firstLoad = false;
+        }
       }
     };
     fetchPositions();
@@ -578,13 +609,12 @@ export function CBookPage() {
         try {
           const r = await bff<{ success: boolean; data: any }>(`/api/v1/fix/md/book/${lpId}/${sym}`);
           if (cancelled || !r.success || !r.data) return;
-          const rd = r.data;
-          const restRaw = (rd?.bids != null || rd?.asks != null) ? rd : (rd?.data ?? rd);
-          const book = enrichBook(restRaw);
+          const book = enrichBook(r.data);
           if (book) { setLiveBook(book); setBookStatus('HEALTHY'); }
         } catch (e) { console.warn('[CBook POLL] fetchBook error:', e); }
       };
       await fetchBook();
+      bookPollRef.current = setInterval(fetchBook, 1000);
 
       // Step 5: GET /positions/{lp_id}
       try {
@@ -659,17 +689,12 @@ export function CBookPage() {
           // flashing to null between each snapshot.
           if (
             msg.type === 'MARKET_DATA_SNAPSHOT' ||
-            msg.type === 'MD_SNAPSHOT'
+            msg.type === 'MD_SNAPSHOT' ||
+            msg.type === 'MARKET_DATA_INCREMENTAL' ||
+            msg.type === 'MD_INCREMENTAL'
           ) {
-            // NexRiskService wraps the ZMQ payload as envelope.data.
-            // ZMQ payload may have book fields at top level (flat) or nested under .data (wrapped).
-            // Flat:    msg.data = { symbol, bids, asks, best_bid, best_ask, ... }
-            // Wrapped: msg.data = { type, lp_id, data: { symbol, bids, asks, ... }, ... }
-            const outerData = msg.data ?? msg;
-            const bookRaw = (outerData?.bids != null || outerData?.asks != null)
-              ? outerData                      // flat — bids/asks at outerData level
-              : (outerData?.data ?? outerData); // wrapped — drill into .data
-            const sym = bookRaw?.symbol ?? outerData?.symbol ?? msg.symbol;
+            const bookRaw = msg.data ?? msg;
+            const sym = bookRaw.symbol ?? msg.symbol;
             if (!sym) return;                                    // no symbol → skip
             if (sym !== wsSymbolRef.current) return;             // wrong symbol → skip
             if (msg.lp_id && msg.lp_id !== wsLpIdRef.current) return;
@@ -975,6 +1000,10 @@ export function CBookPage() {
     enableAdvancedFilter: true,
     sideBar: { toolPanels: ['columns'], defaultToolPanel: '' },
     columnHoverHighlight: true, animateRows: false, rowBuffer: 20,
+    suppressScrollOnNewData: true,
+    suppressAnimationFrame: true,
+    alwaysShowVerticalScroll: true,
+    suppressRowHoverHighlight: false,
     statusBar: {
       statusPanels: [
         { statusPanel: 'agTotalAndFilteredRowCountComponent' },
@@ -1045,7 +1074,7 @@ export function CBookPage() {
         </div>
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-2">
-            <span className="text-[#666]">View LP:</span>
+            <span className="text-[#aaa]">View LP:</span>
             {lpsLoading ? <span className="text-[#555]">…</span> : (
               <select
                 value={gridLpId}
@@ -1073,20 +1102,20 @@ export function CBookPage() {
             <option value="month">This Month</option>
           </select>
           <div className="w-px h-4 bg-[#555]" />
-          <div><span className="text-[#666]">Pos:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
+          <div><span className="text-[#aaa]">Pos:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
           <div>
-            <span className="text-[#666]">L/S:</span>
+            <span className="text-[#aaa]">L/S:</span>
             <span className="ml-1 font-mono">
               <span className="text-[#4ecdc4]">{stats.buys}</span>
               <span className="text-[#444]"> / </span>
               <span className="text-[#e0a020]">{stats.sells}</span>
             </span>
           </div>
-          <div><span className="text-[#666]">Vol:</span><span className="ml-1 font-mono text-white">{stats.volume.toFixed(2)}</span></div>
+          <div><span className="text-[#aaa]">Vol:</span><span className="ml-1 font-mono text-white">{stats.volume.toFixed(2)}</span></div>
           <div className="w-px h-4 bg-[#555]" />
-          <div><span className="text-[#666]">H:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Hedge }}>{stats.hedge}</span></div>
-          <div><span className="text-[#666]">O:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Opportunity }}>{stats.opp}</span></div>
-          <div><span className="text-[#666]">R:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Repair }}>{stats.rep}</span></div>
+          <div><span className="text-[#aaa]">H:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Hedge }}>{stats.hedge}</span></div>
+          <div><span className="text-[#aaa]">O:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Opportunity }}>{stats.opp}</span></div>
+          <div><span className="text-[#aaa]">R:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Repair }}>{stats.rep}</span></div>
         </div>
       </div>
 
@@ -1165,17 +1194,17 @@ export function CBookPage() {
           {account && (
             <div className="px-3 py-1.5 border-b border-[#333] flex-shrink-0 grid grid-cols-3 gap-x-2 text-[10px]" style={{ backgroundColor: '#191a1c' }}>
               <div>
-                <div className="text-[#444] mb-px">Balance</div>
+                <div className="text-[#ccc] mb-px">Balance</div>
                 <div className="font-mono text-white">{fmtAcct(account.balance)}</div>
               </div>
               <div>
-                <div className="text-[#444] mb-px">Equity</div>
+                <div className="text-[#ccc] mb-px">Equity</div>
                 <div className="font-mono" style={{ color: account.equity >= account.balance ? '#4ecdc4' : '#e0a020' }}>
                   {fmtAcct(account.equity)}
                 </div>
               </div>
               <div>
-                <div className="text-[#444] mb-px">Free Margin</div>
+                <div className="text-[#ccc] mb-px">Free Margin</div>
                 <div className="font-mono text-white">{fmtAcct(account.margin_available)}</div>
               </div>
             </div>
@@ -1184,11 +1213,11 @@ export function CBookPage() {
           {/* LP session state (from brief Section 4.1) */}
           {lpStatus && (
             <div className="px-3 py-1 border-b border-[#333] flex items-center gap-3 text-[10px] flex-shrink-0" style={{ backgroundColor: '#191a1c' }}>
-              <span className="text-[#444]">Trading:</span>
+              <span className="text-white">Trading:</span>
               <span style={{ color: lpStatus.trading_session.state === 'LOGGED_ON' ? '#4ecdc4' : '#e0a020' }}>
                 {lpStatus.trading_session.state}
               </span>
-              <span className="text-[#444]">MD:</span>
+              <span className="text-white">MD:</span>
               <span style={{ color: lpStatus.md_session.state === 'LOGGED_ON' ? '#4ecdc4' : '#e0a020' }}>
                 {lpStatus.md_session.state}
               </span>
@@ -1198,7 +1227,7 @@ export function CBookPage() {
           {/* ── LP Selector ──────────────────────────────────────────────────── */}
           <div className="px-3 py-2 border-b border-[#555] flex-shrink-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-[#555] w-5 flex-shrink-0">LP</span>
+              <span className="text-[10px] text-white w-5 flex-shrink-0">LP</span>
               <select
                 value={domLpId}
                 onChange={(e) => {
@@ -1234,7 +1263,7 @@ export function CBookPage() {
           {/* ── Symbol Selector ──────────────────────────────────────────────── */}
           <div className="px-3 py-2 border-b border-[#555] flex-shrink-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-[#555] w-5 flex-shrink-0">SYM</span>
+              <span className="text-[10px] text-white w-5 flex-shrink-0">SYM</span>
               <button
                 onClick={() => { if (domLpId && !closeRow) setShowPicker((v) => !v); }}
                 disabled={!domLpId || instrLoading || !!closeRow}
@@ -1298,15 +1327,15 @@ export function CBookPage() {
             {liveBook && liveBook.best_bid != null ? (
               <div className="grid grid-cols-3 text-[10px]">
                 <div>
-                  <div className="text-[#555] mb-0.5">Best Bid</div>
+                  <div className="text-white mb-0.5">Best Bid</div>
                   <div className="font-mono font-bold" style={{ color: '#4ecdc4' }}>{liveBook.best_bid.toFixed(instrDecimals)}</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-[#555] mb-0.5">Spread</div>
+                  <div className="text-white mb-0.5">Spread</div>
                   <div className="font-mono text-white">{liveBook.spread != null ? liveBook.spread.toFixed(instrDecimals) : '—'}</div>
                 </div>
                 <div className="text-right">
-                  <div className="text-[#555] mb-0.5">Best Ask</div>
+                  <div className="text-white mb-0.5">Best Ask</div>
                   <div className="font-mono font-bold" style={{ color: '#e0a020' }}>{liveBook.best_ask?.toFixed(instrDecimals) ?? '—'}</div>
                 </div>
               </div>
@@ -1331,7 +1360,7 @@ export function CBookPage() {
           <div className="px-2 py-1 border-b border-[#555] flex-shrink-0">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-[#444]">
+                <tr className="text-white">
                   <th className="text-right py-0.5 pr-1.5 font-normal text-[10px]">Size</th>
                   <th className="text-center py-0.5 font-normal text-[10px]">Bid</th>
                   <th className="text-center py-0.5 font-normal text-[10px]">Ask</th>
@@ -1429,31 +1458,19 @@ export function CBookPage() {
 
             {/* Quantity */}
             <div className="mb-2">
-              <div className="flex items-center gap-1 mb-0.5">
-                <input type="text" value={domQtyLots}
-                  onChange={(e) => setDomQtyLots(e.target.value.replace(/[^0-9.]/g, ''))}
-                  disabled={!isConnected && !closeRow}
-                  placeholder="Quantity (lots)"
-                  className={clsx(
-                    'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4] placeholder-[#444]',
-                    closeRow && 'border-[#a78bfa44]',
-                    (!isConnected && !closeRow) && 'opacity-40'
-                  )}
-                />
-                {isConnected && (
-                  <div className="flex flex-col gap-px">
-                    {([0.1, 0.5, 1] as const).map((s) => (
-                      <button key={s}
-                        onClick={() => setDomQtyLots((v) => (Math.max(0, parseFloat(v || '0') + s)).toFixed(s < 1 ? 1 : 0))}
-                        disabled={submitting}
-                        className="px-1 py-px text-[9px] text-[#555] hover:text-white bg-[#2a2a2c] border border-[#444] rounded hover:border-[#666] transition-colors"
-                      >+{s}</button>
-                    ))}
-                  </div>
+              <div className="text-[10px] text-white mb-1">Quantity (Units)</div>
+              <input type="text" value={domQtyLots}
+                onChange={(e) => setDomQtyLots(e.target.value.replace(/[^0-9.]/g, ''))}
+                disabled={!isConnected && !closeRow}
+                placeholder="0.00"
+                className={clsx(
+                  'w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4] placeholder-[#555]',
+                  closeRow && 'border-[#a78bfa44]',
+                  (!isConnected && !closeRow) && 'opacity-40'
                 )}
-              </div>
+              />
               {domQtyLots && activeInstrument && (
-                <div className="text-[10px] text-[#444]">
+                <div className="text-[10px] text-white mt-0.5">
                   {(parseFloat(domQtyLots) * activeInstrument.min_trade_vol).toLocaleString()} units
                 </div>
               )}
@@ -1461,17 +1478,25 @@ export function CBookPage() {
 
             {/* SL / TP */}
             {!closeRow && slTpSupported && (
-              <div className="flex gap-2 mb-2">
-                <input type="text" value={stopLoss}
-                  onChange={(e) => setStopLoss(e.target.value.replace(/[^0-9.]/g, ''))}
-                  disabled={!isConnected || submitting} placeholder="Stop Loss"
-                  className="flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#ff6b6b] placeholder-[#444]"
-                />
-                <input type="text" value={takeProfit}
-                  onChange={(e) => setTakeProfit(e.target.value.replace(/[^0-9.]/g, ''))}
-                  disabled={!isConnected || submitting} placeholder="Take Profit"
-                  className="flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4] placeholder-[#444]"
-                />
+              <div className="mb-2">
+                <div className="flex gap-2 mb-1">
+                  <div className="flex-1 min-w-0">
+                  <div className="text-[10px] text-white mb-1">Stop Loss</div>
+                    <input type="text" value={stopLoss}
+                      onChange={(e) => setStopLoss(e.target.value.replace(/[^0-9.]/g, ''))}
+                      disabled={!isConnected || submitting} placeholder="0.00000"
+                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#ff6b6b] placeholder-[#555]"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] text-white mb-1">Take Profit</div>
+                    <input type="text" value={takeProfit}
+                      onChange={(e) => setTakeProfit(e.target.value.replace(/[^0-9.]/g, ''))}
+                      disabled={!isConnected || submitting} placeholder="0.00000"
+                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4] placeholder-[#555]"
+                    />
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1497,14 +1522,14 @@ export function CBookPage() {
           {/* ── Execution Log ─────────────────────────────────────────────────── */}
           <div className="flex-1 overflow-y-auto min-h-0" style={{ backgroundColor: '#161618' }}>
             <div className="px-3 py-1.5 flex items-center justify-between border-b border-[#222] sticky top-0" style={{ backgroundColor: '#161618' }}>
-              <span className="text-[10px] text-[#444] uppercase tracking-wider">Order Execution</span>
+              <span className="text-[10px] text-white uppercase tracking-wider">Order Execution</span>
               {execLog.length > 0 && (
-                <button onClick={() => setExecLog([])} className="text-[10px] text-[#333] hover:text-[#777] transition-colors">clear</button>
+                <button onClick={() => setExecLog([])} className="text-[10px] text-[#555] hover:text-[#aaa] transition-colors">clear</button>
               )}
             </div>
 
             {execLog.length === 0 ? (
-              <div className="px-3 py-3 text-[10px] text-[#333]">
+              <div className="px-3 py-3 text-[10px] text-[#777]">
                 {!domLpId ? 'Select an LP to begin' : !domSymbol ? 'Select a symbol' : 'No orders this session'}
               </div>
             ) : execLog.map((e, idx) => (
@@ -1521,14 +1546,14 @@ export function CBookPage() {
                   </span>
                 </div>
                 {e.status === 'SENT' && (
-                  <div className="text-[10px] text-[#555] font-mono mb-0.5">
+                  <div className="text-[10px] text-[#777] font-mono mb-0.5">
                     FIX: <span className="text-[#777]">{e.clord_id}</span>
                   </div>
                 )}
                 {e.rejectReason && (
                   <div className="text-[10px] text-[#ff6b6b] mb-0.5">{e.rejectReason}</div>
                 )}
-                <div className="text-[10px] text-[#383838]">
+                <div className="text-[10px] text-[#666]">
                   {new Date(e.ts).toLocaleTimeString()} · {e.lpId} · {e.orderType}/{e.tif}
                 </div>
               </div>

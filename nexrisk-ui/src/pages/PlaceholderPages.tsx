@@ -2,6 +2,9 @@
 // Placeholder Pages
 // ============================================
 
+// ExecutionReport has its own module — re-export so existing router imports keep working
+export { ExecutionReportPage } from './ExecutionReport';
+
 export function HedgeRulesPage() {
   return (
     <div className="h-full flex flex-col p-4">
@@ -33,25 +36,6 @@ export function PriceRulesPage() {
       <div className="flex-1 flex items-center justify-center panel">
         <div className="text-center">
           <p className="text-text-muted mb-2">Price Rules Configuration</p>
-          <p className="text-sm text-text-secondary">Coming soon</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function ExecutionReportPage() {
-  return (
-    <div className="h-full flex flex-col p-4">
-      <div className="mb-4">
-        <h1 className="text-lg font-medium text-text-primary">Execution Report</h1>
-        <p className="text-sm text-text-secondary">
-          Trade execution analysis and slippage metrics
-        </p>
-      </div>
-      <div className="flex-1 flex items-center justify-center panel">
-        <div className="text-center">
-          <p className="text-text-muted mb-2">Execution Report Module</p>
           <p className="text-sm text-text-secondary">Coming soon</p>
         </div>
       </div>
