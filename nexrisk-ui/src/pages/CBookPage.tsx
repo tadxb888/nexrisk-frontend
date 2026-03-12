@@ -134,6 +134,10 @@ interface FIXPosition {
   commission: number;
   swap: number;
   received_ts: number;
+  stop_loss?: number;
+  take_profit?: number;
+  unrealized_pnl?: number;
+  current_price?: number;
 }
 
 // Brief Section 7.4: ACCOUNT_STATUS fires every ~2 s from TE
@@ -170,6 +174,10 @@ interface FIXOrderResp {
 // =============================================================================
 // SEED DATA — keeps UI functional if LP is disconnected / ZMQ in bad state
 // =============================================================================
+// Stable reference passed to AG Grid rowData — never changes so AG Grid never reconciles.
+// All grid data changes go through applyTransaction only.
+const GRID_STABLE_EMPTY: CBookOrder[] = [];
+
 const SEED_LPS: FIXLpEntry[] = [
   { lp_id: 'traderevolution', lp_name: 'TraderEvolution Sandbox', state: 'CONNECTED',    provider_type: 'traderevolution' },
   { lp_id: 'lmax-demo',       lp_name: 'LMAX Demo',               state: 'DISCONNECTED', provider_type: 'lmax'            },
@@ -224,11 +232,16 @@ export interface CBookOrder {
   symbol: string;
   positionId: string;
   side: CBookSide | 'FLAT';
-  volume: number;
-  rawQty: number;
+  volume: number;       // lots — used for P/L calc, close logic; do not display
+  rawQty: number;       // lots — used for close pre-fill
+  displayQty: number;   // units as typed by user — display only
   lpName: string;
   lpAccount: string;
   fillPrice: number;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  unrealizedPnl: number | null;
+  currentPrice: number | null;
   type: CBookOrderType;
   comments: string;
   _lpId: string;
@@ -246,6 +259,24 @@ interface ExecEntry {
   lpId: string;
   status: 'SENT' | 'REJECTED';
   rejectReason?: string;
+}
+
+interface FIXMessage {
+  seq_num: number;
+  direction: 'sent' | 'received';
+  msg_type: string;
+  msg_type_name: string;
+  timestamp: string;
+  raw: string;
+}
+
+interface FIXMessage {
+  seq_num: number;
+  direction: 'sent' | 'received';
+  msg_type: string;
+  msg_type_name: string;
+  timestamp: string;
+  raw: string;
 }
 
 const TYPE_COLORS: Record<CBookOrderType, string> = {
@@ -270,6 +301,12 @@ const fmtTime = (p: ValueFormatterParams) => {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
 };
 
+const fmtTimeUTC = (p: ValueFormatterParams) => {
+  if (!p.value) return '';
+  const d = new Date(p.value);
+  return `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}:${String(d.getUTCSeconds()).padStart(2,'0')}.${String(d.getUTCMilliseconds()).padStart(3,'0')}`;
+};
+
 const fmtPrice = (p: ValueFormatterParams) => {
   const v = p.value; const sym = p.data?.symbol || '';
   if (v === null || v === undefined) return '';
@@ -284,30 +321,117 @@ function toLots(rawQty: number, minVol: number): number {
 
 const DOM_DEPTH = 5; // Brief specifies 5 levels
 
-function enrichBook(data: any): BookData | null {
-  if (!data) return null;
-  // The C++ backend contaminates bids[]/asks[] arrays with cross-side entries.
-  // best_bid and best_ask are always correct. Use them as guards to filter the arrays.
+/**
+ * buildBookFromMaps — render BookData from accumulated local bid/ask price→size maps.
+ * Called after every mutation so the DOM always reflects the full accumulated depth.
+ */
+function buildBookFromMaps(
+  symbol: string,
+  bidsMap: Map<number, number>,
+  asksMap: Map<number, number>,
+): BookData | null {
+  const bids: BookLevel[] = [...bidsMap.entries()]
+    .map(([price, size]) => ({ price, size }))
+    .sort((a, b) => b.price - a.price)   // highest bid first
+    .slice(0, DOM_DEPTH);
+  const asks: BookLevel[] = [...asksMap.entries()]
+    .map(([price, size]) => ({ price, size }))
+    .sort((a, b) => a.price - b.price)   // lowest ask first
+    .slice(0, DOM_DEPTH);
+  const bestBid = bids[0]?.price ?? null;
+  const bestAsk = asks[0]?.price ?? null;
+  if (bestBid == null || bestAsk == null) return null;
+  const spread = +(bestAsk - bestBid).toFixed(5);
+  return { symbol, best_bid: bestBid, best_ask: bestAsk, spread, bids, asks, last_update_ts: Date.now() };
+}
+
+/**
+ * primeBookFromRest — seed local maps from REST GET /md/book response (full depth).
+ * TE adapter sends bids[]/asks[] swapped; detect and correct before seeding.
+ */
+function primeBookFromRest(
+  data: any,
+  bidsMap: Map<number, number>,
+  asksMap: Map<number, number>,
+): void {
+  if (!data) return;
+  let rawBids: any[] = data.bids || [];
+  let rawAsks: any[] = data.asks || [];
   const refBid: number | null = data.best_bid ?? null;
   const refAsk: number | null = data.best_ask ?? null;
-  const rawBids: any[] = data.bids || [];
-  const rawAsks: any[] = data.asks || [];
-  // Only keep bid entries at or below best_bid (if known), ask entries at or above best_ask
-  const bids: BookLevel[] = rawBids
-    .map((b: any) => ({ price: b.price, size: b.size }))
-    .filter((b: BookLevel) => refAsk == null || b.price < refAsk)  // exclude cross-side contamination
-    .sort((a: BookLevel, b: BookLevel) => b.price - a.price)
-    .slice(0, DOM_DEPTH);
-  const asks: BookLevel[] = rawAsks
-    .map((a: any) => ({ price: a.price, size: a.size }))
-    .filter((a: BookLevel) => refBid == null || a.price > refBid)  // exclude cross-side contamination
-    .sort((a: BookLevel, b: BookLevel) => a.price - b.price)
-    .slice(0, DOM_DEPTH);
-  const bestBid = refBid ?? bids[0]?.price ?? null;
-  const bestAsk = refAsk ?? asks[0]?.price ?? null;
-  if (bestBid == null || bestAsk == null) return null;
-  const spread  = +(bestAsk - bestBid).toFixed(5);
-  return { symbol: data.symbol ?? '', best_bid: bestBid, best_ask: bestAsk, spread, bids, asks, last_update_ts: data.last_update_ts ?? Date.now() };
+  if (refBid != null && refAsk != null && refBid > refAsk) {
+    [rawBids, rawAsks] = [rawAsks, rawBids];
+  }
+  bidsMap.clear();
+  asksMap.clear();
+  for (const b of rawBids) if (b.price && b.size) bidsMap.set(Number(b.price), Number(b.size));
+  for (const a of rawAsks) if (a.price && a.size) asksMap.set(Number(a.price), Number(a.size));
+}
+
+/**
+ * applyBookMessage — apply a WS market data message to local book maps.
+ *
+ * MARKET_DATA_SNAPSHOT  → full replacement via primeBookFromRest
+ * MARKET_DATA_INCREMENTAL:
+ *   Format A: entries[] (standard spec) → NEW/CHANGE sets, DELETE removes
+ *   Format B: bids[]/asks[] (TE adapter normalised) → merge top-of-book changes,
+ *             preserving other depth levels already in the maps
+ *
+ * Returns true if maps were mutated (caller should re-render).
+ */
+function applyBookMessage(
+  data: any,
+  type: string,
+  bidsMap: Map<number, number>,
+  asksMap: Map<number, number>,
+): boolean {
+  if (!data) return false;
+  const isSnapshot    = type === 'MARKET_DATA_SNAPSHOT' || type === 'MD_SNAPSHOT';
+  const isIncremental = type === 'MARKET_DATA_INCREMENTAL' || type === 'MD_INCREMENTAL';
+  if (!isSnapshot && !isIncremental) return false;
+
+  if (isSnapshot) {
+    primeBookFromRest(data, bidsMap, asksMap);
+    return bidsMap.size > 0 || asksMap.size > 0;
+  }
+
+  // Incremental: Format A — entries[]
+  if (Array.isArray(data.entries) && data.entries.length > 0) {
+    for (const e of data.entries) {
+      const map = (e.entry_type === 'BID') ? bidsMap : asksMap;
+      if (e.action === 'DELETE' || e.size === 0) {
+        map.delete(Number(e.price));
+      } else {
+        map.set(Number(e.price), Number(e.size));
+      }
+    }
+    return true;
+  }
+
+  // Incremental: Format B — bids[]/asks[] (TE normalised, contains changed levels)
+  let rawBids: any[] = data.bids || [];
+  let rawAsks: any[] = data.asks || [];
+  const refBid: number | null = data.best_bid ?? null;
+  const refAsk: number | null = data.best_ask ?? null;
+  if (refBid != null && refAsk != null && refBid > refAsk) {
+    [rawBids, rawAsks] = [rawAsks, rawBids];
+  }
+  bidsMap.clear();
+  asksMap.clear();
+  let mutated = false;
+  for (const b of rawBids) {
+    if (b.price != null && b.size != null) {
+      bidsMap.set(Number(b.price), Number(b.size));
+      mutated = true;
+    }
+  }
+  for (const a of rawAsks) {
+    if (a.price != null && a.size != null) {
+      asksMap.set(Number(a.price), Number(a.size));
+      mutated = true;
+    }
+  }
+  return mutated;
 }
 
 /**
@@ -327,12 +451,24 @@ function positionToCBook(pos: FIXPosition, lpId: string, instrMap: Record<string
     dealerId:   pos.account,
     symbol:     pos.symbol,
     positionId: pos.position_id,
-    side:       pos.side === 'LONG' ? 'BUY' : pos.side === 'SHORT' ? 'SELL' : 'FLAT',
-    volume:     toLots(Math.abs(pos.net_qty), minVol),
+    // TE always sends side='FLAT' — derive direction from quantities.
+    side: (() => {
+      if (pos.side === 'LONG'  || pos.side === 'BUY')  return 'BUY';
+      if (pos.side === 'SHORT' || pos.side === 'SELL') return 'SELL';
+      if (pos.long_qty  > 0 && pos.short_qty === 0)   return 'BUY';
+      if (pos.short_qty > 0 && pos.long_qty  === 0)   return 'SELL';
+      return 'FLAT';
+    })(),
+    volume:     Math.abs(pos.net_qty),
     rawQty:     Math.abs(pos.net_qty),
+    displayQty: Math.abs(pos.net_qty) * minVol,
     lpName:     lpId,
     lpAccount:  pos.account,
     fillPrice:  pos.open_price,
+    stopLoss:   pos.stop_loss   ?? null,
+    takeProfit: pos.take_profit ?? null,
+    unrealizedPnl: pos.unrealized_pnl ?? null,
+    currentPrice:  pos.current_price  ?? null,
     type:       'Hedge',
     comments:   `swap:${(pos.swap ?? 0).toFixed(2)}  comm:${(pos.commission ?? 0).toFixed(2)}`,
     _lpId:      lpId,
@@ -353,6 +489,17 @@ export function CBookPage() {
   // ── Grid ──────────────────────────────────────────────────────────────────
   const [gridLpId, setGridLpId]           = useState<string>('');
   const [livePositions, setLivePositions] = useState<CBookOrder[]>([]);
+  const currentPricesRef = useRef<Map<string, number>>(new Map()); // symbol → mid price
+  // Symbols that have open positions — used to subscribe MD for P&L ticks on all positions,
+  // not just the DOM symbol. Updated whenever livePositions changes.
+  const positionSymbolsRef    = useRef<Set<string>>(new Set());
+  // Symbols already subscribed for position P&L price feed (avoid duplicate subscribes)
+  const posSubscribedRef      = useRef<Set<string>>(new Set());
+  const [useLocalTime, setUseLocalTime] = useState<boolean>(true);
+  const [execPanelOpen, setExecPanelOpen] = useState<boolean>(false);
+  const [selectedExec, setSelectedExec]   = useState<ExecEntry | null>(null);
+  const [fixMessages, setFixMessages]     = useState<FIXMessage[]>([]);
+  const [fixMessagesLoading, setFixMessagesLoading] = useState(false);
   const [sessionOrders, setSessionOrders] = useState<CBookOrder[]>([]);
   const [posLoading, setPosLoading]       = useState(false);
   const [timePeriod, setTimePeriod]       = useState<'today' | 'week' | 'month'>('today');
@@ -378,15 +525,27 @@ export function CBookPage() {
     max_order_qty: 10000000, min_order_qty: 1000, custom_fields: { sl_tp: false },
   };
 
-  const [liveBook, setLiveBook]     = useState<BookData | null>(null);
+  // liveBook stored in a ref — avoids React re-render (and gridRows recompute) on every MD tick.
+  // A throttled state counter drives DOM panel re-renders at max 100ms intervals.
+  const liveBookRef               = useRef<BookData | null>(null);
+  const [liveBook, setLiveBook]   = useState<BookData | null>(null);
+  const bookRenderTimer           = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingBookRef            = useRef<BookData | null>(null);
   const [bookStatus, setBookStatus] = useState<string>('—');
 
   // Refs for WS handler closures
-  const bookPollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const subscribedRef = useRef<string>('');
   const wsRef         = useRef<WebSocket | null>(null);
   const wsSymbolRef   = useRef<string>('');
   const wsLpIdRef     = useRef<string>('');
+  // Always mirrors gridLpId so WS handlers work even when wsLpIdRef is '' (no DOM symbol).
+  const gridLpIdRef   = useRef<string>('');
+  const bookSeededRef = useRef<boolean>(false);
+  // Track optimistically-closed position IDs so poll results don't ghost them back.
+  const closedPositionIdsRef = useRef<Set<string>>(new Set());
+  // Local accumulated book state — updated by applyBookMessage, rendered via setLiveBook
+  const localBidsRef  = useRef<Map<number, number>>(new Map());
+  const localAsksRef  = useRef<Map<number, number>>(new Map());
 
   const [domOrderType, setDomOrderType] = useState<string>('MARKET');
   const [domTif, setDomTif]             = useState<string>('GTC');
@@ -483,6 +642,7 @@ export function CBookPage() {
   // gridApi.applyTransaction() directly so no React re-render occurs and
   // the grid never scrolls or jumps.
   useEffect(() => {
+    gridLpIdRef.current = gridLpId;
     if (!gridLpId) { setLivePositions([]); return; }
     let cancelled = false;
     let firstLoad = true;
@@ -503,11 +663,26 @@ export function CBookPage() {
         const instrMap = instrCacheRef.current[gridLpId] ?? {};
         const incoming = r.data.positions
           .filter((p) => p.position_id !== '' && p.open_price > 0)
+          .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
           .map((p) => positionToCBook(p, gridLpId, instrMap));
 
         if (firstLoad) {
-          // Initial load: go through React state so the grid mounts with data
+          // Seed grid via applyTransaction — never via rowData prop (causes row reordering).
+          // setLivePositions kept for stats panel only.
           setLivePositions(incoming);
+          const api = gridRef.current?.api;
+          if (api) api.applyTransaction({ add: incoming });
+          // Subscribe MD for every open position symbol so currentPrice updates
+          // even when the DOM panel is showing a different symbol.
+          const syms = [...new Set(incoming.map((p) => p.symbol))];
+          for (const sym of syms) {
+            if (!posSubscribedRef.current.has(sym)) {
+              posSubscribedRef.current.add(sym);
+              bff('/api/v1/fix/md/subscribe', {
+                method: 'POST', body: JSON.stringify({ lp_id: gridLpId, symbol: sym, depth: 1 }),
+              }).catch(() => {});
+            }
+          }
         } else {
           // Subsequent polls: update the grid directly without touching React state
           const api = gridRef.current?.api;
@@ -519,8 +694,12 @@ export function CBookPage() {
           const toUpdate = incoming.filter((r) =>  existingIds.has(r.id));
           const toRemove = [...existingIds].filter((id) => !incomingIds.has(id))
             .map((id) => ({ id } as CBookOrder));
-          if (toAdd.length || toUpdate.length || toRemove.length) {
-            api.applyTransaction({ add: toAdd, update: toUpdate, remove: toRemove });
+          // add/remove via applyTransaction; updates via node.setData() which
+          // does NOT trigger sort re-evaluation so rows never swap position.
+          if (toAdd.length)    api.applyTransaction({ add: toAdd });
+          if (toRemove.length) api.applyTransaction({ remove: toRemove });
+          for (const row of toUpdate) {
+            api.getRowNode(row.id)?.setData(row);
           }
         }
       } catch {
@@ -534,27 +713,28 @@ export function CBookPage() {
       }
     };
     fetchPositions();
-    const timer = setInterval(fetchPositions, 15000);
-    return () => { cancelled = true; clearInterval(timer); };
+    // No poll timer — positions kept live via POSITION_REPORT WebSocket events.
+    return () => { cancelled = true; };
   }, [gridLpId]);
 
   // ── Market data startup — Section 8 of brief, implemented exactly ───────────
   // 1. GET  /status/{lp_id}         — verify sessions logged on
   // 2. POST /md/subscribe            — tell backend to start publishing symbol
   // 3. Wait 400ms                    — first MD snapshot arrives within this window (TE)
-  // 4. GET  /md/book/{lp_id}/{sym}  — prime DOM ladder, call enrichBook() before render
-  // 5. GET  /positions/{lp_id}       — load positions panel
-  // 6. GET  /orders/{lp_id}/active   — load active orders
-  // 7. Connect WebSocket             — receive EXECUTION_REPORT, MD ticks, POSITION_REPORT, ACCOUNT_STATUS
-  // 8. Poll GET /md/book every 1s    — supplement WS, guarantees full refresh if incremental missed
+  // 4. GET  /positions/{lp_id}       — load positions panel
+  // 5. GET  /orders/{lp_id}/active   — load active orders
+  // 6. Connect WebSocket             — receive EXECUTION_REPORT, MARKET_DATA_SNAPSHOT,
+  //                                    POSITION_REPORT, ACCOUNT_STATUS
+  // Book updates are 100% WebSocket-driven. No REST poll.
   useEffect(() => {
     if (!domLpId || !domSymbol) {
-      setLiveBook(null);
+      setLiveBook(null); liveBookRef.current = null; pendingBookRef.current = null;
       setBookStatus('—');
-      if (bookPollRef.current) clearInterval(bookPollRef.current);
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       wsSymbolRef.current = '';
       wsLpIdRef.current = '';
+      localBidsRef.current.clear();
+      localAsksRef.current.clear();
       return;
     }
 
@@ -567,13 +747,15 @@ export function CBookPage() {
       const [pl, ps] = prev.split(':');
       bff(`/api/v1/fix/md/unsubscribe`, { method: 'POST', body: JSON.stringify({ lp_id: pl, symbol: ps }) }).catch(() => {});
     }
-    if (bookPollRef.current) clearInterval(bookPollRef.current);
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
 
+    bookSeededRef.current = false;
     subscribedRef.current = key;
     wsSymbolRef.current   = domSymbol;
     wsLpIdRef.current     = domLpId;
-    setLiveBook(null);
+    localBidsRef.current.clear();
+    localAsksRef.current.clear();
+    setLiveBook(null); liveBookRef.current = null; pendingBookRef.current = null;
     setBookStatus('SUBSCRIBING');
 
     let cancelled = false;
@@ -589,7 +771,7 @@ export function CBookPage() {
       // Step 2: POST /md/subscribe
       try {
         await bff(`/api/v1/fix/md/subscribe`, {
-          method: 'POST', body: JSON.stringify({ lp_id: domLpId, symbol: domSymbol }),
+          method: 'POST', body: JSON.stringify({ lp_id: domLpId, symbol: domSymbol, depth: 10 }),
         });
       } catch { /* non-fatal */ }
       if (cancelled) return;
@@ -597,24 +779,6 @@ export function CBookPage() {
       // Step 3: wait 400ms — first MD snapshot arrives within this window from TE
       await new Promise((r) => setTimeout(r, 400));
       if (cancelled) return;
-
-      // Step 4: GET /md/book — prime DOM ladder (Section 9.2)
-      // enrichBook() called on every result before render (Section 3.4 / 9.1)
-      const fetchBook = async () => {
-        if (cancelled) return;
-        // Use refs so this closure always has the current lpId/symbol even if called from stale setInterval
-        const lpId  = wsLpIdRef.current;
-        const sym   = wsSymbolRef.current;
-        if (!lpId || !sym) return;
-        try {
-          const r = await bff<{ success: boolean; data: any }>(`/api/v1/fix/md/book/${lpId}/${sym}`);
-          if (cancelled || !r.success || !r.data) return;
-          const book = enrichBook(r.data);
-          if (book) { setLiveBook(book); setBookStatus('HEALTHY'); }
-        } catch (e) { console.warn('[CBook POLL] fetchBook error:', e); }
-      };
-      await fetchBook();
-      bookPollRef.current = setInterval(fetchBook, 1000);
 
       // Step 5: GET /positions/{lp_id}
       try {
@@ -624,6 +788,7 @@ export function CBookPage() {
           setLivePositions(
             posR.data.positions
               .filter((p) => p.position_id !== '' && p.open_price > 0)
+          .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
               .map((p) => positionToCBook(p, domLpId, instrMap))
           );
         }
@@ -644,7 +809,10 @@ export function CBookPage() {
         if (cancelled) return;
         try {
           const msg = JSON.parse(evt.data);
-          console.log('[CBook WS] MESSAGE type:', msg.type, 'lp_id:', msg.lp_id, 'symbol:', msg.data?.symbol ?? msg.symbol);
+          if (msg.type === 'MARKET_DATA_INCREMENTAL' || msg.type === 'MARKET_DATA_SNAPSHOT') {
+            console.log('[MD]', msg.data?.symbol, 'bid:', msg.data?.best_bid, 'ask:', msg.data?.best_ask);
+          }
+
 
           // ── FILLS — Brief Section 7.1 / 3.1
           // EXECUTION_REPORT is the fill type for ALL LPs incl TE.
@@ -665,76 +833,152 @@ export function CBookPage() {
               status:    'SENT',
             };
             setExecLog((prev) => [entry, ...prev].slice(0, 20));
-            // Brief Section 9.5: re-fetch positions after fill
+            // Brief Section 9.5: re-fetch positions after fill.
+            // Delayed 600ms so C++ position refresh timer (500ms after fill) has
+            // populated the cache with correct long_qty/short_qty before we read it.
             if (wsLpIdRef.current) {
-              const instrMap = instrCacheRef.current[wsLpIdRef.current] ?? {};
-              bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${wsLpIdRef.current}`)
-                .then((r) => {
-                  if (r.success && !cancelled) {
-                    setLivePositions(
-                      r.data.positions
-                        .filter((p) => p.position_id !== '' && p.open_price > 0)
-                        .map((p) => positionToCBook(p, wsLpIdRef.current, instrMap))
-                    );
-                  }
-                }).catch(() => {});
+              const lpSnap = wsLpIdRef.current;
+              setTimeout(() => {
+                if (cancelled) return;
+                const instrMap = instrCacheRef.current[lpSnap] ?? {};
+                bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)
+                  .then((r) => {
+                    if (r.success && !cancelled) {
+                      setLivePositions(
+                        r.data.positions
+                          .filter((p) => p.position_id !== '' && p.open_price > 0)
+                          .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
+                          .map((p) => positionToCBook(p, lpSnap, instrMap))
+                      );
+                    }
+                  }).catch(() => {});
+              }, 600);
             }
           }
 
           // ── MARKET DATA — Brief Section 7.2
-          // Only process snapshots — backend publishes a full book snapshot after
-          // every incremental update (MarketDataSession::OnMarketDataIncrementalFull).
-          // Incrementals carry only raw entries[], not bids/asks, so enrichBook
-          // cannot render them. Dropping them here prevents the display from
-          // flashing to null between each snapshot.
           if (
             msg.type === 'MARKET_DATA_SNAPSHOT' ||
-            msg.type === 'MD_SNAPSHOT' ||
+            msg.type === 'MD_SNAPSHOT'           ||
             msg.type === 'MARKET_DATA_INCREMENTAL' ||
             msg.type === 'MD_INCREMENTAL'
           ) {
             const bookRaw = msg.data ?? msg;
             const sym = bookRaw.symbol ?? msg.symbol;
-            if (!sym) return;                                    // no symbol → skip
-            if (sym !== wsSymbolRef.current) return;             // wrong symbol → skip
-            if (msg.lp_id && msg.lp_id !== wsLpIdRef.current) return;
-            const book = enrichBook(bookRaw);
-            if (book) {
-              setLiveBook(book);
-              setBookStatus('HEALTHY');
+            if (!sym) return;
+            if (msg.lp_id && msg.lp_id !== wsLpIdRef.current && msg.lp_id !== gridLpIdRef.current) return;
+
+            const refBid: number | null = bookRaw.best_bid ?? null;
+            const refAsk: number | null = bookRaw.best_ask ?? null;
+
+            // ── DOM panel book (DOM symbol only) ─────────────────────────────
+            if (sym === wsSymbolRef.current) {
+              let rawBids: any[] = bookRaw.bids || [];
+              let rawAsks: any[] = bookRaw.asks || [];
+              if (refBid != null && refAsk != null && refBid > refAsk) {
+                [rawBids, rawAsks] = [rawAsks, rawBids];
+              }
+              localBidsRef.current.clear();
+              localAsksRef.current.clear();
+              for (const b of rawBids) if (b.price != null) localBidsRef.current.set(Number(b.price), Number(b.size));
+              for (const a of rawAsks) if (a.price != null) localAsksRef.current.set(Number(a.price), Number(a.size));
+              const book = buildBookFromMaps(sym, localBidsRef.current, localAsksRef.current);
+              console.log('[BOOK BUILD]', sym, book, 'maps:', localBidsRef.current.size, localAsksRef.current.size);
+              if (book) {
+                liveBookRef.current    = book;
+                pendingBookRef.current = book;
+                setBookStatus('HEALTHY');
+              }
+            }
+
+            // ── Grid P&L update (all open positions for this symbol) ─────────
+            // Prices written to ref immediately. refreshCells fires on every tick
+            // for instant WS-speed P/L updates. suppressFlash=true prevents highlight.
+            if (refBid != null && refAsk != null) {
+              const prevBid = currentPricesRef.current.get(sym + ':bid');
+              const prevAsk = currentPricesRef.current.get(sym + ':ask');
+              if (prevBid !== refBid || prevAsk !== refAsk) {
+                currentPricesRef.current.set(sym + ':bid', refBid);
+                currentPricesRef.current.set(sym + ':ask', refAsk);
+                gridRef.current?.api?.refreshCells({
+                  columns: ['currentPrice', 'unrealizedPnl'],
+                  suppressFlash: true,
+                });
+              }
+            }
+            // ── DOM book panel (throttled to 100ms — human eye limit) ────────────
+            if (sym === wsSymbolRef.current && pendingBookRef.current) {
+              if (!bookRenderTimer.current) {
+                bookRenderTimer.current = setTimeout(() => {
+                  bookRenderTimer.current = null;
+                  if (pendingBookRef.current) setLiveBook(pendingBookRef.current);
+                }, 100);
+              }
             }
           }
 
           // ── POSITIONS — Brief Section 7.3
           if (msg.type === 'POSITION_REPORT') {
-            if (msg.lp_id && msg.lp_id !== wsLpIdRef.current) return;
-            const instrMap = instrCacheRef.current[wsLpIdRef.current] ?? {};
+            const evtLp = msg.lp_id;
+            if (evtLp && evtLp !== wsLpIdRef.current && evtLp !== gridLpIdRef.current) return;
+            const resolvedLp = evtLp ?? wsLpIdRef.current ?? gridLpIdRef.current;
+            const instrMap = instrCacheRef.current[resolvedLp] ?? {};
+            // NexRiskService routing wraps position fields under msg.data (same as EXECUTION_REPORT).
+            const pd = msg.data ?? msg;
             const pos: FIXPosition = {
-              position_id: msg.position_id ?? '',
-              account:     msg.account     ?? '',
-              symbol:      msg.symbol      ?? '',
-              open_price:  msg.open_price  ?? 0,
-              long_qty:    msg.long_qty    ?? 0,
-              short_qty:   msg.short_qty   ?? 0,
-              net_qty:     msg.net_qty     ?? 0,
-              side:        msg.side        ?? 'FLAT',
-              commission:  msg.commission  ?? 0,
-              swap:        msg.swap        ?? 0,
+              position_id: pd.position_id ?? '',
+              account:     pd.account     ?? '',
+              symbol:      pd.symbol      ?? '',
+              open_price:  pd.open_price  ?? 0,
+              long_qty:    pd.long_qty    ?? 0,
+              short_qty:   pd.short_qty   ?? 0,
+              net_qty:     pd.net_qty     ?? 0,
+              side:        pd.side        ?? 'FLAT',
+              commission:  pd.commission  ?? 0,
+              swap:        pd.swap        ?? 0,
               received_ts: msg.timestamp_ms ?? Date.now(),
+              stop_loss:   pd.stop_loss   ?? undefined,
+              take_profit: pd.take_profit ?? undefined,
+              unrealized_pnl: pd.unrealized_pnl ?? undefined,
+              current_price:  pd.current_price  ?? undefined,
             };
-            if (pos.position_id !== '' && pos.open_price > 0) {
-              const row = positionToCBook(pos, wsLpIdRef.current, instrMap);
+            // WS events: guard on position_id only — open_price may be 0 in TE events.
+            // (open_price > 0 guard is for REST responses only, not WS.)
+            if (pos.position_id !== ''
+                && !closedPositionIdsRef.current.has(pos.position_id)) {
+              const row = positionToCBook(pos, resolvedLp, instrMap);
               setLivePositions((prev) => {
                 const idx = prev.findIndex((p) => p.positionId === row.positionId);
                 return idx >= 0 ? prev.map((p, i) => i === idx ? row : p) : [row, ...prev];
               });
+              const api = gridRef.current?.api;
+              if (api) {
+                const existingNode = api.getRowNode(row.id);
+                if (existingNode) existingNode.setData(row); // setData: no sort re-eval, no row swap
+                else              api.applyTransaction({ add: [row] });
+              }
+              // Subscribe MD for this symbol if not already subscribed (for P&L ticks)
+              if (pos.symbol && !posSubscribedRef.current.has(pos.symbol)) {
+                posSubscribedRef.current.add(pos.symbol);
+                bff('/api/v1/fix/md/subscribe', {
+                  method: 'POST', body: JSON.stringify({ lp_id: resolvedLp, symbol: pos.symbol, depth: 1 }),
+                }).catch(() => {});
+              }
             }
           }
 
           if (msg.type === 'POSITION_CLOSED') {
-            if (msg.lp_id && msg.lp_id !== wsLpIdRef.current) return;
+            const evtLpC = msg.lp_id;
+            if (evtLpC && evtLpC !== wsLpIdRef.current && evtLpC !== gridLpIdRef.current) return;
+            const resolvedCloseLp = evtLpC ?? wsLpIdRef.current ?? gridLpIdRef.current;
             const pid = msg.position_id ?? msg.data?.position_id;
-            if (pid) setLivePositions((prev) => prev.filter((p) => p.positionId !== pid));
+            if (pid) {
+              closedPositionIdsRef.current.add(pid);
+              setLivePositions((prev) => prev.filter((p) => p.positionId !== pid));
+              gridRef.current?.api?.applyTransaction({
+                remove: [{ id: `pos-${resolvedCloseLp}-${pid}` } as CBookOrder]
+              });
+            }
           }
 
           // ── ACCOUNT — Brief Section 7.4
@@ -767,10 +1011,20 @@ export function CBookPage() {
     return () => {
       cancelled = true;
       subscribedRef.current = '';
-      if (bookPollRef.current) clearInterval(bookPollRef.current);
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      if (bookRenderTimer.current) { clearTimeout(bookRenderTimer.current); bookRenderTimer.current = null; }
       wsSymbolRef.current = '';
+      // Unsubscribe all position P&L symbols on LP change or unmount
+      const lpToUnsub = wsLpIdRef.current;
+      for (const sym of posSubscribedRef.current) {
+        bff('/api/v1/fix/md/unsubscribe', {
+          method: 'POST', body: JSON.stringify({ lp_id: lpToUnsub, symbol: sym }),
+        }).catch(() => {});
+      }
+      posSubscribedRef.current.clear();
       wsLpIdRef.current   = '';
+      localBidsRef.current.clear();
+      localAsksRef.current.clear();
     };
   }, [domLpId, domSymbol]);
 
@@ -780,8 +1034,11 @@ export function CBookPage() {
     if (closeRow._lpId !== domLpId) setDomLpId(closeRow._lpId);
     setDomSymbol(closeRow.symbol);
     // qty: don't pre-fill 0 for TE sandbox — leave blank so user enters actual size
-    if (closeRow.volume > 0) setDomQtyLots(closeRow.volume.toFixed(2));
-    else setDomQtyLots('');
+    if (closeRow.rawQty > 0) {
+      const inst = instruments.find(i => i.symbol === closeRow.symbol);
+      const minVol = inst?.min_trade_vol ?? 1;
+      setDomQtyLots(String(closeRow.rawQty * minVol));
+    } else setDomQtyLots('');
     setLimitPrice(''); setStopLoss(''); setTakeProfit('');
     setShowPicker(false);
     subscribedRef.current = '';
@@ -836,15 +1093,15 @@ export function CBookPage() {
   // ==========================================================================
   const placeOrder = useCallback(async (side: 'BUY' | 'SELL') => {
     if (!domLpId || !domSymbol || submitting) return;
-    const qtyLots = parseFloat(domQtyLots);
-    if (!qtyLots || qtyLots <= 0) return;
-    const minVol   = activeInstrument?.min_trade_vol ?? 100000;
-    const qtyUnits = Math.round(qtyLots * minVol);
+    const qty = Math.round(parseFloat(domQtyLots));
+    if (!qty || qty <= 0) return;
+    const minVol = activeInstrument?.min_trade_vol ?? 1;
+    if (qty < minVol) return;
 
     setSubmitting(true);
     const entry: ExecEntry = {
       clord_id: '—', ts: Date.now(), symbol: domSymbol, side,
-      qty: qtyUnits, orderType: domOrderType, tif: domTif,
+      qty: qty, orderType: domOrderType, tif: domTif,
       lpId: domLpId, status: 'SENT',
     };
 
@@ -856,7 +1113,7 @@ export function CBookPage() {
           lp_id:         domLpId,
           symbol:        domSymbol,
           side,                          // counter-direction chosen by user
-          qty:           qtyUnits,
+          qty:           qty,
           order_type:    'MARKET',
           time_in_force: 'GTC',
           open_close:    'C',            // tag 77 = Close
@@ -870,6 +1127,13 @@ export function CBookPage() {
         if (r.success) {
           entry.clord_id = r.clord_id ?? '—';
           setExecLog((prev) => [entry, ...prev].slice(0, 20));
+          // Register as closed so poll results don't ghost it back.
+          const closedPosId = closeRow.positionId;
+          closedPositionIdsRef.current.add(closedPosId);
+          // Remove from grid and state immediately — don't wait for WS.
+          const closedRowId = `pos-${domLpId}-${closedPosId}`;
+          gridRef.current?.api?.applyTransaction({ remove: [{ id: closedRowId } as CBookOrder] });
+          setLivePositions((prev) => prev.filter((p) => p.positionId !== closedPosId));
           setCloseRow(null);
           gridRef.current?.api?.deselectAll();
         } else {
@@ -883,7 +1147,7 @@ export function CBookPage() {
           lp_id:         domLpId,
           symbol:        domSymbol,
           side,
-          qty:           qtyUnits,
+          qty:           qty,
           order_type:    domOrderType,
           time_in_force: domTif,
           open_close:    'O',
@@ -914,13 +1178,14 @@ export function CBookPage() {
             date: new Date().toISOString(), time: new Date().toISOString(),
             dealerId: domLpId, symbol: domSymbol,
             positionId: r.clord_id ?? '', side,
-            volume: qtyLots, rawQty: qtyUnits,
+            volume: qty, rawQty: qty, displayQty: qty,
             lpName: domLpId,
             lpAccount: domLpInfo?.lp_name ?? domLpId,
-            fillPrice: liveBook
-              ? (side === 'BUY' ? (liveBook.best_ask ?? 0) : (liveBook.best_bid ?? 0))
+            fillPrice: liveBookRef.current
+              ? (side === 'BUY' ? (liveBookRef.current.best_ask ?? 0) : (liveBookRef.current.best_bid ?? 0))
               : parseFloat(limitPrice) || 0,
             type: 'Hedge', comments: `FIX:${r.clord_id}`,
+            stopLoss: null, takeProfit: null, unrealizedPnl: null, currentPrice: null,
             _lpId: domLpId, _isOpen: false,
           };
           setSessionOrders((prev) => [newRow, ...prev]);
@@ -939,7 +1204,7 @@ export function CBookPage() {
   }, [
     domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif,
     limitPrice, stopLoss, takeProfit, slTpSupported, activeInstrument,
-    liveBook, closeRow, domLpInfo,
+    closeRow, domLpInfo,
   ]);
 
   // ── Grid row selection → close mode ───────────────────────────────────────
@@ -955,22 +1220,66 @@ export function CBookPage() {
     gridRef.current?.api?.deselectAll();
   }, []);
 
+  const fetchFixMessages = useCallback(async (entry: ExecEntry) => {
+    setSelectedExec(entry);
+    setFixMessages([]);
+    setFixMessagesLoading(true);
+    try {
+      const res = await bff<{ success: boolean; data: { messages: FIXMessage[] } }>(
+        `/api/v1/fix/lp/${entry.lpId}/fix/messages/order/${encodeURIComponent(entry.clord_id)}`
+      );
+      setFixMessages(res.data?.messages ?? []);
+    } catch {
+      setFixMessages([]);
+    } finally {
+      setFixMessagesLoading(false);
+    }
+  }, []);
+
   // ==========================================================================
   // COLUMN DEFINITIONS
   // ==========================================================================
   const columnDefs = useMemo<ColDef<CBookOrder>[]>(() => [
-    { field: 'date',       headerName: 'Date',       filter: 'agDateColumnFilter',   width: 110, pinned: 'left', valueFormatter: fmtDate, sort: 'desc' },
-    { field: 'time',       headerName: 'Time',       filter: 'agDateColumnFilter',   width: 120, pinned: 'left', valueFormatter: fmtTime },
-    { field: 'dealerId',   headerName: 'Account',    filter: 'agSetColumnFilter',    width: 140 },
-    { field: 'symbol',     headerName: 'Symbol',     filter: 'agSetColumnFilter',    width: 100, cellStyle: { fontWeight: 500 } },
-    { field: 'positionId', headerName: 'Position ID',filter: 'agTextColumnFilter',   width: 160 },
+    { field: 'date',       headerName: 'Date',        filter: 'agDateColumnFilter',  width: 110, pinned: 'left', valueFormatter: fmtDate, sort: 'desc' },
+    { field: 'time',       headerName: useLocalTime ? 'Time (Local)' : 'Time (UTC)', filter: 'agDateColumnFilter', width: 130, pinned: 'left', valueFormatter: useLocalTime ? fmtTime : fmtTimeUTC },
+    { field: 'dealerId',   headerName: 'Account',     filter: 'agSetColumnFilter',   width: 140 },
+    { field: 'symbol',     headerName: 'Symbol',      filter: 'agSetColumnFilter',   width: 100, cellStyle: { fontWeight: 500 } },
+    { field: 'positionId', headerName: 'Position ID', filter: 'agTextColumnFilter',  width: 160 },
     {
       field: 'side', headerName: 'Side', filter: 'agSetColumnFilter', width: 80,
       cellRenderer: (p: { value: string }) =>
         <span style={{ color: p.value === 'BUY' ? '#4ecdc4' : p.value === 'SELL' ? '#e0a020' : '#888', fontWeight: 600 }}>{p.value}</span>,
     },
-    { field: 'volume',    headerName: 'Volume (L)', filter: 'agNumberColumnFilter',  width: 110, valueFormatter: (p) => p.value ? Number(p.value).toFixed(2) : '—' },
-    { field: 'fillPrice', headerName: 'Fill Price', filter: 'agNumberColumnFilter',  width: 120, valueFormatter: fmtPrice },
+    { field: 'displayQty',   headerName: 'Volume',      filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value != null ? Number(p.value).toLocaleString() : '—' },
+    { field: 'fillPrice',   headerName: 'Fill Price',  filter: 'agNumberColumnFilter', width: 120, valueFormatter: fmtPrice },
+    {
+      colId: 'currentPrice', headerName: 'Cur. Price', filter: 'agNumberColumnFilter', width: 120, sortable: false, suppressCellFlash: true,
+      valueGetter: (p: { data?: CBookOrder }) => {
+        if (!p.data?._isOpen || !p.data.symbol) return null;
+        const key = p.data.side === 'BUY' ? p.data.symbol + ':bid' : p.data.symbol + ':ask';
+        return currentPricesRef.current.get(key) ?? p.data.currentPrice ?? null;
+      },
+      valueFormatter: fmtPrice,
+    },
+    {
+      colId: 'unrealizedPnl', headerName: 'P/L', filter: 'agNumberColumnFilter', width: 100, sortable: false, suppressCellFlash: true,
+      valueGetter: (p: { data?: CBookOrder }) => {
+        if (!p.data?._isOpen || !p.data.symbol) return null;
+        const key = p.data.side === 'BUY' ? p.data.symbol + ':bid' : p.data.symbol + ':ask';
+        const closePrice = currentPricesRef.current.get(key) ?? p.data.currentPrice ?? null;
+        if (closePrice == null) return null;
+        const dir = p.data.side === 'BUY' ? 1 : p.data.side === 'SELL' ? -1 : 0;
+        // Use displayQty (units) not volume (lots) — P/L = (price diff) * units
+        return dir !== 0 ? (closePrice - p.data.fillPrice) * p.data.displayQty * dir : null;
+      },
+      cellRenderer: (p: { value: number | null }) => {
+        if (p.value == null) return <span style={{ color: '#555' }}>—</span>;
+        const color = p.value >= 0 ? '#4ecdc4' : '#ff6b6b';
+        return <span style={{ color, fontWeight: 600 }}>{p.value >= 0 ? '+' : ''}{p.value.toFixed(2)}</span>;
+      },
+    },
+    { field: 'stopLoss',   headerName: 'S/L', filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value ? fmtPrice(p) : '—' },
+    { field: 'takeProfit', headerName: 'T/P', filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value ? fmtPrice(p) : '—' },
     {
       field: 'type', headerName: 'Type', filter: 'agSetColumnFilter', width: 110,
       filterParams: { values: ['Hedge', 'Opportunity', 'Repair'] },
@@ -992,7 +1301,7 @@ export function CBookPage() {
       flex: 1, minWidth: 150, editable: true, cellStyle: { color: '#888' },
       cellEditor: 'agTextCellEditor',
     },
-  ], []);
+  ], [useLocalTime]);
 
   const defaultColDef = useMemo<ColDef>(() => ({ sortable: true, filter: true, resizable: true, minWidth: 70 }), []);
   const rowSelection  = useMemo<RowSelectionOptions>(() => ({ mode: 'singleRow', enableClickSelection: true }), []);
@@ -1000,7 +1309,9 @@ export function CBookPage() {
     enableAdvancedFilter: true,
     sideBar: { toolPanels: ['columns'], defaultToolPanel: '' },
     columnHoverHighlight: true, animateRows: false, rowBuffer: 20,
+    enableCellChangeFlash: false,
     suppressScrollOnNewData: true,
+    suppressMoveWhenRowDragging: true,
     suppressAnimationFrame: true,
     alwaysShowVerticalScroll: true,
     suppressRowHoverHighlight: false,
@@ -1013,6 +1324,9 @@ export function CBookPage() {
     },
   }), []);
 
+  // Once the grid has been seeded via rowData on first render, we stop passing
+  // rowData as a live prop by switching to a stable empty-array sentinel.
+  // All subsequent structural changes (add/remove) go through applyTransaction only.
   const onGridReady = useCallback((_e: GridReadyEvent) => {
     setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
   }, []);
@@ -1102,6 +1416,14 @@ export function CBookPage() {
             <option value="month">This Month</option>
           </select>
           <div className="w-px h-4 bg-[#555]" />
+          <button
+            onClick={() => setUseLocalTime(v => !v)}
+            className="flex items-center gap-1 px-2 py-1 rounded border border-[#555] bg-[#232225] hover:border-[#4ecdc4] text-[#aaa] hover:text-white transition-colors text-xs"
+            title="Toggle local / server (UTC) time"
+          >
+            🕐 {useLocalTime ? 'Local' : 'UTC'}
+          </button>
+          <div className="w-px h-4 bg-[#555]" />
           <div><span className="text-[#aaa]">Pos:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
           <div>
             <span className="text-[#aaa]">L/S:</span>
@@ -1133,7 +1455,7 @@ export function CBookPage() {
             <AgGridReact<CBookOrder>
               ref={gridRef}
               theme={gridTheme}
-              rowData={gridRows}
+              rowData={GRID_STABLE_EMPTY}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
               gridOptions={gridOptions}
@@ -1165,7 +1487,7 @@ export function CBookPage() {
           {/* Panel header */}
           <div className="px-3 py-2 border-b border-[#555] flex items-center justify-between flex-shrink-0" style={{ backgroundColor: '#1a1a1c' }}>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-white">Market Depth</span>
+              <span className="text-sm font-medium text-white">Market Depth </span>
               {closeRow && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
                   style={{ backgroundColor: '#231a38', color: '#a78bfa', border: '1px solid #a78bfa44' }}>
@@ -1471,7 +1793,7 @@ export function CBookPage() {
               />
               {domQtyLots && activeInstrument && (
                 <div className="text-[10px] text-white mt-0.5">
-                  {(parseFloat(domQtyLots) * activeInstrument.min_trade_vol).toLocaleString()} units
+                  Min: {(activeInstrument.min_trade_vol).toLocaleString()} units
                 </div>
               )}
             </div>
@@ -1519,49 +1841,162 @@ export function CBookPage() {
             </div>
           </div>
 
-          {/* ── Execution Log ─────────────────────────────────────────────────── */}
-          <div className="flex-1 overflow-y-auto min-h-0" style={{ backgroundColor: '#161618' }}>
-            <div className="px-3 py-1.5 flex items-center justify-between border-b border-[#222] sticky top-0" style={{ backgroundColor: '#161618' }}>
-              <span className="text-[10px] text-white uppercase tracking-wider">Order Execution</span>
-              {execLog.length > 0 && (
-                <button onClick={() => setExecLog([])} className="text-[10px] text-[#555] hover:text-[#aaa] transition-colors">clear</button>
-              )}
-            </div>
-
-            {execLog.length === 0 ? (
-              <div className="px-3 py-3 text-[10px] text-[#777]">
-                {!domLpId ? 'Select an LP to begin' : !domSymbol ? 'Select a symbol' : 'No orders this session'}
-              </div>
-            ) : execLog.map((e, idx) => (
-              <div key={`${e.clord_id}-${idx}`} className="px-3 py-2 border-b border-[#1e1e1e]">
-                <div className="flex items-center justify-between mb-0.5">
-                  <div className="flex items-center gap-1.5 text-[11px]">
-                    <span className="font-bold" style={{ color: e.side === 'BUY' ? '#4ecdc4' : '#e0a020' }}>{e.side}</span>
-                    <span className="font-mono text-white">{e.symbol}</span>
-                    <span className="text-[#666]">{(e.qty / (activeInstrument?.min_trade_vol ?? 100000)).toFixed(2)}L</span>
-                  </div>
-                  <span className="text-[10px] font-mono font-semibold"
-                    style={{ color: e.status === 'SENT' ? '#4ecdc4' : '#ff6b6b' }}>
-                    {e.status}
-                  </span>
-                </div>
-                {e.status === 'SENT' && (
-                  <div className="text-[10px] text-[#777] font-mono mb-0.5">
-                    FIX: <span className="text-[#777]">{e.clord_id}</span>
-                  </div>
-                )}
-                {e.rejectReason && (
-                  <div className="text-[10px] text-[#ff6b6b] mb-0.5">{e.rejectReason}</div>
-                )}
-                <div className="text-[10px] text-[#666]">
-                  {new Date(e.ts).toLocaleTimeString()} · {e.lpId} · {e.orderType}/{e.tif}
-                </div>
-              </div>
-            ))}
-          </div>
-
         </div>
         {/* ── End DOM Panel ──────────────────────────────────────────────────── */}
+
+        {/* ── Order Execution Panel (slide-out, mirrors ABookPage pattern) ───── */}
+        {execPanelOpen && (
+          <div className="flex flex-col border-l border-[#555] flex-shrink-0" style={{ width: '360px', backgroundColor: '#161618' }}>
+
+            {/* Header */}
+            <div className="px-3 py-2 border-b border-[#555] flex items-center justify-between flex-shrink-0" style={{ backgroundColor: '#1a1a1c' }}>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-white">Order FIX Details</span>
+                {selectedExec && (
+                  <button
+                    onClick={() => { setSelectedExec(null); setFixMessages([]); }}
+                    className="text-xs text-[#999] hover:text-white border border-[#444] rounded px-1.5 py-0.5 transition-colors"
+                  >← back</button>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {!selectedExec && execLog.length > 0 && (
+                  <button onClick={() => setExecLog([])} className="text-xs text-[#666] hover:text-[#aaa] transition-colors">clear</button>
+                )}
+                <button
+                  onClick={() => { setExecPanelOpen(false); setSelectedExec(null); setFixMessages([]); }}
+                  className="text-[#999] hover:text-white transition-colors p-0.5"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* ── List view ── */}
+            {!selectedExec && (
+              <div className="flex-1 overflow-y-auto min-h-0">
+                {execLog.length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-[#666]">
+                    {!domLpId ? 'Select an LP to begin' : !domSymbol ? 'Select a symbol' : 'No orders this session'}
+                  </div>
+                ) : execLog.map((e, idx) => (
+                  <div
+                    key={`${e.clord_id}-${idx}`}
+                    className="px-3 py-3 border-b border-[#222] cursor-pointer hover:bg-[#1d1d20] transition-colors"
+                    onClick={() => fetchFixMessages(e)}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="font-bold" style={{ color: e.side === 'BUY' ? '#4ecdc4' : '#e0a020' }}>{e.side}</span>
+                        <span className="font-mono text-white font-semibold">{e.symbol}</span>
+                        <span className="text-white font-mono">{e.qty.toLocaleString()}</span>
+                      </div>
+                      <span className="text-xs font-bold font-mono"
+                        style={{ color: e.status === 'SENT' ? '#4ecdc4' : '#ff6b6b' }}>
+                        {e.status}
+                      </span>
+                    </div>
+                    <div className="text-xs text-[#aaa] font-mono mb-0.5 truncate">{e.clord_id}</div>
+                    {e.rejectReason && (
+                      <div className="text-xs text-[#ff6b6b] mb-0.5">{e.rejectReason}</div>
+                    )}
+                    <div className="text-xs text-[#777]">
+                      {new Date(e.ts).toLocaleTimeString()} · {e.lpId} · {e.orderType}/{e.tif}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Detail view ── */}
+            {selectedExec && (
+              <div className="flex flex-col flex-1 min-h-0">
+
+                {/* Summary row */}
+                <div className="px-3 py-2.5 border-b border-[#333] flex-shrink-0" style={{ backgroundColor: '#1d1d20' }}>
+                  <div className="flex items-center gap-2 text-sm mb-1">
+                    <span className="font-bold" style={{ color: selectedExec.side === 'BUY' ? '#4ecdc4' : '#e0a020' }}>{selectedExec.side}</span>
+                    <span className="text-white font-mono font-semibold">{selectedExec.symbol}</span>
+                    <span className="text-white font-mono">{selectedExec.qty.toLocaleString()}</span>
+                    <span className="ml-auto text-xs font-bold font-mono"
+                      style={{ color: selectedExec.status === 'SENT' ? '#4ecdc4' : '#ff6b6b' }}>
+                      {selectedExec.status}
+                    </span>
+                  </div>
+                  <div className="text-xs text-[#aaa] font-mono truncate mb-0.5">{selectedExec.clord_id}</div>
+                  <div className="text-xs text-[#777]">
+                    {new Date(selectedExec.ts).toLocaleTimeString()} · {selectedExec.lpId} · {selectedExec.orderType}/{selectedExec.tif}
+                  </div>
+                </div>
+
+                {/* FIX messages */}
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  {fixMessagesLoading && (
+                    <div className="px-3 py-4 text-sm text-[#666] animate-pulse">Fetching FIX messages…</div>
+                  )}
+                  {!fixMessagesLoading && fixMessages.length === 0 && (
+                    <div className="px-3 py-4 text-sm text-[#666]">No FIX messages found for this order.</div>
+                  )}
+                  {!fixMessagesLoading && fixMessages.map((msg, i) => (
+                    <div key={`${msg.seq_num}-${i}`} className="border-b border-[#222]">
+                      {/* Message header bar */}
+                      <div className="px-3 py-2 flex items-center gap-2 border-b border-[#222]" style={{ backgroundColor: '#1d1d20' }}>
+                        <span
+                          className="text-xs font-bold font-mono px-1.5 py-0.5 rounded"
+                          style={{
+                            backgroundColor: msg.direction === 'sent' ? '#0e2320' : '#17153a',
+                            color: msg.direction === 'sent' ? '#4ecdc4' : '#a78bfa',
+                          }}
+                        >{msg.direction === 'sent' ? 'OUT' : 'IN'}</span>
+                        <span className="text-sm text-white font-semibold">{msg.msg_type_name}</span>
+                        <span className="text-xs text-[#666] font-mono ml-auto">35={msg.msg_type}</span>
+                        <span className="text-xs text-[#666] font-mono">#{msg.seq_num}</span>
+                      </div>
+                      {/* Timestamp */}
+                      <div className="px-3 pt-2 pb-1 text-xs text-[#888] font-mono">{msg.timestamp}</div>
+                      {/* Raw FIX — tag per row */}
+                      <div className="px-3 pb-3">
+                        {msg.raw.split('|').filter(Boolean).map((tag, ti) => {
+                          const eq = tag.indexOf('=');
+                          if (eq < 0) return null;
+                          const tagNum = tag.slice(0, eq);
+                          const val    = tag.slice(eq + 1);
+                          return (
+                            <div key={ti} className="flex gap-3 text-xs py-0.5">
+                              <span className="text-[#666] font-mono w-6 flex-shrink-0 text-right">{tagNum}</span>
+                              <span className="text-white font-mono break-all">{val}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* Collapsed tab */}
+        {!execPanelOpen && (
+          <button
+            onClick={() => setExecPanelOpen(true)}
+            className="flex items-center justify-center border-l border-[#555] bg-[#232225] hover:bg-[#2a2a2c] transition-colors flex-shrink-0"
+            style={{ width: '28px' }}
+            title="Show Order Execution"
+          >
+            <span
+              className="text-[#999] text-xs font-medium whitespace-nowrap"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+            >
+              Order Execution
+            </span>
+          </button>
+        )}
 
       </div>
     </div>

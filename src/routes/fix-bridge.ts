@@ -337,10 +337,13 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     '/fix/md/subscribe',
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = request.body as Record<string, unknown> ?? {};
+      const lp_id = body.lp_id as string;
       fastify.log.info({ body }, '[fix] md/subscribe');
+      // line ~341 — change back to:
       const response = await nexriskApi.post('/api/v1/fix/md/subscribe', {
         lp_id: body.lp_id,
         symbol: body.symbol,
+        depth: body.depth ?? 10,
       });
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
@@ -351,8 +354,8 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     '/fix/md/unsubscribe',
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = request.body as Record<string, unknown> ?? {};
-      const response = await nexriskApi.post('/api/v1/fix/md/unsubscribe', {
-        lp_id: body.lp_id,
+      const lp_id = body.lp_id as string;
+      const response = await nexriskApi.post(`/api/v1/fix/lp/${lp_id}/md/unsubscribe`, {
         symbol: body.symbol,
       });
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -364,7 +367,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     '/fix/lp/:lp_id/md/book/:symbol',
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id, symbol } = symbolParams.parse(request.params);
-      const response = await nexriskApi.get(`/api/v1/fix/lp/${lp_id}/md/book/${symbol}`);
+      const response = await nexriskApi.get(`/api/v1/fix/md/book/${lp_id}/${symbol}`);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
@@ -505,6 +508,53 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
       const response = await nexriskApi.post(`/api/v1/fix/lp/${lp_id}/positions/${position_id}/close`, request.body);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
+    }
+  );
+
+  // ── Account Status ───────────────────────────────────────────
+  // Populated from TE's UAA push (fires on logon + every ~2s thereafter).
+  // emptyOn404: C++ returns a descriptive error if UAA hasn't arrived yet —
+  // treat that as an empty cache rather than propagating a 503 to the frontend.
+  fastify.get(
+    '/fix/lp/:lp_id/account',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { lp_id } = lpIdParams.parse(request.params);
+      const response = await nexriskApi.get(`/api/v1/fix/lp/${lp_id}/account`);
+      return emptyOn404(response, lp_id, {
+        lp_id,
+        account: '',
+        currency: '',
+        balance: 0,
+        equity: 0,
+        margin_used: 0,
+        margin_available: 0,
+        unrealized_pnl: 0,
+        realized_pnl: 0,
+        timestamp_ms: 0,
+      }, reply);
+    }
+  );
+
+  // POST /fix/lp/:lp_id/account/refresh
+  // TE does not support client-initiated account requests — UAA is server-pushed.
+  // This endpoint returns the latest cached snapshot (same as GET /account).
+  fastify.post(
+    '/fix/lp/:lp_id/account/refresh',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { lp_id } = lpIdParams.parse(request.params);
+      const response = await nexriskApi.post(`/api/v1/fix/lp/${lp_id}/account/refresh`);
+      return emptyOn404(response, lp_id, {
+        lp_id,
+        account: '',
+        currency: '',
+        balance: 0,
+        equity: 0,
+        margin_used: 0,
+        margin_available: 0,
+        unrealized_pnl: 0,
+        realized_pnl: 0,
+        timestamp_ms: 0,
+      }, reply);
     }
   );
 

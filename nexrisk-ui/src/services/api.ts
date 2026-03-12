@@ -743,6 +743,130 @@ export const mt5Api = {
     return { positions, nodes: respondingNodes };
   },
 };
+// ============================================================
+// ADD THIS BLOCK TO api.ts
+// Place after the mt5Api export
+// ============================================================
+
+// ============================================
+// Symbol Mapping API
+// ============================================
+export interface SymbolMappingRecord {
+  id: number;
+  mt5_symbol: string;
+  lp_id: string;
+  lp_name: string;
+  lp_symbol: string;
+  volume_multiplier: number;
+  lp_price_precision: number;
+  enabled: boolean;
+  source: 'manual' | 'auto' | 'imported';
+  approved: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutoMapSuggestionAPI {
+  mt5_symbol: string;
+  lp_id: string;
+  lp_name: string;
+  lp_symbol: string;
+  confidence: number;
+  volume_multiplier: number;
+  lp_price_precision: number;
+}
+
+export const symbolMappingApi = {
+  // ── CRUD ────────────────────────────────────────────────────
+
+  getAll: (params?: { lp_id?: string; enabled?: boolean; limit?: number; offset?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.lp_id)              sp.set('lp_id',   params.lp_id);
+    if (params?.enabled !== undefined) sp.set('enabled', String(params.enabled));
+    if (params?.limit)              sp.set('limit',   String(params.limit));
+    if (params?.offset)             sp.set('offset',  String(params.offset));
+    const q = sp.toString();
+    return fetchAPI<{ mappings: SymbolMappingRecord[]; total: number; generated_at: string }>(
+      `/api/v1/symbol-mappings${q ? `?${q}` : ''}`
+    );
+  },
+
+  getById: (id: number) =>
+    fetchAPI<SymbolMappingRecord>(`/api/v1/symbol-mappings/${id}`),
+
+  create: (data: {
+    mt5_symbol: string;
+    lp_id: string;
+    lp_symbol: string;
+    volume_multiplier?: number;
+    lp_price_precision?: number;
+    enabled?: boolean;
+  }) =>
+    fetchAPI<SymbolMappingRecord>('/api/v1/symbol-mappings', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: number, data: {
+    lp_symbol?: string;
+    volume_multiplier?: number;
+    lp_price_precision?: number;
+    enabled?: boolean;
+    approved?: boolean;
+  }) =>
+    fetchAPI<SymbolMappingRecord>(`/api/v1/symbol-mappings/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: number) =>
+    fetchAPI<{ success: boolean; deleted_id: number }>(`/api/v1/symbol-mappings/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // ── Bulk ─────────────────────────────────────────────────────
+
+  import: (lp_id: string, rows: { mt5_symbol: string; lp_symbol: string; volume_multiplier?: number; lp_price_precision?: number }[]) =>
+    fetchAPI<{ inserted: number; skipped: number; conflicts: string[] }>('/api/v1/symbol-mappings/import', {
+      method: 'POST',
+      body: JSON.stringify({ lp_id, rows }),
+    }),
+
+  autoMap: (params?: { lp_id?: string; dry_run?: boolean; min_confidence?: number }) =>
+    fetchAPI<{ suggestions: AutoMapSuggestionAPI[]; dry_run: boolean; inserted?: number }>('/api/v1/symbol-mappings/auto-map', {
+      method: 'POST',
+      body: JSON.stringify(params ?? { dry_run: true }),
+    }),
+
+  approve: (id: number) =>
+    fetchAPI<SymbolMappingRecord>(`/api/v1/symbol-mappings/${id}/approve`, {
+      method: 'POST',
+    }),
+
+  approveAll: () =>
+    fetchAPI<{ approved_count: number }>('/api/v1/symbol-mappings/approve-all', {
+      method: 'POST',
+    }),
+
+  // ── Reference Data ────────────────────────────────────────────
+
+  getMT5Symbols: () =>
+    fetchAPI<{
+      symbols: { symbol: string; description: string; digits: number; contract_size: number }[];
+      total: number;
+      source_nodes: number;
+    }>('/api/v1/symbol-mappings/mt5-symbols'),
+
+  getLPSymbols: (lp_id: string) =>
+    fetchAPI<{ lp_id: string; symbols: string[]; total: number }>(
+      `/api/v1/symbol-mappings/lp-symbols?lp_id=${encodeURIComponent(lp_id)}`
+    ),
+
+  getUnmapped: (lp_id?: string) => {
+    const q = lp_id ? `?lp_id=${encodeURIComponent(lp_id)}` : '';
+    return fetchAPI<{ unmapped: string[]; total: number }>(`/api/v1/symbol-mappings/unmapped${q}`);
+  },
+};
 // ============================================
 // WebSocket — real-time feeds
 // ============================================
