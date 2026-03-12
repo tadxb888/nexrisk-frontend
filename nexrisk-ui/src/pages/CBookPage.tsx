@@ -1229,10 +1229,10 @@ export function CBookPage() {
         if (r.success) {
           entry.clord_id = r.clord_id ?? '—';
           setExecLog((prev) => [entry, ...prev].slice(0, 20));
-          // Register DOM order so EXECUTION_REPORT can stamp type + comment on the new position
-          // Snapshot current position_ids — next REST poll will detect new one
-          const preIds = new Set<string>();
-          gridRef.current?.api?.forEachNode((n) => { if (n.data?.positionId) preIds.add(n.data.positionId); });
+          // Snapshot real TE position_ids from livePositions (not grid nodes which include
+          // optimistic clord_id rows). pendingDomRef is consumed only when a genuinely new
+          // position_id arrives in POSITION_REPORT that wasn't open at order time.
+          const preIds = new Set<string>(livePositions.map((p) => p.positionId));
           pendingDomRef.current = { comment: domComment.trim(), preIds };
           setDomComment('');
           // Optimistic session row — grid shows immediately, fill confirmed by WS EXECUTION_REPORT
@@ -1266,7 +1266,7 @@ export function CBookPage() {
       setSubmitting(false);
     }
   }, [
-    domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif, domComment,
+    domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif, domComment, livePositions,
     limitPrice, stopLoss, takeProfit, slTpSupported, activeInstrument,
     closeRow, domLpInfo,
   ]);
