@@ -28,6 +28,7 @@ import type {
   MenuItemDef,
   GridReadyEvent,
   SelectionChangedEvent,
+  CellValueChangedEvent,
 } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
@@ -221,7 +222,7 @@ const SEED_CAPABILITIES: Record<string, FIXCapabilities> = {
 // =============================================================================
 // CBOOK TYPES
 // =============================================================================
-export type CBookOrderType = 'Hedge' | 'Opportunity' | 'Repair';
+export type CBookOrderType = 'Terminal' | 'DOM Trader';
 export type CBookSide = 'BUY' | 'SELL';
 
 export interface CBookOrder {
@@ -244,6 +245,7 @@ export interface CBookOrder {
   currentPrice: number | null;
   type: CBookOrderType;
   comments: string;
+  instrumentGroup: string;  // 'FX' | 'Metals' | etc — for vol display
   _lpId: string;
   _isOpen: boolean;
 }
@@ -280,9 +282,8 @@ interface FIXMessage {
 }
 
 const TYPE_COLORS: Record<CBookOrderType, string> = {
-  Hedge: '#4ecdc4',
-  Opportunity: '#a78bfa',
-  Repair: '#f59e0b',
+  Terminal:     '#a78bfa',
+  'DOM Trader': '#4ecdc4',
 };
 
 // =============================================================================
@@ -469,8 +470,9 @@ function positionToCBook(pos: FIXPosition, lpId: string, instrMap: Record<string
     takeProfit: pos.take_profit ?? null,
     unrealizedPnl: pos.unrealized_pnl ?? null,
     currentPrice:  pos.current_price  ?? null,
-    type:       'Hedge',
-    comments:   `swap:${(pos.swap ?? 0).toFixed(2)}  comm:${(pos.commission ?? 0).toFixed(2)}`,
+    type:       'Terminal',
+    comments:        `swap:${(pos.swap ?? 0).toFixed(2)}  comm:${(pos.commission ?? 0).toFixed(2)}`,
+    instrumentGroup: ins?.instrument_group ?? 'FX',
     _lpId:      lpId,
     _isOpen:    isOpen,
   };
@@ -502,7 +504,7 @@ export function CBookPage() {
   const [fixMessagesLoading, setFixMessagesLoading] = useState(false);
   const [sessionOrders, setSessionOrders] = useState<CBookOrder[]>([]);
   const [posLoading, setPosLoading]       = useState(false);
-  const [timePeriod, setTimePeriod]       = useState<'today' | 'week' | 'month'>('today');
+
   const instrCacheRef = useRef<Record<string, Record<string, FIXInstrument>>>({});
 
   // ── Close-mode ────────────────────────────────────────────────────────────
@@ -540,6 +542,12 @@ export function CBookPage() {
   const wsLpIdRef     = useRef<string>('');
   // Always mirrors gridLpId so WS handlers work even when wsLpIdRef is '' (no DOM symbol).
   const gridLpIdRef   = useRef<string>('');
+  // True only when the selected LP exists and is CONNECTED
+  const gridLpConnected = useMemo(() => {
+    if (!gridLpId) return true; // "All LPs" — show everything
+    const lp = allLps.find((l) => l.lp_id === gridLpId);
+    return lp?.state === 'CONNECTED';
+  }, [gridLpId, allLps]);
   const bookSeededRef = useRef<boolean>(false);
   // Track optimistically-closed position IDs so poll results don't ghost them back.
   const closedPositionIdsRef = useRef<Set<string>>(new Set());
@@ -550,6 +558,25 @@ export function CBookPage() {
   const [domOrderType, setDomOrderType] = useState<string>('MARKET');
   const [domTif, setDomTif]             = useState<string>('GTC');
   const [domQtyLots, setDomQtyLots]     = useState<string>('');
+  const [domComment, setDomComment]     = useState<string>('');
+  // Set when DOM order is placed. Picked up by the next REST poll that finds a new position_id.
+  const pendingDomRef   = useRef<{ comment: string; preIds: Set<string> } | null>(null);
+  // position_id → {type, comments} — survives REST polls, WS updates, and page refresh
+  const posOverrideRef = useRef<Map<string, { type: CBookOrderType; comments: string }>>(
+    (() => {
+      try {
+        const raw = localStorage.getItem('nexrisk_pos_overrides');
+        if (raw) return new Map(JSON.parse(raw) as [string, { type: CBookOrderType; comments: string }][]);
+      } catch {}
+      return new Map();
+    })()
+  );
+
+  const saveOverrides = () => {
+    try {
+      localStorage.setItem('nexrisk_pos_overrides', JSON.stringify([...posOverrideRef.current.entries()]));
+    } catch {}
+  };
   const [limitPrice, setLimitPrice]     = useState<string>('');
   const [stopLoss, setStopLoss]         = useState<string>('');
   const [takeProfit, setTakeProfit]     = useState<string>('');
@@ -664,7 +691,12 @@ export function CBookPage() {
         const incoming = r.data.positions
           .filter((p) => p.position_id !== '' && p.open_price > 0)
           .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
-          .map((p) => positionToCBook(p, gridLpId, instrMap));
+          .map((p) => {
+            const row = positionToCBook(p, gridLpId, instrMap);
+            const ov = posOverrideRef.current.get(p.position_id);
+            if (ov) { row.type = ov.type; row.comments = ov.comments; }
+            return row;
+          });
 
         if (firstLoad) {
           // Seed grid via applyTransaction — never via rowData prop (causes row reordering).
@@ -821,8 +853,9 @@ export function CBookPage() {
           if (msg.type === 'EXECUTION_REPORT') {
             // Brief Section 9.5: fields may be at event.data.* or event.* level
             const fill = msg.data ?? msg;
+            const clordId = fill.cl_ord_id ?? fill.clord_id ?? `ws-${Date.now()}`;
             const entry: ExecEntry = {
-              clord_id:  fill.cl_ord_id ?? fill.clord_id ?? `ws-${Date.now()}`,
+              clord_id:  clordId,
               ts:        msg.timestamp_ms ?? Date.now(),
               symbol:    fill.symbol    ?? msg.symbol    ?? '',
               side:      (fill.side     ?? msg.side      ?? 'BUY') as 'BUY' | 'SELL',
@@ -844,12 +877,24 @@ export function CBookPage() {
                 bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)
                   .then((r) => {
                     if (r.success && !cancelled) {
-                      setLivePositions(
-                        r.data.positions
-                          .filter((p) => p.position_id !== '' && p.open_price > 0)
-                          .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
-                          .map((p) => positionToCBook(p, lpSnap, instrMap))
-                      );
+                      const rows = r.data.positions
+                        .filter((p) => p.position_id !== '' && p.open_price > 0)
+                        .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
+                        .map((p) => {
+                          const row = positionToCBook(p, lpSnap, instrMap);
+                          const ov = posOverrideRef.current.get(p.position_id);
+                          if (ov) { row.type = ov.type; row.comments = ov.comments; }
+                          return row;
+                        });
+                      setLivePositions(rows);
+                      const api = gridRef.current?.api;
+                      if (api) {
+                        rows.forEach((row) => {
+                          const node = api.getRowNode(row.id);
+                          if (node) node.setData(row);
+                          else api.applyTransaction({ add: [row] });
+                        });
+                      }
                     }
                   }).catch(() => {});
               }, 600);
@@ -947,6 +992,19 @@ export function CBookPage() {
             if (pos.position_id !== ''
                 && !closedPositionIdsRef.current.has(pos.position_id)) {
               const row = positionToCBook(pos, resolvedLp, instrMap);
+              // If a DOM order is pending and this position_id is new → stamp it
+              const pending = pendingDomRef.current;
+              if (pending && !pending.preIds.has(pos.position_id)) {
+                posOverrideRef.current.set(pos.position_id, {
+                  type:     'DOM Trader',
+                  comments: pending.comment,
+                });
+                saveOverrides();
+                pendingDomRef.current = null; // consumed
+              }
+              // Apply persisted type/comment override (survives all subsequent WS updates)
+              const ov = posOverrideRef.current.get(pos.position_id);
+              if (ov) { row.type = ov.type; row.comments = ov.comments; }
               setLivePositions((prev) => {
                 const idx = prev.findIndex((p) => p.positionId === row.positionId);
                 return idx >= 0 ? prev.map((p, i) => i === idx ? row : p) : [row, ...prev];
@@ -1064,26 +1122,25 @@ export function CBookPage() {
     return src.slice(0, 60);
   }, [instruments, symbolSearch]);
 
-  const gridRows = useMemo<CBookOrder[]>(() => {
-    const now = new Date();
-    const filtSess = sessionOrders.filter((o) => {
-      const d = new Date(o.date);
-      if (timePeriod === 'today') return d.toDateString() === now.toDateString();
-      if (timePeriod === 'week')  return d >= new Date(now.getTime() - 7 * 86400000);
-      return true;
-    });
-    return [...livePositions, ...filtSess];
-  }, [livePositions, sessionOrders, timePeriod]);
+  const gridRows = useMemo<CBookOrder[]>(() => [...livePositions, ...sessionOrders], [livePositions, sessionOrders]);
 
-  const stats = useMemo(() => ({
-    total:  gridRows.length,
-    volume: gridRows.reduce((s, r) => s + r.volume, 0),
-    hedge:  gridRows.filter((r) => r.type === 'Hedge').length,
-    opp:    gridRows.filter((r) => r.type === 'Opportunity').length,
-    rep:    gridRows.filter((r) => r.type === 'Repair').length,
-    buys:   gridRows.filter((r) => r.side === 'BUY').length,
-    sells:  gridRows.filter((r) => r.side === 'SELL').length,
-  }), [gridRows]);
+  const stats = useMemo(() => {
+    const openRows = gridRows.filter((r) => r._isOpen);
+    // Split open position volume by instrument group
+    const fxUnits  = openRows.filter((r) => r.instrumentGroup === 'FX').reduce((s, r) => s + (r.displayQty ?? 0), 0);
+    const cfdUnits = openRows.filter((r) => r.instrumentGroup !== 'FX').reduce((s, r) => s + (r.displayQty ?? 0), 0);
+    const fmtFx = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(0)}K` : n.toLocaleString();
+    const parts: string[] = [];
+    if (fxUnits  > 0) parts.push(`${fmtFx(fxUnits)} FX`);
+    if (cfdUnits > 0) parts.push(`${cfdUnits.toLocaleString()} CFDs`);
+    const volDisplay = parts.length ? parts.join(' | ') : '—';
+    return {
+      total:      gridRows.length,
+      buys:       openRows.filter((r) => r.side === 'BUY').length,
+      sells:      openRows.filter((r) => r.side === 'SELL').length,
+      volDisplay,
+    };
+  }, [gridRows]);
 
   const instrDecimals = activeInstrument?.price_precision
     ?? (domSymbol.includes('JPY') ? 3 : domSymbol.includes('XAU') || domSymbol.includes('BTC') ? 2 : 5);
@@ -1172,6 +1229,12 @@ export function CBookPage() {
         if (r.success) {
           entry.clord_id = r.clord_id ?? '—';
           setExecLog((prev) => [entry, ...prev].slice(0, 20));
+          // Register DOM order so EXECUTION_REPORT can stamp type + comment on the new position
+          // Snapshot current position_ids — next REST poll will detect new one
+          const preIds = new Set<string>();
+          gridRef.current?.api?.forEachNode((n) => { if (n.data?.positionId) preIds.add(n.data.positionId); });
+          pendingDomRef.current = { comment: domComment.trim(), preIds };
+          setDomComment('');
           // Optimistic session row — grid shows immediately, fill confirmed by WS EXECUTION_REPORT
           const newRow: CBookOrder = {
             id: `sess-${r.clord_id ?? Date.now()}`,
@@ -1184,7 +1247,8 @@ export function CBookPage() {
             fillPrice: liveBookRef.current
               ? (side === 'BUY' ? (liveBookRef.current.best_ask ?? 0) : (liveBookRef.current.best_bid ?? 0))
               : parseFloat(limitPrice) || 0,
-            type: 'Hedge', comments: `FIX:${r.clord_id}`,
+            type: 'DOM Trader', comments: domComment.trim() || `FIX:${r.clord_id}`,
+            instrumentGroup: activeInstrument?.instrument_group ?? 'FX',
             stopLoss: null, takeProfit: null, unrealizedPnl: null, currentPrice: null,
             _lpId: domLpId, _isOpen: false,
           };
@@ -1202,7 +1266,7 @@ export function CBookPage() {
       setSubmitting(false);
     }
   }, [
-    domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif,
+    domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif, domComment,
     limitPrice, stopLoss, takeProfit, slTpSupported, activeInstrument,
     closeRow, domLpInfo,
   ]);
@@ -1243,7 +1307,7 @@ export function CBookPage() {
     { field: 'date',       headerName: 'Date',        filter: 'agDateColumnFilter',  width: 110, pinned: 'left', valueFormatter: fmtDate, sort: 'desc' },
     { field: 'time',       headerName: useLocalTime ? 'Time (Local)' : 'Time (UTC)', filter: 'agDateColumnFilter', width: 130, pinned: 'left', valueFormatter: useLocalTime ? fmtTime : fmtTimeUTC },
     { field: 'dealerId',   headerName: 'Account',     filter: 'agSetColumnFilter',   width: 140 },
-    { field: 'symbol',     headerName: 'Symbol',      filter: 'agSetColumnFilter',   width: 100, cellStyle: { fontWeight: 500 } },
+    { field: 'symbol',     headerName: 'Symbol',      filter: 'agSetColumnFilter',   width: 100, pinned: 'left', cellStyle: { fontWeight: 500 } },
     { field: 'positionId', headerName: 'Position ID', filter: 'agTextColumnFilter',  width: 160 },
     {
       field: 'side', headerName: 'Side', filter: 'agSetColumnFilter', width: 80,
@@ -1331,6 +1395,18 @@ export function CBookPage() {
     setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
   }, []);
 
+  const onCellValueChanged = useCallback((e: CellValueChangedEvent<CBookOrder>) => {
+    if (e.column.getColId() === 'comments' && e.data?.positionId) {
+      // Persist edited comment — survives REST polls
+      const existing = posOverrideRef.current.get(e.data.positionId);
+      posOverrideRef.current.set(e.data.positionId, {
+        type:     existing?.type ?? e.data.type,
+        comments: e.newValue ?? '',
+      });
+      saveOverrides();
+    }
+  }, []);
+
   const getContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
     const row = params.node?.data as CBookOrder | undefined;
     return [
@@ -1380,64 +1456,87 @@ export function CBookPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
 
-      {/* ── Page Header ──────────────────────────────────────────────────────── */}
-      <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-lg font-semibold text-white">C-Book</h1>
-          <p className="text-xs text-[#999]">Hybrid book — Hedge, Opportunity & Repair orders</p>
+      {/* ── Row 1: C-Book title + Account metrics ───────────────────────────── */}
+      <div className="px-4 py-2 border-b border-[#555] flex items-center gap-6 flex-shrink-0" style={{ backgroundColor: '#1e1e20' }}>
+        <div className="flex-shrink-0">
+          <h1 className="text-base font-semibold text-white leading-tight">C-Book</h1>
+          <p className="text-[10px] text-[#777]">Hedge, Trade &amp; Repair orders</p>
         </div>
-        <div className="flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-[#aaa]">View LP:</span>
-            {lpsLoading ? <span className="text-[#555]">…</span> : (
-              <select
-                value={gridLpId}
-                onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); }}
-                className="bg-[#232225] border border-[#555] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
-              >
-                <option value="">— All LPs —</option>
-                {allLps.map((l) => (
-                  <option key={l.lp_id} value={l.lp_id}>
-                    {l.lp_name ?? l.lp_id}{l.state !== 'CONNECTED' ? ` (${l.state})` : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-            {posLoading && <span className="text-[#555] animate-pulse">↻</span>}
+        <div className="w-px h-8 bg-[#444] flex-shrink-0" />
+        {account ? (
+          <div className="flex items-center gap-6 text-[11px]">
+            <div>
+              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance</div>
+              <div className="font-mono text-white font-medium">${fmtAcct(account.balance)}</div>
+            </div>
+            <div>
+              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Equity</div>
+              <div className="font-mono font-medium" style={{ color: account.equity >= account.balance ? '#4ecdc4' : '#e0a020' }}>
+                ${fmtAcct(account.equity)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">UPNL</div>
+              <div className="font-mono font-medium" style={{ color: account.unrealized_pnl >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                {account.unrealized_pnl >= 0 ? '+' : ''}${fmtAcct(account.unrealized_pnl)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Mgn Used</div>
+              <div className="font-mono text-white font-medium">${fmtAcct(account.margin_used)}</div>
+            </div>
+            <div>
+              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Avail</div>
+              <div className="font-mono font-medium text-[#4ecdc4]">${fmtAcct(account.margin_available)}</div>
+            </div>
           </div>
-          <div className="w-px h-4 bg-[#555]" />
-          <select
-            value={timePeriod}
-            onChange={(e) => setTimePeriod(e.target.value as 'today' | 'week' | 'month')}
-            className="bg-[#232225] border border-[#555] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
-          >
-            <option value="today">Today</option>
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-          </select>
-          <div className="w-px h-4 bg-[#555]" />
-          <button
-            onClick={() => setUseLocalTime(v => !v)}
-            className="flex items-center gap-1 px-2 py-1 rounded border border-[#555] bg-[#232225] hover:border-[#4ecdc4] text-[#aaa] hover:text-white transition-colors text-xs"
-            title="Toggle local / server (UTC) time"
-          >
-            🕐 {useLocalTime ? 'Local' : 'UTC'}
-          </button>
-          <div className="w-px h-4 bg-[#555]" />
-          <div><span className="text-[#aaa]">Pos:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
-          <div>
-            <span className="text-[#aaa]">L/S:</span>
-            <span className="ml-1 font-mono">
-              <span className="text-[#4ecdc4]">{stats.buys}</span>
-              <span className="text-[#444]"> / </span>
-              <span className="text-[#e0a020]">{stats.sells}</span>
-            </span>
-          </div>
-          <div><span className="text-[#aaa]">Vol:</span><span className="ml-1 font-mono text-white">{stats.volume.toFixed(2)}</span></div>
-          <div className="w-px h-4 bg-[#555]" />
-          <div><span className="text-[#aaa]">H:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Hedge }}>{stats.hedge}</span></div>
-          <div><span className="text-[#aaa]">O:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Opportunity }}>{stats.opp}</span></div>
-          <div><span className="text-[#aaa]">R:</span><span className="ml-1 font-mono" style={{ color: TYPE_COLORS.Repair }}>{stats.rep}</span></div>
+        ) : (
+          <div className="text-[11px] text-[#555]">Awaiting account data…</div>
+        )}
+      </div>
+
+      {/* ── Row 2: Controls + Position stats ─────────────────────────────────── */}
+      <div className="px-4 py-1.5 border-b border-[#444] flex items-center gap-3 flex-shrink-0 text-xs" style={{ backgroundColor: '#252527' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-[#aaa]">View LP:</span>
+          {lpsLoading ? <span className="text-[#555]">…</span> : (
+            <select
+              value={gridLpId}
+              onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); }}
+              className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
+            >
+              <option value="">— All LPs —</option>
+              {allLps.map((l) => (
+                <option key={l.lp_id} value={l.lp_id}>
+                  {l.lp_name ?? l.lp_id}{l.state !== 'CONNECTED' ? ` (${l.state})` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          {posLoading && <span className="text-[#555] animate-pulse">↻</span>}
+        </div>
+        <div className="w-px h-4 bg-[#555]" />
+
+        <button
+          onClick={() => setUseLocalTime(v => !v)}
+          className="flex items-center gap-1 px-2 py-0.5 rounded border border-[#555] bg-[#232225] hover:border-[#4ecdc4] text-[#aaa] hover:text-white transition-colors text-xs"
+          title="Toggle local / server (UTC) time"
+        >
+          {useLocalTime ? 'Local Time' : 'UTC'}
+        </button>
+        <div className="w-px h-4 bg-[#555]" />
+        <div><span className="text-[#aaa]">Pos:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
+        <div>
+          <span className="text-[#aaa]">L/S:</span>
+          <span className="ml-1 font-mono">
+            <span className="text-[#4ecdc4]">{stats.buys}</span>
+            <span className="text-[#444]"> / </span>
+            <span className="text-[#e0a020]">{stats.sells}</span>
+          </span>
+        </div>
+        <div>
+          <span className="text-[#aaa]">Vol (Units):</span>
+          <span className="ml-1 font-mono text-white">{stats.volDisplay}</span>
         </div>
       </div>
 
@@ -1446,12 +1545,16 @@ export function CBookPage() {
 
         {/* ── Grid ─────────────────────────────────────────────────────────── */}
         <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-          {posLoading && livePositions.length === 0 && (
+          {!gridLpConnected ? (
+            <div className="flex-1 flex items-center justify-center text-[#555] text-sm">
+              No data to show — LP not connected
+            </div>
+          ) : posLoading && livePositions.length === 0 ? (
             <div className="flex-shrink-0 px-3 py-1.5 text-xs text-[#555] border-b border-[#444]">
               Fetching positions from {gridLpId}…
             </div>
-          )}
-          <div className="flex-1 min-h-0">
+          ) : null}
+          <div className={gridLpConnected ? "flex-1 min-h-0" : "hidden"}>
             <AgGridReact<CBookOrder>
               ref={gridRef}
               theme={gridTheme}
@@ -1474,6 +1577,7 @@ export function CBookPage() {
               getContextMenuItems={getContextMenuItems}
               onGridReady={onGridReady}
               onSelectionChanged={onSelectionChanged}
+              onCellValueChanged={onCellValueChanged}
             />
           </div>
         </div>
@@ -1511,26 +1615,7 @@ export function CBookPage() {
             </div>
           </div>
 
-          {/* ── Account Panel — Brief Section 7.4 ────────────────────────────── */}
-          {/* ACCOUNT_STATUS fires every ~2 s from TE — drives this without REST polling */}
-          {account && (
-            <div className="px-3 py-1.5 border-b border-[#333] flex-shrink-0 grid grid-cols-3 gap-x-2 text-[10px]" style={{ backgroundColor: '#191a1c' }}>
-              <div>
-                <div className="text-[#ccc] mb-px">Balance</div>
-                <div className="font-mono text-white">{fmtAcct(account.balance)}</div>
-              </div>
-              <div>
-                <div className="text-[#ccc] mb-px">Equity</div>
-                <div className="font-mono" style={{ color: account.equity >= account.balance ? '#4ecdc4' : '#e0a020' }}>
-                  {fmtAcct(account.equity)}
-                </div>
-              </div>
-              <div>
-                <div className="text-[#ccc] mb-px">Free Margin</div>
-                <div className="font-mono text-white">{fmtAcct(account.margin_available)}</div>
-              </div>
-            </div>
-          )}
+          {/* Account metrics moved to main page header row 1 */}
 
           {/* LP session state (from brief Section 4.1) */}
           {lpStatus && (
@@ -1819,6 +1904,22 @@ export function CBookPage() {
                     />
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Comment (optional, 50 chars, DOM Trader orders only) */}
+            {!closeRow && (
+              <div className="mb-2">
+                <div className="text-[10px] text-white mb-1">Comment <span className="text-[#555]">(optional)</span></div>
+                <input
+                  type="text"
+                  value={domComment}
+                  onChange={(e) => setDomComment(e.target.value.slice(0, 50))}
+                  placeholder="Add note…"
+                  maxLength={50}
+                  className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4] placeholder-[#555]"
+                />
+                {domComment && <div className="text-[9px] text-[#555] mt-0.5 text-right">{domComment.length}/50</div>}
               </div>
             )}
 
