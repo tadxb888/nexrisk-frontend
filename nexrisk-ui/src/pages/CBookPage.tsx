@@ -142,12 +142,15 @@ interface FIXPosition {
 }
 
 // Brief Section 7.4: ACCOUNT_STATUS fires every ~2 s from TE
+// Only tags confirmed sent by TE sandbox UAA (verified 2026-03-13):
+//   20115 = ProjectedBalance  → balance
+//   20080 = UsedMargin        → margin_used
+//   7027  = AvailableMargin   → margin_available
+// Tags NOT sent by sandbox: 7010, 20111, 20127, 7032 (equity/unrealised/realised absent)
 interface AccountStatus {
-  balance: number;
-  equity: number;
-  margin_used: number;
-  margin_available: number;
-  unrealized_pnl: number;
+  balance: number;          // tag 20115 ProjectedBalance
+  margin_used: number;      // tag 20080 UsedMargin
+  margin_available: number; // tag 7027  AvailableMargin
   currency: string;
 }
 
@@ -1100,11 +1103,9 @@ export function CBookPage() {
             const d = msg.data ?? msg;
             setAccount({
               balance:          d.balance          ?? 0,
-              equity:           d.equity           ?? 0,
-              margin_used:      d.margin_used       ?? 0,
-              margin_available: d.margin_available  ?? 0,
-              unrealized_pnl:   d.unrealized_pnl    ?? 0,
-              currency:         d.currency          ?? 'USD',
+              margin_used:      d.margin_used      ?? 0,
+              margin_available: d.margin_available ?? 0,
+              currency:         d.currency         ?? 'USD',
             });
           }
 
@@ -1519,35 +1520,29 @@ export function CBookPage() {
           <p className="text-[10px] text-[#777]">Hedge, Trade &amp; Repair orders</p>
         </div>
         <div className="w-px h-8 bg-[#444] flex-shrink-0" />
-        {account ? (
-          <div className="flex items-center gap-6 text-[11px]">
-            <div>
-              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance</div>
-              <div className="font-mono text-white font-medium">${fmtAcct(account.balance)}</div>
-            </div>
-            <div>
-              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Equity</div>
-              <div className="font-mono font-medium" style={{ color: account.equity >= account.balance ? '#4ecdc4' : '#e0a020' }}>
-                ${fmtAcct(account.equity)}
+        {/* Account metrics — TE only. Only 3 fields confirmed sent by TE sandbox UAA. */}
+        {allLps.find(l => l.lp_id === domLpId)?.provider_type === 'traderevolution' && (
+          account ? (
+            <div className="flex items-center gap-5 text-[11px]">
+              {/* tag 20115 — ProjectedBalance = UsedMargin + AvailableMargin */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance <span className="text-[#444]">20115</span></div>
+                <div className="font-mono text-white font-medium">{account.currency} {fmtAcct(account.balance)}</div>
+              </div>
+              {/* tag 20080 — UsedMargin */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Used Margin <span className="text-[#444]">20080</span></div>
+                <div className="font-mono text-white font-medium">{account.currency} {fmtAcct(account.margin_used)}</div>
+              </div>
+              {/* tag 7027 — AvailableMargin */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Available Margin <span className="text-[#444]">7027</span></div>
+                <div className="font-mono font-medium text-[#4ecdc4]">{account.currency} {fmtAcct(account.margin_available)}</div>
               </div>
             </div>
-            <div>
-              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">UPNL</div>
-              <div className="font-mono font-medium" style={{ color: account.unrealized_pnl >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
-                {account.unrealized_pnl >= 0 ? '+' : ''}${fmtAcct(account.unrealized_pnl)}
-              </div>
-            </div>
-            <div>
-              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Mgn Used</div>
-              <div className="font-mono text-white font-medium">${fmtAcct(account.margin_used)}</div>
-            </div>
-            <div>
-              <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Avail</div>
-              <div className="font-mono font-medium text-[#4ecdc4]">${fmtAcct(account.margin_available)}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-[11px] text-[#555]">Awaiting account data…</div>
+          ) : (
+            <div className="text-[11px] text-[#555]">Awaiting account data…</div>
+          )
         )}
       </div>
 
