@@ -550,7 +550,16 @@ export function CBookPage() {
   }, [gridLpId, allLps]);
   const bookSeededRef = useRef<boolean>(false);
   // Track optimistically-closed position IDs so poll results don't ghost them back.
-  const closedPositionIdsRef = useRef<Set<string>>(new Set());
+  // Persisted to localStorage so page refresh doesn't resurface positions closed this session.
+  const closedPositionIdsRef = useRef<Set<string>>(
+    (() => {
+      try {
+        const raw = localStorage.getItem('nexrisk_closed_positions');
+        if (raw) return new Set<string>(JSON.parse(raw) as string[]);
+      } catch {}
+      return new Set<string>();
+    })()
+  );
   // Local accumulated book state — updated by applyBookMessage, rendered via setLiveBook
   const localBidsRef  = useRef<Map<number, number>>(new Map());
   const localAsksRef  = useRef<Map<number, number>>(new Map());
@@ -575,6 +584,11 @@ export function CBookPage() {
   const saveOverrides = () => {
     try {
       localStorage.setItem('nexrisk_pos_overrides', JSON.stringify([...posOverrideRef.current.entries()]));
+    } catch {}
+  };
+  const saveClosedIds = () => {
+    try {
+      localStorage.setItem('nexrisk_closed_positions', JSON.stringify([...closedPositionIdsRef.current]));
     } catch {}
   };
   const [limitPrice, setLimitPrice]     = useState<string>('');
@@ -688,6 +702,15 @@ export function CBookPage() {
         const r = await bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${gridLpId}`);
         if (cancelled || !r.success) return;
         const instrMap = instrCacheRef.current[gridLpId] ?? {};
+        // Prune closed-ID tombstones for positions the backend no longer returns at all
+        // (they've been fully removed server-side). Keep tombstones that the backend still
+        // echoes — they guard against the cache echo re-adding a freshly closed position.
+        const backendPosIds = new Set(r.data.positions.map((p) => p.position_id));
+        let closedPruned = false;
+        for (const id of closedPositionIdsRef.current) {
+          if (!backendPosIds.has(id)) { closedPositionIdsRef.current.delete(id); closedPruned = true; }
+        }
+        if (closedPruned) saveClosedIds();
         const incoming = r.data.positions
           .filter((p) => p.position_id !== '' && p.open_price > 0)
           .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
@@ -843,8 +866,54 @@ export function CBookPage() {
           const msg = JSON.parse(evt.data);
           if (msg.type === 'MARKET_DATA_INCREMENTAL' || msg.type === 'MARKET_DATA_SNAPSHOT') {
             console.log('[MD]', msg.data?.symbol, 'bid:', msg.data?.best_bid, 'ask:', msg.data?.best_ask);
+          } else {
+            // Log all non-MD WS events so external closes are visible in devtools
+            console.log('[CBook WS] event:', msg.type, msg.lp_id ?? '', msg.data ?? '');
           }
 
+          // ── Shared helper: fetch positions and reconcile grid ─────────────────
+          // Called after EXECUTION_REPORT — once at 600ms (C++ cache window) and
+          // again at 2500ms (TE sandbox external close may take 1-2s to clear).
+          const syncPositionsAfterFill = (lpSnap: string, delayMs: number) => {
+            setTimeout(() => {
+              if (cancelled) return;
+              const instrMap = instrCacheRef.current[lpSnap] ?? {};
+              bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)
+                .then((r) => {
+                  if (!r.success || cancelled) return;
+                  const rows = r.data.positions
+                    .filter((p) => p.position_id !== '' && p.open_price > 0)
+                    .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
+                    .map((p) => {
+                      const row = positionToCBook(p, lpSnap, instrMap);
+                      const ov = posOverrideRef.current.get(p.position_id);
+                      if (ov) { row.type = ov.type; row.comments = ov.comments; }
+                      return row;
+                    });
+                  setLivePositions(rows);
+                  const api = gridRef.current?.api;
+                  if (api) {
+                    // Diff: remove pos- rows absent from fresh fetch (externally closed),
+                    // update/add rows that are present.
+                    const existingPosIds = new Set<string>();
+                    api.forEachNode((node) => { if (node.data?.id?.startsWith('pos-')) existingPosIds.add(node.data.id); });
+                    const incomingIds = new Set(rows.map((r) => r.id));
+                    const toRemove = [...existingPosIds]
+                      .filter((id) => !incomingIds.has(id))
+                      .map((id) => ({ id } as CBookOrder));
+                    if (toRemove.length) {
+                      console.log('[CBook] syncPositions removing', toRemove.length, 'closed pos rows at', delayMs, 'ms');
+                      api.applyTransaction({ remove: toRemove });
+                    }
+                    rows.forEach((row) => {
+                      const node = api.getRowNode(row.id);
+                      if (node) node.setData(row);
+                      else api.applyTransaction({ add: [row] });
+                    });
+                  }
+                }).catch(() => {});
+            }, delayMs);
+          };
 
           // ── FILLS — Brief Section 7.1 / 3.1
           // EXECUTION_REPORT is the fill type for ALL LPs incl TE.
@@ -866,38 +935,13 @@ export function CBookPage() {
               status:    'SENT',
             };
             setExecLog((prev) => [entry, ...prev].slice(0, 20));
-            // Brief Section 9.5: re-fetch positions after fill.
-            // Delayed 600ms so C++ position refresh timer (500ms after fill) has
-            // populated the cache with correct long_qty/short_qty before we read it.
+            // Two-pass sync:
+            // Pass 1 @ 600ms  — C++ position refresh timer (500ms) should have fired.
+            // Pass 2 @ 2500ms — TE sandbox external close can take 1-2s to clear the
+            //                   position from TE's own cache, so pass 1 may still see it.
             if (wsLpIdRef.current) {
-              const lpSnap = wsLpIdRef.current;
-              setTimeout(() => {
-                if (cancelled) return;
-                const instrMap = instrCacheRef.current[lpSnap] ?? {};
-                bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)
-                  .then((r) => {
-                    if (r.success && !cancelled) {
-                      const rows = r.data.positions
-                        .filter((p) => p.position_id !== '' && p.open_price > 0)
-                        .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
-                        .map((p) => {
-                          const row = positionToCBook(p, lpSnap, instrMap);
-                          const ov = posOverrideRef.current.get(p.position_id);
-                          if (ov) { row.type = ov.type; row.comments = ov.comments; }
-                          return row;
-                        });
-                      setLivePositions(rows);
-                      const api = gridRef.current?.api;
-                      if (api) {
-                        rows.forEach((row) => {
-                          const node = api.getRowNode(row.id);
-                          if (node) node.setData(row);
-                          else api.applyTransaction({ add: [row] });
-                        });
-                      }
-                    }
-                  }).catch(() => {});
-              }, 600);
+              syncPositionsAfterFill(wsLpIdRef.current, 600);
+              syncPositionsAfterFill(wsLpIdRef.current, 2500);
             }
           }
 
@@ -991,6 +1035,15 @@ export function CBookPage() {
             // (open_price > 0 guard is for REST responses only, not WS.)
             if (pos.position_id !== ''
                 && !closedPositionIdsRef.current.has(pos.position_id)) {
+              // TE sends a POSITION_REPORT with open_price=0 when a position is closed
+              // externally (e.g. from the TE Trading Terminal). Detect and purge from grid.
+              if (pos.open_price === 0) {
+                const closedId = `pos-${resolvedLp}-${pos.position_id}`;
+                closedPositionIdsRef.current.add(pos.position_id);
+                saveClosedIds();
+                setLivePositions((prev) => prev.filter((p) => p.positionId !== pos.position_id));
+                gridRef.current?.api?.applyTransaction({ remove: [{ id: closedId } as CBookOrder] });
+              } else {
               const row = positionToCBook(pos, resolvedLp, instrMap);
               // If a DOM order is pending and this position_id is new → stamp it
               const pending = pendingDomRef.current;
@@ -1022,6 +1075,7 @@ export function CBookPage() {
                   method: 'POST', body: JSON.stringify({ lp_id: resolvedLp, symbol: pos.symbol, depth: 1 }),
                 }).catch(() => {});
               }
+              } // end open_price > 0 branch
             }
           }
 
@@ -1032,6 +1086,7 @@ export function CBookPage() {
             const pid = msg.position_id ?? msg.data?.position_id;
             if (pid) {
               closedPositionIdsRef.current.add(pid);
+              saveClosedIds();
               setLivePositions((prev) => prev.filter((p) => p.positionId !== pid));
               gridRef.current?.api?.applyTransaction({
                 remove: [{ id: `pos-${resolvedCloseLp}-${pid}` } as CBookOrder]
@@ -1187,6 +1242,7 @@ export function CBookPage() {
           // Register as closed so poll results don't ghost it back.
           const closedPosId = closeRow.positionId;
           closedPositionIdsRef.current.add(closedPosId);
+          saveClosedIds();
           // Remove from grid and state immediately — don't wait for WS.
           const closedRowId = `pos-${domLpId}-${closedPosId}`;
           gridRef.current?.api?.applyTransaction({ remove: [{ id: closedRowId } as CBookOrder] });
@@ -1229,10 +1285,10 @@ export function CBookPage() {
         if (r.success) {
           entry.clord_id = r.clord_id ?? '—';
           setExecLog((prev) => [entry, ...prev].slice(0, 20));
-          // Snapshot real TE position_ids from livePositions (not grid nodes which include
-          // optimistic clord_id rows). pendingDomRef is consumed only when a genuinely new
-          // position_id arrives in POSITION_REPORT that wasn't open at order time.
-          const preIds = new Set<string>(livePositions.map((p) => p.positionId));
+          // Register DOM order so EXECUTION_REPORT can stamp type + comment on the new position
+          // Snapshot current position_ids — next REST poll will detect new one
+          const preIds = new Set<string>();
+          gridRef.current?.api?.forEachNode((n) => { if (n.data?.positionId) preIds.add(n.data.positionId); });
           pendingDomRef.current = { comment: domComment.trim(), preIds };
           setDomComment('');
           // Optimistic session row — grid shows immediately, fill confirmed by WS EXECUTION_REPORT
@@ -1266,7 +1322,7 @@ export function CBookPage() {
       setSubmitting(false);
     }
   }, [
-    domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif, domComment, livePositions,
+    domLpId, domSymbol, submitting, domQtyLots, domOrderType, domTif, domComment,
     limitPrice, stopLoss, takeProfit, slTpSupported, activeInstrument,
     closeRow, domLpInfo,
   ]);
