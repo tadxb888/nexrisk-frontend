@@ -330,20 +330,34 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // ── Market Data ─────────────────────────────────────────────
-  // C++ backend uses flat paths with lp_id in body, not in URL.
-  // Frontend calls these directly: POST /api/v1/fix/md/subscribe
+  // Market data subscribe — correct path: /fix/lp/:lp_id/md/subscribe
+  fastify.post(
+    '/fix/lp/:lp_id/md/subscribe',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { lp_id } = lpIdParams.parse(request.params);
+      const body = request.body as Record<string, unknown> ?? {};
+      fastify.log.info({ lp_id, body }, '[fix] md/subscribe');
+      const response = await nexriskApi.post('/api/v1/fix/md/subscribe', {
+        lp_id,
+        symbol: body.symbol,
+        depth:  body.depth ?? 1,
+      });
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
 
+  // Legacy flat-path subscribe — keep for backward compat with other pages
   fastify.post(
     '/fix/md/subscribe',
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = request.body as Record<string, unknown> ?? {};
       const lp_id = body.lp_id as string;
-      fastify.log.info({ body }, '[fix] md/subscribe');
-      // line ~341 — change back to:
+      fastify.log.info({ body }, '[fix] md/subscribe (flat)');
       const response = await nexriskApi.post('/api/v1/fix/md/subscribe', {
-        lp_id: body.lp_id,
+        lp_id,
         symbol: body.symbol,
-        depth: body.depth ?? 10,
+        depth:  body.depth ?? 1,
       });
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
@@ -368,8 +382,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id, symbol } = symbolParams.parse(request.params);
       const response = await nexriskApi.get(`/api/v1/fix/md/book/${lp_id}/${symbol}`);
-      if (!response.ok) return reply.code(response.status).send(response.error);
-      return reply.send(response.data);
+      return emptyOn404(response, lp_id, { lp_id, symbol, state: 'EMPTY', bids: [], asks: [], best_bid: null, best_ask: null, mid_price: null }, reply);
     }
   );
 

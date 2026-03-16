@@ -1727,7 +1727,7 @@ interface NexDayMapping {
   is_active: boolean;
   nexday_description: string;
   security_type: string;
-  current_trend: string | null;
+  current_prediction: string | null;
 }
 
 interface NexDayAvailableSymbol {
@@ -1773,14 +1773,6 @@ interface ParsedRow {
   reason?: string;
 }
 
-const FEED_LABELS: Record<string, string> = {
-  predictions_15min:   '15m',
-  predictions_30min:   '30m',
-  predictions_1hour:   '1h',
-  predictions_2hour:   '2h',
-  predictions_daily:   'Daily',
-  opportunities_daily: 'Opps',
-};
 
 function ndRelative(iso: string): string {
   if (!iso) return '—';
@@ -1802,6 +1794,66 @@ async function loadSheetJS(): Promise<any> {
   });
 }
 
+// ────────────────────────────────────────────────────────────
+// AUTO-MAP HELPER — pure, runs client-side before any API call
+// ────────────────────────────────────────────────────────────
+type AutoSuggestion = {
+  mt5_symbol:    string;
+  nexday_symbol: string;
+  exchange:      string;
+  confidence:    'exact' | 'prefix';
+};
+
+/**
+ * Best-effort matching of MT5 symbols against available NexDay symbols.
+ *
+ * Pass 1 — exact base match:
+ *   Strip the exchange suffix from the NexDay symbol (everything after the
+ *   first '.'), uppercase both sides, and require equality.
+ *   e.g. "EURUSD" matches "EURUSD.FXCM"
+ *
+ * Pass 2 — prefix match:
+ *   Either the NexDay base starts with the MT5 symbol or the MT5 symbol
+ *   starts with the NexDay base (handles truncations / contract codes).
+ *
+ * Symbols with no match in either pass are returned in `unmatched` so the
+ * operator knows which ones to map manually.
+ */
+function computeAutoSuggestions(
+  unmapped:  UnmappedSymbol[],
+  available: NexDayAvailableSymbol[],
+): { matched: AutoSuggestion[]; unmatched: string[] } {
+  const matched:   AutoSuggestion[] = [];
+  const unmatched: string[]         = [];
+
+  for (const u of unmapped) {
+    const mt5 = u.mt5_symbol.toUpperCase();
+
+    // Pass 1 — exact base
+    let hit = available.find(
+      a => a.nexday_symbol.split('.')[0].toUpperCase() === mt5,
+    );
+    if (hit) {
+      matched.push({ mt5_symbol: u.mt5_symbol, nexday_symbol: hit.nexday_symbol, exchange: hit.exchange, confidence: 'exact' });
+      continue;
+    }
+
+    // Pass 2 — prefix
+    hit = available.find(a => {
+      const base = a.nexday_symbol.split('.')[0].toUpperCase();
+      return base.startsWith(mt5) || mt5.startsWith(base);
+    });
+    if (hit) {
+      matched.push({ mt5_symbol: u.mt5_symbol, nexday_symbol: hit.nexday_symbol, exchange: hit.exchange, confidence: 'prefix' });
+      continue;
+    }
+
+    unmatched.push(u.mt5_symbol);
+  }
+
+  return { matched, unmatched };
+}
+
 function PredictionsTab() {
   const [mappings,     setMappings]     = useState<NexDayMapping[]>([]);
   const [available,    setAvailable]    = useState<NexDayAvailableSymbol[]>([]);
@@ -1819,9 +1871,14 @@ function PredictionsTab() {
   const [formNotes,    setFormNotes]    = useState('');
   const [ndSearch,     setNdSearch]     = useState('');
   // Excel upload preview
-  const [parsedRows,   setParsedRows]   = useState<ParsedRow[] | null>(null);
-  const [uploading,    setUploading]    = useState(false);
+  const [parsedRows,    setParsedRows]   = useState<ParsedRow[] | null>(null);
+  const [uploading,     setUploading]    = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Auto-map
+  const [autoMatched,   setAutoMatched]   = useState<AutoSuggestion[]>([]);
+  const [autoUnmatched, setAutoUnmatched] = useState<string[]>([]);
+  const [applyingAuto,  setApplyingAuto]  = useState(false);
+  const [autoDismissed, setAutoDismissed] = useState(false);
 
   const showPToast = (msg: string, type: 'success'|'warn'|'error' = 'success') => {
     setPToast({ msg, type });
@@ -1834,12 +1891,12 @@ function PredictionsTab() {
       const [m, u, st, h] = await Promise.all([
         ndFetch<{ mappings: NexDayMapping[] }>('/api/v1/mappings/nexday'),
         ndFetch<{ unmapped_symbols: UnmappedSymbol[] }>('/api/v1/mappings/nexday/unmapped'),
-        ndFetch<{ sync_status: NexDaySyncStatus[] }>('/api/v1/predictions/status'),
+        ndFetch<{ endpoints: Record<string, NexDaySyncStatus>; health: string }>('/api/v1/predictions/status'),
         ndFetch<{ history: UploadHistoryRow[] }>('/api/v1/mappings/history?limit=10'),
       ]);
       setMappings(m.mappings ?? []);
       setUnmapped(u.unmapped_symbols ?? []);
-      setSyncStatus(st.sync_status ?? []);
+      setSyncStatus(Object.entries(st.endpoints ?? {}).map(([k, v]) => ({ ...v, endpoint: k })));
       setHistory(h.history ?? []);
     } catch (e: unknown) {
       showPToast((e as Error).message || 'Failed to load', 'error');
@@ -1856,6 +1913,46 @@ function PredictionsTab() {
   };
 
   useEffect(() => { loadAll(); loadAvailable(); }, []);
+
+  // Recompute auto-suggestions whenever unmapped symbols or available symbols change,
+  // but only while no mappings have been configured yet.
+  useEffect(() => {
+    if (mappings.length > 0 || !available.length || !unmapped.length) {
+      setAutoMatched([]);
+      setAutoUnmatched([]);
+      return;
+    }
+    const { matched, unmatched } = computeAutoSuggestions(unmapped, available);
+    setAutoMatched(matched);
+    setAutoUnmatched(unmatched);
+  }, [unmapped, available, mappings.length]);
+
+  const handleApplyAutoMap = async () => {
+    if (!autoMatched.length) return;
+    setApplyingAuto(true);
+    try {
+      const result = await ndFetch<{
+        inserted: number; updated: number; skipped: number;
+        errors: { mt5_symbol: string; error: string }[];
+      }>('/api/v1/mappings/nexday/bulk', {
+        method: 'POST',
+        body: JSON.stringify({
+          mappings: autoMatched.map(s => ({ mt5_symbol: s.mt5_symbol, nexday_symbol: s.nexday_symbol })),
+        }),
+      });
+      const errCount = result.errors?.length ?? 0;
+      showPToast(
+        `Auto-mapped ${result.inserted} added · ${result.updated} updated${errCount ? ` · ${errCount} errors` : ''}`,
+        errCount ? 'warn' : 'success',
+      );
+      setAutoDismissed(true);
+      await loadAll();
+    } catch (e: unknown) {
+      showPToast((e as Error).message, 'error');
+    } finally {
+      setApplyingAuto(false);
+    }
+  };
 
   const handleAdd = async () => {
     if (!formMt5.trim() || !formNexDay) return;
@@ -1972,7 +2069,7 @@ function PredictionsTab() {
     :                    { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' };
 
   const trendColor = (t: string | null) =>
-    t === 'Bullish' ? '#66e07a' : t === 'Bearish' ? '#ff6b6b' : '#888';
+    t === 'Up' || t === 'Bullish' ? '#66e07a' : t === 'Down' || t === 'Bearish' ? '#ff6b6b' : '#888';
 
   if (loading) {
     return (
@@ -1997,34 +2094,79 @@ function PredictionsTab() {
         </div>
       )}
 
-      {/* Feed sync status strip */}
-      <div className="panel p-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-xs font-semibold text-text-muted uppercase tracking-wider flex-shrink-0">NexDay Feeds</span>
-          {syncStatus.length === 0 && <span className="text-xs text-text-muted italic">No status data</span>}
-          {syncStatus.map(s => (
-            <div key={s.endpoint} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs"
-              style={{
-                backgroundColor: s.status === 'ok' ? '#0d1f12' : '#2c1417',
-                border: `1px solid ${s.status === 'ok' ? '#1e4d28' : '#7a2f36'}`,
-              }}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                backgroundColor: s.status === 'ok' ? '#66e07a' : '#ff6b6b' }} />
-              <span className="font-mono" style={{ color: s.status === 'ok' ? '#66e07a' : '#ff6b6b' }}>
-                {FEED_LABELS[s.endpoint] ?? s.endpoint}
-              </span>
-              <span className="text-text-muted">{ndRelative(s.last_sync_at)}</span>
-              {s.error_message && (
-                <span className="text-red-400 truncate max-w-[120px]" title={s.error_message}>· {s.error_message}</span>
-              )}
+      {/* Auto-map suggestions — shown when no mappings exist but matches were found */}
+      {!autoDismissed && mappings.length === 0 && autoMatched.length > 0 && (
+        <div className="rounded p-4" style={{ backgroundColor: '#0d1f2a', border: '1px solid #1e4a70' }}>
+          <div className="flex items-center justify-between mb-3 gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-text-primary">Auto-Map Suggestions</p>
+              <p className="text-xs text-text-muted mt-0.5">
+                {autoMatched.length} symbol{autoMatched.length !== 1 ? 's' : ''} matched automatically by symbol name
+                {autoUnmatched.length > 0
+                  ? ` · ${autoUnmatched.length} could not be matched and require manual mapping`
+                  : ' · all symbols covered'}
+              </p>
             </div>
-          ))}
-          <button onClick={() => { loadAll(); loadAvailable(); }}
-            className="ml-auto flex items-center gap-1 text-xs text-text-muted hover:text-text-primary transition-colors">
-            <IcoRefresh /> Refresh
-          </button>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button onClick={() => setAutoDismissed(true)}
+                className="text-xs text-text-muted hover:text-text-primary transition-colors px-2 py-1 rounded"
+                style={{ border: '1px solid #383838' }}>
+                Dismiss
+              </button>
+              <button onClick={handleApplyAutoMap} disabled={applyingAuto}
+                className="btn btn-primary text-xs px-3 py-1.5"
+                style={applyingAuto ? { opacity: 0.5, cursor: 'not-allowed' } : {}}>
+                {applyingAuto ? 'Applying…' : `Apply ${autoMatched.length} mapping${autoMatched.length !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded overflow-hidden" style={{ border: '1px solid #1e3a5a', backgroundColor: '#0a1520' }}>
+            <table className="w-full text-xs">
+              <thead style={{ backgroundColor: '#0f2035' }}>
+                <tr>
+                  <th className="px-3 py-2 text-left text-text-muted font-medium">MT5 Symbol</th>
+                  <th className="px-3 py-2 text-left text-text-muted font-medium">NexDay Symbol</th>
+                  <th className="px-3 py-2 text-left text-text-muted font-medium">Exchange</th>
+                  <th className="px-3 py-2 text-left text-text-muted font-medium">Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {autoMatched.map(s => (
+                  <tr key={s.mt5_symbol} className="border-t border-border">
+                    <td className="px-3 py-1.5 font-mono font-semibold text-text-primary">{s.mt5_symbol}</td>
+                    <td className="px-3 py-1.5 font-mono" style={{ color: '#4ecdc4' }}>{s.nexday_symbol}</td>
+                    <td className="px-3 py-1.5 text-text-muted">{s.exchange || '—'}</td>
+                    <td className="px-3 py-1.5">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
+                        style={s.confidence === 'exact'
+                          ? { backgroundColor: '#0d1f12', color: '#66e07a', border: '1px solid #1e4d28' }
+                          : { backgroundColor: '#1e2a10', color: '#b8d4a5', border: '1px solid #3a5830' }}>
+                        {s.confidence === 'exact' ? 'Exact' : 'Prefix'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {autoUnmatched.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] text-text-muted flex-shrink-0">No match found for:</span>
+              {autoUnmatched.map(sym => (
+                <button key={sym} onClick={() => setFormMt5(sym)}
+                  className="font-mono text-[10px] px-1.5 py-0.5 rounded border transition-colors"
+                  style={{ backgroundColor: '#1e1a00', border: '1px solid #5a4d00', color: '#c8b040' }}
+                  title="Click to pre-fill the manual mapping form">
+                  {sym}
+                </button>
+              ))}
+              <span className="text-[10px] text-text-muted">— use the Add Mapping form.</span>
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Unmapped symbols alert */}
       {unmapped.length > 0 && (
@@ -2104,8 +2246,8 @@ function PredictionsTab() {
                       <td className="px-3 py-2 text-text-muted truncate max-w-[160px]" title={m.nexday_description}>
                         {m.nexday_description || '—'}
                       </td>
-                      <td className="px-3 py-2 font-medium" style={{ color: trendColor(m.current_trend) }}>
-                        {m.current_trend || '—'}
+                      <td className="px-3 py-2 font-medium" style={{ color: trendColor(m.current_prediction) }}>
+                        {m.current_prediction || '—'}
                       </td>
                       <td className="px-3 py-2">
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
@@ -2352,7 +2494,8 @@ function PredictionsTab() {
 // MAIN PAGE
 // ============================================================
 export function NodeManagementPage() {
-  const [tab,          setTab]          = useState<Tab>('nodes');
+  const [tab,          setTab]          = useState<Tab>(() => (localStorage.getItem('mt5_tab') as Tab) ?? 'nodes');
+  const handleTabChange = (t: Tab) => { localStorage.setItem('mt5_tab', t); setTab(t); };
   const [nodes,        setNodes]        = useState<MT5Node[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [formModal,    setFormModal]    = useState<{ mode: 'add'|'edit'; node?: MT5Node } | null>(null);
@@ -2597,7 +2740,7 @@ export function NodeManagementPage() {
             { id: 'symbols'     as Tab, label: 'Symbols' },
             { id: 'predictions' as Tab, label: 'Predictions' },
           ]).map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
+            <button key={t.id} onClick={() => handleTabChange(t.id)}
               className={clsx(
                 'px-4 py-2.5 text-sm font-medium transition-colors border-b-2',
                 tab === t.id
