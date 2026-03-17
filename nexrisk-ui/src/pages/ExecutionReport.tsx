@@ -221,10 +221,12 @@ function buildRowFromAE(
   const corr_clord_id  = ae.cl_ord_id   || nosRecord?.clord_id  || '';
   const corr_nos_ts    = ae.nos_sent_ms  ?? nosRecord?.nos_ts    ?? null;
 
-  // RT: ae.received_ts and nos_sent_ms are both NexRisk internal epoch ms (same clock).
-  // Do NOT use Date.now() — browser clock is on a different epoch.
-  const round_trip_ms  = (corr_nos_ts && ae.received_ts && ae.received_ts > corr_nos_ts && (ae.received_ts - corr_nos_ts) < 60000)
-    ? (ae.received_ts - corr_nos_ts)
+  // RT: both nos_sent_ms and received_ts are NexRisk internal epoch ms.
+  // For historical rows received_ts = timestamp_ms from audit DB.
+  // Only compute RT when NOS was sent before the fill and within 60s.
+  const fill_ts = ae.received_ts || 0;
+  const round_trip_ms  = (corr_nos_ts && fill_ts && fill_ts > corr_nos_ts && (fill_ts - corr_nos_ts) < 60000)
+    ? (fill_ts - corr_nos_ts)
     : null;
 
   return {
@@ -878,7 +880,7 @@ export function ExecutionReportPage() {
       headerName: 'Fill',
       children: [
         {
-          field: 'order_qty',
+          field: 'fill_qty',
           headerName: 'Qty',
           headerTooltip: 'Order quantity (tag 38) — from NOS',
           width: 90,
