@@ -336,9 +336,10 @@ function generateExplanation(row: ExecutionReportRow): string {
 // LP SESSION STATE COLOR
 // ══════════════════════════════════════════════════════════════
 function lpStateColor(trading_session?: string): string {
-  if (trading_session === 'LOGGED_ON')                                    return '#66e07a';
-  if (trading_session === 'CONNECTING' || trading_session === 'RECONNECTING') return '#e0a020';
-  return '#ff6b6b';
+  if (trading_session === 'LOGGED_ON')                                          return '#66e07a';
+  if (trading_session === 'CONNECTING' || trading_session === 'RECONNECTING')   return '#e0a020';
+  if (trading_session === 'DISCONNECTED')                                       return '#ff6b6b';
+  return '#e0a020'; // unknown / stale initial state — amber, not red
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -383,6 +384,7 @@ export function ExecutionReportPage() {
   const [selectedRow,    setSelectedRow]    = useState<ExecutionReportRow | null>(null);
   const [copied,         setCopied]         = useState(false);
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
+  const [selectedLp,      setSelectedLp]      = useState<string>('all');
 
   // O(1) trade_report_id → row lookup for WS upserts
   const rowMapRef   = useRef<Map<string, ExecutionReportRow>>(new Map());
@@ -408,17 +410,45 @@ export function ExecutionReportPage() {
 
     const load = async () => {
       try {
-        // 1. LP status for top bar
-        const statusRes = await fetch('/api/v1/fix/status');
-        if (!statusRes.ok || cancelled) return;
-        const statusData = await statusRes.json();
+        // 1. LP list — fetch all configured LPs (admin) merged with live session state
+        // /api/v1/fix/admin/lp returns ALL LPs including disabled/disconnected ones
+        // /api/v1/fix/status returns only currently running session states
+        const [adminRes, statusRes] = await Promise.all([
+          fetch('/api/v1/fix/admin/lp'),
+          fetch('/api/v1/fix/status'),
+        ]);
+        if (cancelled) return;
+
+        const adminData  = adminRes.ok  ? await adminRes.json()  : null;
+        const statusData = statusRes.ok ? await statusRes.json() : null;
+
+        // Build session state map from status response
         const rawLps = (statusData?.lps ?? statusData?.data?.lps ?? []) as Array<{ lp_id: string; state?: string; trading_session?: string }>;
-        const lps = Array.isArray(rawLps)
-          ? rawLps.map(v => ({ lp_id: v.lp_id, trading_session: v.trading_session ?? v.state, state: v.state }))
-          : Object.entries(rawLps as Record<string, Record<string, string>>).map(
-              ([lp_id, v]) => ({ lp_id, trading_session: v.trading_session, state: v.state })
-            );
-        if (!cancelled) setLpStatuses(lps);
+        const stateMap = new Map<string, string>();
+        if (Array.isArray(rawLps)) {
+          rawLps.forEach(v => stateMap.set(v.lp_id, v.trading_session ?? v.state ?? ''));
+        } else {
+          Object.entries(rawLps as Record<string, Record<string, string>>).forEach(
+            ([lp_id, v]) => stateMap.set(lp_id, v.trading_session ?? v.state ?? '')
+          );
+        }
+
+        // All configured LPs as base, overlay live session state
+        const configuredLps = (adminData?.data?.lps ?? adminData?.lps ?? []) as Array<{ lp_id: string; lp_name?: string; enabled?: boolean }>;
+        // Any LP not in stateMap has no live session → DISCONNECTED
+        const lps: LPStatus[] = configuredLps.length > 0
+          ? configuredLps.map(lp => ({
+              lp_id:           lp.lp_id,
+              lp_name:         lp.lp_name,
+              trading_session: stateMap.get(lp.lp_id) ?? 'DISCONNECTED',
+            }))
+          : rawLps.map(v => ({ lp_id: v.lp_id, trading_session: v.trading_session ?? v.state }));
+
+        if (!cancelled) {
+          setLpStatuses(lps);
+          // Default selection to first LP if only one, else keep 'all'
+          if (lps.length === 1) setSelectedLp(lps[0].lp_id);
+        }
 
         // 2. For each LP fetch correlated fills (AE + NOS joined in DB)
         const seedRows: ExecutionReportRow[] = [];
@@ -692,9 +722,15 @@ export function ExecutionReportPage() {
     return () => document.removeEventListener('keydown', handler);
   }, []);
 
-  // ── Stats (derived from rows) ───────────────────────────────
+  // ── Filtered rows (by selected LP) ─────────────────────────
+  const filteredRows = useMemo(() =>
+    selectedLp === 'all' ? rows : rows.filter(r => r.lp_id === selectedLp),
+    [rows, selectedLp]
+  );
+
+  // ── Stats (derived from filtered rows) ──────────────────────
   const stats = useMemo(() => {
-    const filled = rows.filter(r => r.te_status === 'FILLED');
+    const filled = filteredRows.filter(r => r.te_status === 'FILLED');
     const rts = filled
       .map(r => r.round_trip_ms)
       .filter((v): v is number => v !== null);
@@ -713,7 +749,7 @@ export function ExecutionReportPage() {
       rejectionCount: 0,
       rejectionPct:   0,
     };
-  }, [rows]);
+  }, [filteredRows]);
 
   // ══════════════════════════════════════════════════════════════
   // COLUMN DEFINITIONS
@@ -1000,6 +1036,17 @@ export function ExecutionReportPage() {
     gridRef.current?.api?.autoSizeAllColumns();
   }, []);
 
+  // Re-size columns whenever filteredRows first populates (covers page refresh
+  // where rows arrive via applyTransaction after onFirstDataRendered has fired)
+  const didAutoSize = useRef(false);
+  useEffect(() => {
+    if (filteredRows.length > 0 && !didAutoSize.current) {
+      didAutoSize.current = true;
+      setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 50);
+    }
+    if (filteredRows.length === 0) didAutoSize.current = false;
+  }, [filteredRows]);
+
   const onRowClicked = useCallback((params: { data?: ExecutionReportRow }) => {
     if (params.data) setSelectedRow(params.data);
   }, []);
@@ -1071,21 +1118,24 @@ export function ExecutionReportPage() {
 
         <div className="flex items-center gap-5 text-xs flex-wrap">
 
-          {/* LP connectivity badges */}
+          {/* LP selector dropdown */}
           {lpStatuses.length > 0 && (
             <>
               <div className="flex items-center gap-2">
+              <span className="text-[#999] text-xs">Liquidity Provider:</span>
+              <select
+                value={selectedLp}
+                onChange={e => setSelectedLp(e.target.value)}
+                className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
+              >
+                <option value="all">All Liquidity Providers</option>
                 {lpStatuses.map(lp => (
-                  <div key={lp.lp_id} className="flex items-center gap-1.5">
-                    <span
-                      className="w-1.5 h-1.5 rounded-full"
-                      style={{ backgroundColor: lpStateColor(lp.trading_session) }}
-                    />
-                    <span className="text-[#999] font-mono text-[10px]">
-                      {lp.lp_name ?? lp.lp_id}
-                    </span>
-                  </div>
+                  <option key={lp.lp_id} value={lp.lp_id}>
+                    {lp.lp_name ?? lp.lp_id}
+                    {lp.trading_session === 'DISCONNECTED' ? ' — Disconnected' : ''}
+                  </option>
                 ))}
+              </select>
               </div>
               <div className="w-px h-4 bg-[#505050]" />
             </>
@@ -1147,22 +1197,10 @@ export function ExecutionReportPage() {
 
           <div className="w-px h-4 bg-[#505050]" />
 
-          {/* WS status badge + reconnect */}
+          {/* WS status badge */}
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: badge.color }} />
             <span className="font-mono text-[10px]" style={{ color: badge.color }}>{badge.label}</span>
-            {lastEventAt && wsStatus === 'live' && (
-              <span className="text-[#666] font-mono text-[10px]">
-                {lastEventAt.toLocaleTimeString()}
-              </span>
-            )}
-            <button
-              onClick={reconnect}
-              className="text-[10px] text-[#999] hover:text-white transition-colors ml-1"
-              title="Reconnect WebSocket"
-            >
-              ↻
-            </button>
           </div>
         </div>
       </div>
@@ -1227,7 +1265,7 @@ export function ExecutionReportPage() {
               <AgGridReact<ExecutionReportRow>
                 ref={gridRef}
                 theme={gridTheme}
-                rowData={rows}
+                rowData={filteredRows}
                 columnDefs={columnDefs}
                 defaultColDef={defaultColDef}
                 gridOptions={gridOptions}
@@ -1253,16 +1291,21 @@ export function ExecutionReportPage() {
             )}
             style={{ backgroundColor: '#313032' }}
           >
-            {/* Strip header */}
-            <div className="flex items-center justify-between px-4 h-[40px]">
-              <span className="text-[10px] text-[#666] uppercase tracking-wider font-medium">
-                Analytics
-              </span>
+            {/* Toggle bar — exact BBookCharts pattern */}
+            <div className="flex justify-center py-1 shrink-0">
               <button
                 onClick={() => setChartsCollapsed(c => !c)}
-                className="text-[10px] text-[#999] hover:text-white transition-colors"
+                className="flex items-center gap-1 px-3 py-1 text-xs text-white bg-[#232225] border border-[#808080] rounded hover:bg-[#3a3a3c] transition-colors"
               >
-                {chartsCollapsed ? '▲ Show Charts' : '▼ Collapse Charts'}
+                <svg
+                  className={`w-4 h-4 transition-transform ${chartsCollapsed ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+                {chartsCollapsed ? 'Expand Charts' : 'Collapse Charts'}
               </button>
             </div>
 
