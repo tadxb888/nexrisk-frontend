@@ -77,6 +77,9 @@ interface TradeCaptureWsEvent {
     trd_type: number;
     commission: number;
     received_ts: number;      // epoch ms
+    // Correlated by C++ LookupNOS — present when DB lookup succeeded
+    cl_ord_id?: string;       // tag 11 — our ClOrdID
+    nos_sent_ms?: number;     // real UTC epoch ms when NOS was sent
   };
 }
 
@@ -213,14 +216,21 @@ function buildRowFromAE(
   lp_id: string,
   nosRecord: NosRecord | null
 ): ExecutionReportRow {
-  const ae_ts  = parseTimestamp(ae.transact_time);
-  const nos_ts = nosRecord?.nos_ts ?? null;
-  const round_trip_ms = (nos_ts && ae_ts) ? (ae_ts - nos_ts) : null;
+  // Prefer DB-correlated fields embedded by C++ LookupNOS — these are reliable.
+  // Fall back to in-memory nosRecord (symbol|side map) when DB unavailable.
+  const corr_clord_id  = ae.cl_ord_id   || nosRecord?.clord_id  || '';
+  const corr_nos_ts    = ae.nos_sent_ms  ?? nosRecord?.nos_ts    ?? null;
+
+  // RT: ae.received_ts and nos_sent_ms are both NexRisk internal epoch ms (same clock).
+  // Do NOT use Date.now() — browser clock is on a different epoch.
+  const round_trip_ms  = (corr_nos_ts && ae.received_ts && ae.received_ts > corr_nos_ts && (ae.received_ts - corr_nos_ts) < 60000)
+    ? (ae.received_ts - corr_nos_ts)
+    : null;
 
   return {
     trade_report_id: ae.trade_report_id,
-    clord_id:        nosRecord?.clord_id  ?? '',
-    nos_time:        nosRecord            ? formatSsMs(msToFixTimestamp(nosRecord.nos_ts)) : '—',
+    clord_id:        corr_clord_id,
+    nos_time:        corr_nos_ts ? formatSsMs(msToFixTimestamp(corr_nos_ts)) : '—',
     round_trip_ms,
     te_status:       'FILLED',
     user:            DUMMY_USER,
@@ -408,14 +418,14 @@ export function ExecutionReportPage() {
             );
         if (!cancelled) setLpStatuses(lps);
 
-        // 2. For each LP fetch messages and seed the grid
+        // 2. For each LP fetch correlated fills (AE + NOS joined in DB)
         const seedRows: ExecutionReportRow[] = [];
 
         await Promise.allSettled(lps.map(async (lp) => {
           try {
-            const url = `/api/v1/fix/lp/${lp.lp_id}/fix/messages?direction=received&msg_type=AE&limit=500`;
+            const url = `/api/v1/fix/lp/${lp.lp_id}/correlated-fills?limit=500`;
             let res = await fetch(url);
-            // ZMQ command channel may not be ready immediately after nexrisk_service restart — retry once
+            // ZMQ command channel may not be ready immediately — retry once
             if (res.status === 503) {
               await new Promise(r => setTimeout(r, 3000));
               if (cancelled) return;
@@ -423,16 +433,17 @@ export function ExecutionReportPage() {
             }
             if (!res.ok || cancelled) return;
             const data = await res.json();
+            // Response shape: { success: true, data: [ { raw, msg_type, timestamp_ms, cl_ord_id, nos_sent_ms } ] }
             const messages: Array<{
-              msg_type: string;
-              direction: string;
-              timestamp_ms: number;
-              raw: string;
-            }> = data?.data?.messages ?? data?.messages ?? [];
-            for (const msg of messages) {
-              if (msg.msg_type !== 'AE' || msg.direction !== 'received') continue;
+              raw:         string;
+              msg_type:    string;
+              timestamp_ms:number;
+              cl_ord_id:   string;
+              nos_sent_ms: number;
+            }> = data?.data ?? [];
 
-              const raw: string = msg.raw ?? '';
+            for (const msg of messages) {
+              const raw: string   = msg.raw ?? '';
               const ts_ms: number = msg.timestamp_ms ?? 0;
               const fixTs = ts_ms ? msToFixTimestamp(ts_ms) : '';
 
@@ -463,6 +474,9 @@ export function ExecutionReportPage() {
                 trd_type:          0,
                 commission:        parseFloat(get(12) || '0'),
                 received_ts:       ts_ms,
+                // Correlated fields from DB join — populated when NOS was matched
+                cl_ord_id:         msg.cl_ord_id  || undefined,
+                nos_sent_ms:       msg.nos_sent_ms || undefined,
               };
 
               seedRows.push(buildRowFromAE(aeData, lp.lp_id, null));
