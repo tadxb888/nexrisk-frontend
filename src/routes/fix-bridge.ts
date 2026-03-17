@@ -669,6 +669,20 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // Correlated fills — AE fills joined with NOS data for ClOrdID + RT on history load
+  fastify.get(
+    '/fix/lp/:lp_id/correlated-fills',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { lp_id } = lpIdParams.parse(request.params);
+      const q = request.query as Record<string, string | undefined>;
+      const qs = new URLSearchParams();
+      if (q.limit) qs.set('limit', q.limit);
+      const qstr = qs.toString() ? `?${qs.toString()}` : '';
+      const response = await nexriskApi.get(`/api/v1/fix/lp/${lp_id}/correlated-fills${qstr}`);
+      return emptyOn404(response, lp_id, [], reply);
+    }
+  );
+
   // ════════════════════════════════════════════════════════════
   // BRIEF v3 FLAT-PATH OPERATIONAL ROUTES
   // Paths verified March 2026 — NexRisk DOM Trader Frontend Brief v3.0
