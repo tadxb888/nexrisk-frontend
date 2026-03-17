@@ -13,7 +13,11 @@ import type {
 } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import {
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
+  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar,
+} from 'recharts';
 
 // ══════════════════════════════════════════════════════════════
 // THEME — identical to BBookPage
@@ -358,15 +362,293 @@ const fmtPx = (p: ValueFormatterParams) => {
 };
 
 // ══════════════════════════════════════════════════════════════
-// DONUT PLACEHOLDER DATA
+// ANALYTICS CHART COMPONENTS
 // ══════════════════════════════════════════════════════════════
-const DONUTS = [
-  { title: 'By Symbol' },
-  { title: 'By Status' },
-  { title: 'By Side'   },
-  { title: 'By Route'  },
-];
-const DONUT_STUB = [{ name: '', value: 1 }];
+
+// Returns true when transact_time (YYYYMMDD-HH:MM:SS.mmm) is from today (UTC).
+function isTodayRow(transact_time: string): boolean {
+  const prefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return transact_time.startsWith(prefix);
+}
+
+// Muted, non-fluorescent palette — intentionally matches BBookCharts aesthetic.
+const STATUS_COLORS: Record<string, string> = {
+  FILLED:    '#4a7c5e',  // muted sage green
+  REJECTED:  '#7c4a68',  // muted rose
+  PENDING:   '#5c4d7d',  // muted purple
+  CANCELLED: '#5a5a65',  // muted slate grey
+};
+
+// ── Tooltip sub-components (hoisted to module scope — no remount on re-render) ──
+
+interface LatencyEntry { symbol: string; time: string }
+function LatencyOverTimeTooltip({ active, payload }: { active?: boolean; payload?: Array<{ value: number; payload: LatencyEntry }> }) {
+  if (!active || !payload?.length) return null;
+  const { value, payload: p } = payload[0];
+  return (
+    <div className="bg-[#232225] border border-[#555] rounded px-2 py-1 text-xs">
+      <p className="text-[#999]">{p.symbol} @ {p.time}</p>
+      <p className="text-white font-mono font-semibold">{value}ms</p>
+    </div>
+  );
+}
+
+interface LPEntry { lp: string; min: number; avg: number; max: number }
+function LatencyByLPTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: LPEntry }> }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="bg-[#232225] border border-[#555] rounded px-2 py-1 text-xs">
+      <p className="text-white font-medium mb-1">{d.lp}</p>
+      <p style={{ color: '#4a7c5e' }}>Min: <span className="font-mono">{d.min}ms</span></p>
+      <p style={{ color: '#7eaacb' }}>Avg: <span className="font-mono">{d.avg}ms</span></p>
+      <p style={{ color: '#b87333' }}>Max: <span className="font-mono">{d.max}ms</span></p>
+    </div>
+  );
+}
+
+interface StatusEntry { name: string; value: number }
+function OrdersByStatusTooltip({ active, payload, total }: { active?: boolean; payload?: Array<{ payload: StatusEntry }>; total: number }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  const pct = total > 0 ? ((d.value / total) * 100).toFixed(1) : '0';
+  return (
+    <div className="bg-[#232225] border border-[#555] rounded px-2 py-1 text-xs">
+      <p style={{ color: STATUS_COLORS[d.name] ?? '#999' }} className="font-medium">{d.name}</p>
+      <p className="text-white font-mono">{d.value} <span className="text-[#999]">({pct}%)</span></p>
+    </div>
+  );
+}
+
+// ── 1. Execution Latency Over Time ─────────────────────────────
+function LatencyOverTimeChart({ rows }: { rows: ExecutionReportRow[] }) {
+  const data = useMemo(() => (
+    rows
+      .filter(r => r.round_trip_ms !== null && isTodayRow(r.transact_time))
+      .map(r => ({
+        time:   r.transact_time.slice(9, 17),  // HH:MM:SS
+        rt:     r.round_trip_ms as number,
+        symbol: r.symbol,
+      }))
+      .sort((a, b) => a.time.localeCompare(b.time))
+      .slice(-60)                               // cap at 60 most-recent fills
+  ), [rows]);
+
+  return (
+    <div className="rounded p-2 flex flex-col overflow-hidden" style={{ backgroundColor: '#232225' }}>
+      <div className="mb-1 shrink-0">
+        <h4 className="text-xs font-semibold text-white">Latency Over Time</h4>
+        <p className="text-[10px] text-[#bbb]">Round-trip ms · Today</p>
+      </div>
+      <ResponsiveContainer width="100%" height={192}>
+        <LineChart data={data} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="2 4" stroke="#2e2e30" />
+          <XAxis
+            dataKey="time"
+            tick={{ fontSize: 10, fill: '#ddd' }}
+            interval="preserveStartEnd"
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: '#ddd' }}
+            tickLine={false}
+            axisLine={false}
+            unit="ms"
+          />
+          <Tooltip content={<LatencyOverTimeTooltip />} cursor={{ stroke: '#444' }} />
+          <Line
+            type="monotone"
+            dataKey="rt"
+            stroke="#577a9e"
+            strokeWidth={1.5}
+            dot={{ r: 3, fill: '#577a9e', strokeWidth: 0 }}
+            activeDot={{ r: 5, fill: '#7eaacb', strokeWidth: 0 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ── 2. Execution Latency by LP (stacked horizontal bar: min/avg-min/max-avg) ──
+function LatencyByLPChart({ rows }: { rows: ExecutionReportRow[] }) {
+  const data = useMemo(() => {
+    const byLp: Record<string, number[]> = {};
+    rows
+      .filter(r => r.round_trip_ms !== null && isTodayRow(r.transact_time))
+      .forEach(r => {
+        if (!byLp[r.lp_id]) byLp[r.lp_id] = [];
+        byLp[r.lp_id].push(r.round_trip_ms as number);
+      });
+    return Object.entries(byLp).map(([lp, vals]) => {
+      const sorted = [...vals].sort((a, b) => a - b);
+      const min    = sorted[0];
+      const max    = sorted[sorted.length - 1];
+      const avg    = Math.round(vals.reduce((s, v) => s + v, 0) / vals.length);
+      return {
+        lp,
+        minVal:   min,
+        midRange: avg - min,
+        topRange: max - avg,
+        // raw values used by tooltip
+        min, avg, max,
+      };
+    });
+  }, [rows]);
+
+  // Compute Y-axis width dynamically so no LP name is ever clipped
+  const yAxisWidth = Math.min(140, Math.max(64, ...data.map(d => d.lp.length * 7)));
+
+  return (
+    <div className="rounded p-2 flex flex-col overflow-hidden" style={{ backgroundColor: '#232225' }}>
+      <div className="mb-1 shrink-0">
+        <h4 className="text-xs font-semibold text-white">Latency by LP</h4>
+        <p className="text-[10px] text-[#bbb]">Min / Avg / Max RT · Today</p>
+      </div>
+      <ResponsiveContainer width="100%" height={168}>
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, left: 4, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="2 4" stroke="#2e2e30" horizontal={false} />
+          <XAxis
+            type="number"
+            tick={{ fontSize: 10, fill: '#ddd' }}
+            tickLine={false}
+            axisLine={false}
+            unit="ms"
+          />
+          <YAxis
+            type="category"
+            dataKey="lp"
+            tick={{ fontSize: 10, fill: '#ddd' }}
+            tickLine={false}
+            axisLine={false}
+            width={yAxisWidth}
+          />
+          <Tooltip content={<LatencyByLPTooltip />} cursor={{ fill: '#2a2a2c' }} />
+          <Bar dataKey="minVal"   stackId="rt" fill="#4a7c5e" name="Min" radius={0}         />
+          <Bar dataKey="midRange" stackId="rt" fill="#3d5a80" name="Avg" radius={0}         />
+          <Bar dataKey="topRange" stackId="rt" fill="#b87333" name="Max" radius={[0,3,3,0]} />
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="flex justify-center gap-3 mt-1 shrink-0">
+        {([['Min', '#4a7c5e'], ['Avg', '#3d5a80'], ['Max', '#b87333']] as [string, string][]).map(([label, color]) => (
+          <div key={label} className="flex items-center gap-1">
+            <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+            <span className="text-[10px] text-white">{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 3. Orders by Status (donut) ─────────────────────────────────
+function OrdersByStatusChart({ rows }: { rows: ExecutionReportRow[] }) {
+  const { data, total } = useMemo(() => {
+    const counts: Record<string, number> = { FILLED: 0, REJECTED: 0, PENDING: 0, CANCELLED: 0 };
+    rows
+      .filter(r => isTodayRow(r.transact_time))
+      .forEach(r => {
+        if      (r.te_status === 'FILLED')  counts.FILLED++;
+        else if (r.te_status === 'PENDING') counts.PENDING++;
+        else                                counts.CANCELLED++;
+      });
+    const data  = Object.entries(counts).map(([name, value]) => ({ name, value }));
+    const total = data.reduce((s, d) => s + d.value, 0);
+    return { data, total };
+  }, [rows]);
+
+  // Pass total via closure into a wrapper so the Tooltip can access it
+  const TooltipWithTotal = useMemo(
+    () => (props: { active?: boolean; payload?: Array<{ payload: StatusEntry }> }) =>
+      <OrdersByStatusTooltip {...props} total={total} />,
+    [total],
+  );
+
+  return (
+    <div className="rounded p-2 flex flex-col overflow-hidden" style={{ backgroundColor: '#232225' }}>
+      <div className="mb-1 shrink-0">
+        <h4 className="text-xs font-semibold text-white">Orders by Status</h4>
+        <p className="text-[10px] text-[#bbb]">{total} orders · Today</p>
+      </div>
+      <ResponsiveContainer width="100%" height={162}>
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius="42%"
+            outerRadius="82%"
+            paddingAngle={2}
+            dataKey="value"
+            stroke="none"
+          >
+            {data.map((entry, i) => (
+              <Cell key={i} fill={STATUS_COLORS[entry.name] ?? '#555'} />
+            ))}
+          </Pie>
+          <Tooltip content={<TooltipWithTotal />} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="flex flex-wrap justify-center gap-x-2 gap-y-0.5 mt-1 shrink-0">
+        {data.map((item, i) => (
+          <div key={i} className="flex items-center gap-1">
+            <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLORS[item.name] ?? '#555' }} />
+            <span className="text-[10px] text-white">
+              {item.name}: <span className="font-semibold">{item.value}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 4. Volume by Symbol (vertical bar) ──────────────────────────
+function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
+  const data = useMemo(() => {
+    const bySymbol: Record<string, number> = {};
+    rows
+      .filter(r => isTodayRow(r.transact_time) && r.fill_qty > 0)
+      .forEach(r => { bySymbol[r.symbol] = (bySymbol[r.symbol] || 0) + r.fill_qty; });
+    return Object.entries(bySymbol)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([symbol, vol]) => ({ symbol, vol }));
+  }, [rows]);
+
+  return (
+    <div className="rounded p-2 flex flex-col overflow-hidden" style={{ backgroundColor: '#232225' }}>
+      <div className="mb-1 shrink-0">
+        <h4 className="text-xs font-semibold text-white">Volume by Symbol</h4>
+        <p className="text-[10px] text-[#bbb]">Fill quantity · Today</p>
+      </div>
+      <ResponsiveContainer width="100%" height={215}>
+        <BarChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 24 }}>
+          <CartesianGrid strokeDasharray="2 4" stroke="#2e2e30" vertical={false} />
+          <XAxis
+            dataKey="symbol"
+            tick={{ fontSize: 10, fill: '#ddd', angle: -35, textAnchor: 'end' }}
+            tickLine={false}
+            interval={0}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: '#ddd' }}
+            tickLine={false}
+            axisLine={false}
+          />
+          <Tooltip
+            contentStyle={{ backgroundColor: '#232225', border: '1px solid #555', borderRadius: 4, fontSize: 11 }}
+            formatter={(val: number) => [val.toLocaleString(), 'Volume']}
+            labelStyle={{ color: '#fff' }}
+            itemStyle={{ color: '#fff' }}
+            cursor={{ fill: '#2a2a2c' }}
+          />
+          <Bar dataKey="vol" fill="#5c4d7d" radius={[2, 2, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
@@ -1036,15 +1318,16 @@ export function ExecutionReportPage() {
     gridRef.current?.api?.autoSizeAllColumns();
   }, []);
 
-  // Re-size columns whenever filteredRows first populates (covers page refresh
-  // where rows arrive via applyTransaction after onFirstDataRendered has fired)
-  const didAutoSize = useRef(false);
+  // Re-size columns whenever filteredRows changes — covers initial load via
+  // applyTransaction (fires after onFirstDataRendered), LP filter switches,
+  // and any subsequent row updates. Debounced so rapid WS updates don't thrash.
+  const autoSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (filteredRows.length > 0 && !didAutoSize.current) {
-      didAutoSize.current = true;
-      setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 50);
-    }
-    if (filteredRows.length === 0) didAutoSize.current = false;
+    if (filteredRows.length === 0) return;
+    if (autoSizeTimerRef.current) clearTimeout(autoSizeTimerRef.current);
+    autoSizeTimerRef.current = setTimeout(() => {
+      gridRef.current?.api?.autoSizeAllColumns();
+    }, 80);
   }, [filteredRows]);
 
   const onRowClicked = useCallback((params: { data?: ExecutionReportRow }) => {
@@ -1283,11 +1566,11 @@ export function ExecutionReportPage() {
             </div>
           </div>
 
-          {/* ── Donut Charts Strip (below grid, same as B-Book) ─── */}
+          {/* ── Analytics Charts Strip ─────────────────────────── */}
           <div
             className={clsx(
               'border-t border-[#808080] flex-shrink-0 transition-all duration-300 overflow-hidden',
-              chartsCollapsed ? 'h-[40px]' : 'h-[220px]'
+              chartsCollapsed ? 'h-[40px]' : 'h-[300px]'
             )}
             style={{ backgroundColor: '#313032' }}
           >
@@ -1309,55 +1592,13 @@ export function ExecutionReportPage() {
               </button>
             </div>
 
-            {/* Donut charts row */}
+            {/* Analytics charts — 4-column grid matching BBookCharts layout */}
             {!chartsCollapsed && (
-              <div className="flex items-center justify-around px-8 h-[180px]">
-                {DONUTS.map((d) => (
-                  <div key={d.title} className="flex flex-col items-center gap-2">
-                    <span className="text-[10px] text-[#555] uppercase tracking-wider font-medium">
-                      {d.title}
-                    </span>
-                    <div style={{ width: 130, height: 130, position: 'relative' }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={DONUT_STUB}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={36}
-                            outerRadius={52}
-                            dataKey="value"
-                            stroke="none"
-                            startAngle={90}
-                            endAngle={-270}
-                          >
-                            <Cell fill="#3a383c" />
-                          </Pie>
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          pointerEvents: 'none',
-                        }}
-                      >
-                        <span style={{
-                          fontSize: 9,
-                          color: '#444',
-                          textAlign: 'center',
-                          lineHeight: 1.4,
-                          fontFamily: 'monospace',
-                        }}>
-                          Coming<br />Soon
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              <div className="grid grid-cols-4 gap-2 px-2 pb-2" style={{ height: 'calc(100% - 40px)' }}>
+                <LatencyOverTimeChart rows={filteredRows} />
+                <LatencyByLPChart    rows={filteredRows} />
+                <OrdersByStatusChart rows={filteredRows} />
+                <VolumeBySymbolChart rows={filteredRows} />
               </div>
             )}
           </div>
