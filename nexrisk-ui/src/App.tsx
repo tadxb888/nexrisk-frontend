@@ -35,6 +35,7 @@ import {
   // MT5
   NodeManagementPage,
   SymbolMappingPage,
+  RouteSanityPage,
 } from '@/pages';
 
 // Create React Query client
@@ -73,6 +74,7 @@ function App() {
             <Route path="/archetype" element={<ArchetypePage />} />
             <Route path="/liquidity-providers" element={<LiquidityProvidersPage />} />
             <Route path="/symbol-mapping"      element={<SymbolMappingPage />} />
+            <Route path="/route-sanity"        element={<RouteSanityPage />} />
             <Route path="/hedge-rules" element={<HedgeRulesPage />} />
             <Route path="/price-rules" element={<PriceRulesPage />} />
             

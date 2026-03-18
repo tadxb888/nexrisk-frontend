@@ -942,9 +942,10 @@ export function CBookPage() {
             // Pass 1 @ 600ms  — C++ position refresh timer (500ms) should have fired.
             // Pass 2 @ 2500ms — TE sandbox external close can take 1-2s to clear the
             //                   position from TE's own cache, so pass 1 may still see it.
-            if (wsLpIdRef.current) {
-              syncPositionsAfterFill(wsLpIdRef.current, 600);
-              syncPositionsAfterFill(wsLpIdRef.current, 2500);
+            const syncLp = wsLpIdRef.current || gridLpIdRef.current;
+            if (syncLp) {
+              syncPositionsAfterFill(syncLp, 600);
+              syncPositionsAfterFill(syncLp, 2500);
             }
           }
 

@@ -71,6 +71,12 @@ const SymbolMappingIcon = () => (
   </svg>
 );
 
+const RouteSanityIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="m24 9.5a3.5 3.5 0 1 0 -5 3.15v3.35a5 5 0 0 1 -10 0v-.151a7.513 7.513 0 0 0 6-7.349v-5a3.5 3.5 0 0 0 -3.5-3.5h-2.5v3h2.5a.5.5 0 0 1 .5.5v5a4.5 4.5 0 0 1 -9 0v-5a.5.5 0 0 1 .5-.5h2.5v-3h-2.5a3.5 3.5 0 0 0 -3.5 3.5v5a7.513 7.513 0 0 0 6 7.349v.151a8 8 0 0 0 16 0v-3.35a3.491 3.491 0 0 0 2-3.15z"/>
+  </svg>
+);
+
 const HedgeRulesIcon = () => (
   <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
     <path d="M24,10v5h-2v-3.586l-3.414,3.414c-.372,.372-.586,.888-.586,1.414v7.758h-2v-7.758c0-1.053,.427-2.084,1.172-2.828l3.414-3.414h-3.586v-2h5c1.103,0,2,.897,2,2Zm-20.547,0h3.586v-2H2.039C.936,8,.039,8.897,.039,10v5H2.039v-3.586l3.414,3.414c.373,.372,.586,.888,.586,1.414v7.758h2v-7.758c0-1.053-.427-2.084-1.172-2.828l-3.414-3.414Zm13.708-5.651L13.557,.703c-.8-.895-2.368-.871-3.127-.023l-3.562,3.719,1.444,1.383,2.688-2.806V24h2V3.018l2.736,2.737,1.424-1.406Z"/>
@@ -163,6 +169,7 @@ const navSections: NavSection[] = [
       { path: '/archetype', label: 'Archetype', icon: <ArchetypeIcon /> },
       { path: '/liquidity-providers', label: 'Liquidity Providers', icon: <LiquidityProvidersIcon /> },
       { path: '/symbol-mapping',      label: 'Symbol Mapping',      icon: <SymbolMappingIcon /> },
+      { path: '/route-sanity',        label: 'Route Sanity',        icon: <RouteSanityIcon /> },
       { path: '/hedge-rules', label: 'Hedge Rules', icon: <HedgeRulesIcon /> },
       { path: '/price-rules', label: 'Price Rules', icon: <PriceRulesIcon /> },
     ],

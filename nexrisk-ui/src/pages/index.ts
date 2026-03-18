@@ -11,6 +11,7 @@ export { LogsPage } from './Logs';
 export { LiquidityProvidersPage } from './LiquidityProviders';
 export { NodeManagementPage } from './NodeManagement';
 export { SymbolMappingPage } from './SymbolMapping';
+export { default as RouteSanityPage } from './RouteSanityPage';
 export {
   HedgeRulesPage,
   PriceRulesPage,
