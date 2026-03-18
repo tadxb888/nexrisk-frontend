@@ -1396,7 +1396,7 @@ export function ExecutionReportPage() {
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between flex-shrink-0">
         <div>
           <h1 className="text-lg font-semibold text-white">Execution Report</h1>
-          <p className="text-xs text-[#999]">FIX Bridge order blotter — one row per order lifecycle</p>
+          <p className="text-xs text-[#999]">FIX Bridge order blotter</p>
         </div>
 
         <div className="flex items-center gap-5 text-xs flex-wrap">

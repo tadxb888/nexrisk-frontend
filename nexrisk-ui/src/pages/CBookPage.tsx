@@ -1099,7 +1099,7 @@ export function CBookPage() {
 
           // ── ACCOUNT — Brief Section 7.4
           // Fires every ~2 s from TE. Drive account panel without REST polling.
-          if (msg.type === 'ACCOUNT_STATUS') {
+          if (msg.type === 'ACCOUNT_STATUS' || msg.type === 'TRADE_CAPTURE_REPORT') {
             const d = msg.data ?? msg;
             setAccount({
               balance:          d.balance          ?? 0,
@@ -1526,18 +1526,18 @@ export function CBookPage() {
             <div className="flex items-center gap-5 text-[11px]">
               {/* tag 20115 — ProjectedBalance = UsedMargin + AvailableMargin */}
               <div>
-                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance <span className="text-[#444]">20115</span></div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance</div>
                 <div className="font-mono text-white font-medium">{account.currency} {fmtAcct(account.balance)}</div>
               </div>
               {/* tag 20080 — UsedMargin */}
               <div>
-                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Used Margin <span className="text-[#444]">20080</span></div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Used Margin</div>
                 <div className="font-mono text-white font-medium">{account.currency} {fmtAcct(account.margin_used)}</div>
               </div>
               {/* tag 7027 — AvailableMargin */}
               <div>
-                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Available Margin <span className="text-[#444]">7027</span></div>
-                <div className="font-mono font-medium text-[#4ecdc4]">{account.currency} {fmtAcct(account.margin_available)}</div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Available Margin</div>
+                <div className="font-mono text-white font-medium">{account.currency} {fmtAcct(account.margin_available)}</div>
               </div>
             </div>
           ) : (
