@@ -942,10 +942,9 @@ export function CBookPage() {
             // Pass 1 @ 600ms  — C++ position refresh timer (500ms) should have fired.
             // Pass 2 @ 2500ms — TE sandbox external close can take 1-2s to clear the
             //                   position from TE's own cache, so pass 1 may still see it.
-            const syncLp = wsLpIdRef.current || gridLpIdRef.current;
-            if (syncLp) {
-              syncPositionsAfterFill(syncLp, 600);
-              syncPositionsAfterFill(syncLp, 2500);
+            if (wsLpIdRef.current) {
+              syncPositionsAfterFill(wsLpIdRef.current, 600);
+              syncPositionsAfterFill(wsLpIdRef.current, 2500);
             }
           }
 
@@ -1095,6 +1094,36 @@ export function CBookPage() {
               gridRef.current?.api?.applyTransaction({
                 remove: [{ id: `pos-${resolvedCloseLp}-${pid}` } as CBookOrder]
               });
+            }
+          }
+
+          // ── POSITION_UPDATED — partial close from TE terminal
+          // TE sends PositionReport with reduced qty. Update the grid row in place.
+          if (msg.type === 'POSITION_UPDATED') {
+            const evtLp = msg.lp_id;
+            if (evtLp && evtLp !== wsLpIdRef.current && evtLp !== gridLpIdRef.current) return;
+            const resolvedLp = evtLp ?? gridLpIdRef.current;
+            // NexRiskService wraps payload under msg.data for position topic events
+            const upd = msg.data ?? msg;
+            const pid = upd.position_id ?? upd.positionId;
+            if (pid && gridRef.current?.api) {
+              const rowId = `pos-${resolvedLp}-${pid}`;
+              let updatedRow: CBookOrder | null = null;
+              gridRef.current.api.forEachNode((node) => {
+                if (node.data?.id === rowId) {
+                  const netQty = Math.abs(upd.net_qty ?? upd.long_qty ?? upd.short_qty ?? 0);
+                  const minVol = node.data.minVolume ?? 1;
+                  updatedRow = {
+                    ...node.data,
+                    volume:     netQty,
+                    rawQty:     netQty,
+                    displayQty: netQty * minVol,
+                  };
+                }
+              });
+              if (updatedRow) {
+                gridRef.current.api.applyTransaction({ update: [updatedRow] });
+              }
             }
           }
 
