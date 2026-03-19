@@ -884,11 +884,22 @@ export function CBookPage() {
               bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)
                 .then((r) => {
                   if (!r.success || cancelled) return;
+                  // Stamp DOM type/comments on any new position found by pending DOM order
+                  const pending = pendingDomRef.current;
                   const rows = r.data.positions
                     .filter((p) => p.position_id !== '' && p.open_price > 0)
                     .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
                     .map((p) => {
                       const row = positionToCBook(p, lpSnap, instrMap);
+                      // If a DOM order is pending and this is a new position_id → stamp it
+                      if (pending && !pending.preIds.has(p.position_id)) {
+                        posOverrideRef.current.set(p.position_id, {
+                          type:     'DOM Trader',
+                          comments: pending.comment,
+                        });
+                        saveOverrides();
+                        pendingDomRef.current = null;
+                      }
                       const ov = posOverrideRef.current.get(p.position_id);
                       if (ov) { row.type = ov.type; row.comments = ov.comments; }
                       return row;
@@ -1109,10 +1120,13 @@ export function CBookPage() {
             if (pid && gridRef.current?.api) {
               const rowId = `pos-${resolvedLp}-${pid}`;
               let updatedRow: CBookOrder | null = null;
+              const symbol = upd.symbol ?? '';
+              const instrMap = instrCacheRef.current[resolvedLp] ?? {};
+              const ins = instrMap[symbol];
+              const minVol = ins?.min_trade_vol ?? 100000;
               gridRef.current.api.forEachNode((node) => {
                 if (node.data?.id === rowId) {
                   const netQty = Math.abs(upd.net_qty ?? upd.long_qty ?? upd.short_qty ?? 0);
-                  const minVol = node.data.minVolume ?? 1;
                   updatedRow = {
                     ...node.data,
                     volume:     netQty,
