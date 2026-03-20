@@ -772,4 +772,22 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(response.data);
     }
   );
+
+  // ── Daily P/L stats (CBook top bar) ────────────────────────
+  // Query params: lp_id, account, date — all optional.
+  // Returns zeros (not 404) when no positions have been closed yet today.
+  fastify.get(
+    '/fix/daily-stats',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = request.query as Record<string, string | undefined>;
+      const qs = new URLSearchParams();
+      if (q.lp_id)   qs.set('lp_id',   q.lp_id);
+      if (q.account) qs.set('account', q.account);
+      if (q.date)    qs.set('date',    q.date);
+      const qstr = qs.toString() ? `?${qs.toString()}` : '';
+      const response = await nexriskApi.get(`/api/v1/fix/daily-stats${qstr}`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
 }
