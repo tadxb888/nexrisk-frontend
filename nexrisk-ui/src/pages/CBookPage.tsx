@@ -886,6 +886,18 @@ export function CBookPage() {
                   if (!r.success || cancelled) return;
                   // Stamp DOM type/comments on any new position found by pending DOM order
                   const pending = pendingDomRef.current;
+                  // If REST returns a position with qty>0 that we blacklisted (e.g. DOM
+                  // partial close: POSITION_CLOSED fires before PositionReport), unblacklist it.
+                  // Track unblacklisted IDs to protect them from toRemove diff logic.
+                  const recentlyUnblacklisted = new Set<string>();
+                  r.data.positions.forEach((p) => {
+                    if (p.position_id && p.open_price > 0 && (p.long_qty + p.short_qty) > 0
+                        && closedPositionIdsRef.current.has(p.position_id)) {
+                      closedPositionIdsRef.current.delete(p.position_id);
+                      saveClosedIds();
+                      recentlyUnblacklisted.add(`pos-${lpSnap}-${p.position_id}`);
+                    }
+                  });
                   const rows = r.data.positions
                     .filter((p) => p.position_id !== '' && p.open_price > 0)
                     .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
@@ -913,7 +925,7 @@ export function CBookPage() {
                     api.forEachNode((node) => { if (node.data?.id?.startsWith('pos-')) existingPosIds.add(node.data.id); });
                     const incomingIds = new Set(rows.map((r) => r.id));
                     const toRemove = [...existingPosIds]
-                      .filter((id) => !incomingIds.has(id))
+                      .filter((id) => !incomingIds.has(id) && !recentlyUnblacklisted.has(id))
                       .map((id) => ({ id } as CBookOrder));
                     if (toRemove.length) {
                       console.log('[CBook] syncPositions removing', toRemove.length, 'closed pos rows at', delayMs, 'ms');
@@ -1047,6 +1059,17 @@ export function CBookPage() {
             };
             // WS events: guard on position_id only — open_price may be 0 in TE events.
             // (open_price > 0 guard is for REST responses only, not WS.)
+            // Special case: if position was blacklisted by POSITION_CLOSED but TE sends
+            // a POSITION_REPORT with qty>0 shortly after (DOM partial close), unblacklist
+            // and re-add. TCR fires before PositionReport for DOM-initiated closes.
+            if (pos.position_id !== ''
+                && pos.open_price > 0
+                && pos.long_qty + pos.short_qty > 0
+                && closedPositionIdsRef.current.has(pos.position_id)) {
+              // Re-open: remove from blacklist so the row gets added back
+              closedPositionIdsRef.current.delete(pos.position_id);
+              saveClosedIds();
+            }
             if (pos.position_id !== ''
                 && !closedPositionIdsRef.current.has(pos.position_id)) {
               // TE sends a POSITION_REPORT with open_price=0 when a position is closed

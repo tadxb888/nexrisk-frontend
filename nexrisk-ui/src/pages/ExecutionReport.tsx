@@ -226,10 +226,13 @@ function buildRowFromAE(
   const corr_nos_ts    = ae.nos_sent_ms  ?? nosRecord?.nos_ts    ?? null;
 
   // RT: both nos_sent_ms and received_ts are NexRisk internal epoch ms.
-  // For historical rows received_ts = timestamp_ms from audit DB.
-  // Only compute RT when NOS was sent before the fill and within 60s.
+  // For live WS rows received_ts is stamped by C++ at exact AE receive time — accurate.
+  // For DB-loaded historical rows received_ts is the audit-table write time, which can
+  // lag the actual receive by several seconds.  Cap at 5000ms: any legitimate FIX
+  // market-order RT is well under 5s; values above that are DB timestamp artefacts
+  // and should be treated as unknown (null → shows as '—' in grid, excluded from charts).
   const fill_ts = ae.received_ts || 0;
-  const round_trip_ms  = (corr_nos_ts && fill_ts && fill_ts > corr_nos_ts && (fill_ts - corr_nos_ts) < 60000)
+  const round_trip_ms  = (corr_nos_ts && fill_ts && fill_ts > corr_nos_ts && (fill_ts - corr_nos_ts) < 5000)
     ? (fill_ts - corr_nos_ts)
     : null;
 
@@ -757,38 +760,32 @@ export function ExecutionReportPage() {
             }> = data?.data ?? [];
 
             for (const msg of messages) {
-              const raw: string   = msg.raw ?? '';
               const ts_ms: number = msg.timestamp_ms ?? 0;
               const fixTs = ts_ms ? msToFixTimestamp(ts_ms) : '';
 
-              const get = (tag: number) =>
-                raw.match(new RegExp(`(?:^|\\|)${tag}=([^|]+)`))?.[1] ?? '';
-
-              const trade_report_id = get(571);
+              const trade_report_id = msg.trade_report_id ?? '';
               if (!trade_report_id) continue;
 
-              const symbol   = get(55);
-              const sideCode = get(54);
+              const sideCode = msg.side ?? '';
               const side     = sideCode === '2' ? 'SELL' : 'BUY';
 
               const aeData: TradeCaptureWsEvent['data'] = {
                 trade_report_id,
-                order_id:          get(37),
+                order_id:          msg.order_id          ?? '',
                 exec_id:           '',
-                symbol,
+                symbol:            msg.symbol            ?? '',
                 side,
-                last_qty:          parseFloat(get(32) || '0'),
-                last_px:           parseFloat(get(31) || '0'),
-                account:           get(1),
-                transact_time:     get(60) || fixTs,
-                security_exchange: get(207),
-                ex_destination:    get(100),
-                security_id:       get(48),
+                last_qty:          parseFloat(msg.last_qty   || '0'),
+                last_px:           parseFloat(msg.last_px    || '0'),
+                account:           msg.account           ?? '',
+                transact_time:     msg.transact_time     || fixTs,
+                security_exchange: msg.security_exchange ?? '',
+                ex_destination:    msg.ex_destination    ?? '',
+                security_id:       msg.security_id       ?? '',
                 canonical_symbol:  '',
                 trd_type:          0,
-                commission:        parseFloat(get(12) || '0'),
+                commission:        parseFloat(msg.commission || '0'),
                 received_ts:       ts_ms,
-                // Correlated fields from DB join — populated when NOS was matched
                 cl_ord_id:         msg.cl_ord_id  || undefined,
                 nos_sent_ms:       msg.nos_sent_ms || undefined,
               };
