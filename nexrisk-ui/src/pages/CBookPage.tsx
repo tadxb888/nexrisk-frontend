@@ -154,6 +154,16 @@ interface AccountStatus {
   currency: string;
 }
 
+interface DailyStats {
+  trade_date:      string;
+  realized_pnl:    number;
+  commission:      number;
+  swap_long:       number | null;   // always null for TE (no per-leg split available)
+  swap_short:      number | null;   // always null for TE
+  swap_net:        number;
+  position_count:  number;
+}
+
 interface BookLevel {
   price: number;
   size: number;
@@ -524,6 +534,11 @@ export function CBookPage() {
   const [capabilities, setCapabilities]   = useState<FIXCapabilities | null>(null);
   const [lpStatus, setLpStatus]           = useState<FIXLpStatus | null>(null);
   const [account, setAccount]             = useState<AccountStatus | null>(null);
+  const [dailyStats, setDailyStats]       = useState<DailyStats | null>(null);
+  const statsRefreshTimer                 = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref that always points to the latest fetchDailyStats — prevents stale closure
+  // inside the WS onmessage handler (whose useEffect deps are [domLpId, domSymbol]).
+  const fetchDailyStatsRef = useRef<() => void>(() => {});
 
   const effectiveCaps = capabilities ?? {
     lp_id: domLpId, order_types: ['MARKET', 'LIMIT'], time_in_force: ['GTC', 'IOC', 'DAY'],
@@ -537,6 +552,7 @@ export function CBookPage() {
   const bookRenderTimer           = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingBookRef            = useRef<BookData | null>(null);
   const [bookStatus, setBookStatus] = useState<string>('—');
+  const [priceTickCounter, setPriceTickCounter] = useState(0);
 
   // Refs for WS handler closures
   const subscribedRef = useRef<string>('');
@@ -1019,6 +1035,7 @@ export function CBookPage() {
                   columns: ['currentPrice', 'unrealizedPnl'],
                   suppressFlash: true,
                 });
+                setPriceTickCounter((n) => n + 1);
               }
             }
             // ── DOM book panel (throttled to 100ms — human eye limit) ────────────
@@ -1129,6 +1146,37 @@ export function CBookPage() {
                 remove: [{ id: `pos-${resolvedCloseLp}-${pid}` } as CBookOrder]
               });
             }
+            // Update dailyStats directly from the event payload so the top bar
+            // reflects the close immediately — no REST round-trip needed.
+            // The debounced fetch below keeps the DB-authoritative value in sync.
+            const d = msg.data ?? msg;
+            const evtPnl   = typeof d.realized_pnl === 'number' ? d.realized_pnl : 0;
+            const evtComm  = typeof d.commission   === 'number' ? d.commission   : 0;
+            const evtSwap  = typeof d.swap         === 'number' ? d.swap         : 0;
+            if (evtPnl !== 0 || evtComm !== 0 || evtSwap !== 0) {
+              setDailyStats((prev) => prev
+                ? {
+                    ...prev,
+                    realized_pnl:   prev.realized_pnl   + evtPnl,
+                    commission:     prev.commission      + evtComm,
+                    swap_net:       prev.swap_net        + evtSwap,
+                    position_count: prev.position_count  + 1,
+                  }
+                : {
+                    trade_date:     new Date().toISOString().slice(0, 10),
+                    realized_pnl:   evtPnl,
+                    commission:     evtComm,
+                    swap_long:      null,
+                    swap_short:     null,
+                    swap_net:       evtSwap,
+                    position_count: 1,
+                  }
+              );
+            }
+            // Debounced REST fetch keeps the value DB-authoritative (handles
+            // commission/swap values that may not be in the WS event).
+            if (statsRefreshTimer.current) clearTimeout(statsRefreshTimer.current);
+            statsRefreshTimer.current = setTimeout(() => fetchDailyStatsRef.current(), 500);
           }
 
           // ── POSITION_UPDATED — partial close from TE terminal
@@ -1264,6 +1312,44 @@ export function CBookPage() {
       volDisplay,
     };
   }, [gridRows]);
+
+  // Unrealized P/L — summed client-side from all open grid rows using live book prices.
+  // LP-agnostic: same formula as the per-row P/L valueGetter in columnDefs.
+  const unrealizedPnlTotal = useMemo(() => {
+    let total = 0;
+    let hasAny = false;
+    for (const pos of livePositions) {
+      if (!pos._isOpen || !pos.symbol) continue;
+      const key = pos.side === 'BUY' ? pos.symbol + ':bid' : pos.symbol + ':ask';
+      const closePrice = currentPricesRef.current.get(key) ?? pos.currentPrice ?? null;
+      if (closePrice == null) continue;
+      const dir = pos.side === 'BUY' ? 1 : pos.side === 'SELL' ? -1 : 0;
+      if (dir !== 0) { total += (closePrice - pos.fillPrice) * pos.displayQty * dir; hasAny = true; }
+    }
+    return hasAny ? total : null;
+  }, [livePositions, priceTickCounter]);
+
+  // ── Daily stats fetch helper — called on mount, on LP change, and after a close ─
+  const fetchDailyStats = useCallback(() => {
+    if (!domLpId) { setDailyStats(null); return; }
+    bff<{ success: boolean; data: DailyStats }>(
+      `/api/v1/fix/daily-stats?lp_id=${encodeURIComponent(domLpId)}`
+    )
+      .then((r) => { if (r.success) setDailyStats(r.data); })
+      .catch(() => {});
+  }, [domLpId]);
+
+  // Keep the ref current so the WS closure (which captures refs, not state/callbacks)
+  // always calls the latest version of fetchDailyStats.
+  useEffect(() => { fetchDailyStatsRef.current = fetchDailyStats; }, [fetchDailyStats]);
+
+  // Fetch on mount and whenever the DOM LP changes; poll every 30 s as a safety net.
+  useEffect(() => {
+    if (!domLpId) { setDailyStats(null); return; }
+    fetchDailyStats();
+    const timer = setInterval(fetchDailyStats, 30_000);
+    return () => clearInterval(timer);
+  }, [domLpId, fetchDailyStats]);
 
   const instrDecimals = activeInstrument?.price_precision
     ?? (domSymbol.includes('JPY') ? 3 : domSymbol.includes('XAU') || domSymbol.includes('BTC') ? 2 : 5);
@@ -1590,7 +1676,7 @@ export function CBookPage() {
         {/* Account metrics — TE only. Only 3 fields confirmed sent by TE sandbox UAA. */}
         {allLps.find(l => l.lp_id === domLpId)?.provider_type === 'traderevolution' && (
           account ? (
-            <div className="flex items-center gap-5 text-[11px]">
+            <div className="flex items-center gap-5 text-[11px] flex-wrap">
               {/* tag 20115 — ProjectedBalance = UsedMargin + AvailableMargin */}
               <div>
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance</div>
@@ -1605,6 +1691,72 @@ export function CBookPage() {
               <div>
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Available Margin</div>
                 <div className="font-mono text-white font-medium">{account.currency} {fmtAcct(account.margin_available)}</div>
+              </div>
+
+              <div className="w-px h-8 bg-[#444] flex-shrink-0" />
+
+              {/* Realized P/L — sourced from risk.cbook_closed_positions via REST */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Realized P/L</div>
+                {dailyStats ? (
+                  <div className="font-mono font-medium"
+                       style={{ color: dailyStats.realized_pnl >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                    {dailyStats.realized_pnl >= 0 ? '+' : ''}{fmtAcct(dailyStats.realized_pnl)}
+                  </div>
+                ) : (
+                  <div className="font-mono text-[#555]">—</div>
+                )}
+              </div>
+
+              {/* Unrealized P/L — summed client-side from open grid rows × live book prices */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Unrealized P/L</div>
+                {unrealizedPnlTotal != null ? (
+                  <div className="font-mono font-medium"
+                       style={{ color: unrealizedPnlTotal >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                    {unrealizedPnlTotal >= 0 ? '+' : ''}{fmtAcct(unrealizedPnlTotal)}
+                  </div>
+                ) : (
+                  <div className="font-mono text-[#555]">—</div>
+                )}
+              </div>
+
+              {/* Commission — cumulative today from closed positions */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Commission</div>
+                {dailyStats ? (
+                  <div className="font-mono font-medium"
+                       style={{ color: dailyStats.commission < 0 ? '#ff6b6b' : '#888' }}>
+                    {fmtAcct(dailyStats.commission)}
+                  </div>
+                ) : (
+                  <div className="font-mono text-[#555]">—</div>
+                )}
+              </div>
+
+              {/* Swap Long — not available from TE (no per-leg split) */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Swap Long</div>
+                <div className="font-mono text-[#444]">--</div>
+              </div>
+
+              {/* Swap Short — not available from TE (no per-leg split) */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Swap Short</div>
+                <div className="font-mono text-[#444]">--</div>
+              </div>
+
+              {/* Swap Net — single swap value from AP position reports */}
+              <div>
+                <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Swap Net</div>
+                {dailyStats ? (
+                  <div className="font-mono font-medium"
+                       style={{ color: dailyStats.swap_net < 0 ? '#ff6b6b' : dailyStats.swap_net > 0 ? '#4ecdc4' : '#888' }}>
+                    {dailyStats.swap_net >= 0 ? '+' : ''}{fmtAcct(dailyStats.swap_net)}
+                  </div>
+                ) : (
+                  <div className="font-mono text-[#555]">—</div>
+                )}
               </div>
             </div>
           ) : (
