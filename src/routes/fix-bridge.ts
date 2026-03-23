@@ -773,6 +773,17 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // ── Route Sanity: per-symbol order RT + rejection metrics ───
+  fastify.get(
+    '/fix/lp/:lp_id/metrics/symbols',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { lp_id } = lpIdParams.parse(request.params);
+      const response = await nexriskApi.get(`/api/v1/fix/lp/${lp_id}/metrics/symbols`);
+      return emptyOn404(response, lp_id, { lp_id, metrics: {} }, reply);
+    }
+  );
+
   // ── Daily P/L stats (CBook top bar) ────────────────────────
   // Query params: lp_id, account, date — all optional.
   // Returns zeros (not 404) when no positions have been closed yet today.
