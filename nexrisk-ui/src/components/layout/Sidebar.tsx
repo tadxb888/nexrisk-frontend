@@ -170,7 +170,7 @@ const navSections: NavSection[] = [
       { path: '/liquidity-providers', label: 'Liquidity Providers', icon: <LiquidityProvidersIcon /> },
       { path: '/symbol-mapping',      label: 'Symbol Mapping',      icon: <SymbolMappingIcon /> },
       { path: '/route-sanity',        label: 'Route Sanity',        icon: <RouteSanityIcon /> },
-      { path: '/hedge-rules', label: 'Hedge Rules', icon: <HedgeRulesIcon /> },
+      { path: '/hedge-rules', label: 'Hedging Strategies', icon: <HedgeRulesIcon /> },
       { path: '/price-rules', label: 'Price Rules', icon: <PriceRulesIcon /> },
     ],
   },

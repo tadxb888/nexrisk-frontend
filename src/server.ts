@@ -19,6 +19,7 @@ import { mt5WsRoutes } from './routes/mt5-ws.js';
 import { fixWsRoutes } from './routes/fix-ws.js';
 import { symbolMappingRoutes } from './routes/symbol-mapping.js';
 import { routeSanityRoutes } from './routes/route-sanity.js';
+import { hedgingRoutes } from './routes/hedging.js';
 
 /**
  * Create and configure Fastify server
@@ -145,6 +146,7 @@ async function buildServer() {
       await api.register(fixBridgeRoutes);
       await api.register(symbolMappingRoutes);
       await api.register(routeSanityRoutes);
+      await api.register(hedgingRoutes);
       
     },
     { prefix: '/api/v1' } 

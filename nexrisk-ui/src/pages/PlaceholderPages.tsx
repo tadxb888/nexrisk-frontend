@@ -5,25 +5,6 @@
 // ExecutionReport has its own module — re-export so existing router imports keep working
 export { ExecutionReportPage } from './ExecutionReport';
 
-export function HedgeRulesPage() {
-  return (
-    <div className="h-full flex flex-col p-4">
-      <div className="mb-4">
-        <h1 className="text-lg font-medium text-text-primary">Hedge Rules</h1>
-        <p className="text-sm text-text-secondary">
-          Define hedging triggers and cancellation rules
-        </p>
-      </div>
-      <div className="flex-1 flex items-center justify-center panel">
-        <div className="text-center">
-          <p className="text-text-muted mb-2">Hedge Rules Configuration</p>
-          <p className="text-sm text-text-secondary">Coming soon</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function PriceRulesPage() {
   return (
     <div className="h-full flex flex-col p-4">
