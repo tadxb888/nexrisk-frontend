@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 import type {
@@ -128,6 +129,9 @@ export interface ExecutionReportRow {
   account: string;          // tag 1
   transact_time: string;    // tag 60 — FIX format
   lp_id: string;
+  // Hedging strategy — populated by hedge.fill WS event, null for manual executions
+  rule_id:   number | null;
+  rule_name: string | null;
 }
 
 interface LPStatus {
@@ -260,6 +264,8 @@ function buildRowFromAE(
     account:         ae.account,
     transact_time:   ae.transact_time,
     lp_id,
+    rule_id:   null,
+    rule_name: null,
   };
 }
 
@@ -289,6 +295,8 @@ function buildPendingRow(nos: NosRecord, lp_id: string): ExecutionReportRow {
     account:         '',
     transact_time:   msToFixTimestamp(nos.nos_ts),
     lp_id,
+    rule_id:   null,
+    rule_name: null,
   };
 }
 
@@ -657,7 +665,8 @@ function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
 export function ExecutionReportPage() {
-  const gridRef = useRef<AgGridReact<ExecutionReportRow>>(null);
+  const gridRef  = useRef<AgGridReact<ExecutionReportRow>>(null);
+  const navigate = useNavigate();
 
   // ── State ──────────────────────────────────────────────────
   const [rows,           setRows]           = useState<ExecutionReportRow[]>([]);
@@ -673,6 +682,16 @@ export function ExecutionReportPage() {
 
   // O(1) trade_report_id → row lookup for WS upserts
   const rowMapRef   = useRef<Map<string, ExecutionReportRow>>(new Map());
+  // Secondary index: clord_id → trade_report_id (for hedge.fill correlation)
+  const clordIdMapRef = useRef<Map<string, string>>(new Map());
+  // Hedge records map: clord_id → {rule_id, rule_name}
+  // Loaded from GET /api/v1/hedge/records on mount and refreshed every 30s.
+  // Used to enrich fill rows with strategy names reliably, without depending
+  // on the hedge.fill WS event (which may arrive out of order or not at all).
+  const hedgeRuleMapRef = useRef<Map<string, { rule_id: number; rule_name: string | null }>>(new Map());
+  // Pending hedge.fill payloads that arrived before the fill row was added.
+  // Keyed by clord_id — applied when the matching fill row is stored.
+  const pendingHedgeFillsRef = useRef<Map<string, { rule_id: number; rule_name: string | null }>>(new Map());
   // NOS correlation: symbol|side → most recent NOS within 500ms window
   const nosMapRef   = useRef<Map<string, NosRecord>>(new Map());
   const wsRef       = useRef<WebSocket | null>(null);
@@ -680,11 +699,16 @@ export function ExecutionReportPage() {
   const mountedRef  = useRef(true);
   const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Keep rowMapRef in sync whenever rows state changes
+  // Keep rowMapRef and clordIdMapRef in sync whenever rows state changes
   useEffect(() => {
     const m = new Map<string, ExecutionReportRow>();
-    for (const r of rows) m.set(r.trade_report_id, r);
-    rowMapRef.current = m;
+    const c = new Map<string, string>();
+    for (const r of rows) {
+      m.set(r.trade_report_id, r);
+      if (r.clord_id) c.set(r.clord_id, r.trade_report_id);
+    }
+    rowMapRef.current    = m;
+    clordIdMapRef.current = c;
   }, [rows]);
 
   // ── One-shot historical load on mount ──────────────────────
@@ -800,7 +824,12 @@ export function ExecutionReportPage() {
             parseTimestamp(b.transact_time) - parseTimestamp(a.transact_time)
           );
           setRows(seedRows);
-          // Also push into grid — grid is transaction-driven, not bound to rowData
+          // Populate rowMapRef and clordIdMapRef for all seeded rows
+          for (const row of seedRows) {
+            rowMapRef.current.set(row.trade_report_id, row);
+            if (row.clord_id) clordIdMapRef.current.set(row.clord_id, row.trade_report_id);
+          }
+          // Push into grid — hedge records polling effect will enrich with strategy names
           gridRef.current?.api?.applyTransaction({ add: seedRows });
         }
       } catch { /* non-fatal */ }
@@ -831,6 +860,39 @@ export function ExecutionReportPage() {
         const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
         setLastEventAt(new Date());
 
+        // ── HEDGE FILL — strategy correlation ─────────────────
+        // Must be checked FIRST — hedge.fill events arrive with
+        // msg.type === 'EXECUTION_REPORT' (nexrisk_service overwrites type
+        // for everything on the execution ZMQ topic), so checking topic
+        // before type ensures we catch them before the fill handler does.
+        // Carries rule_id and rule_name; correlated to grid rows via clord_id.
+        if (msg.topic === 'hedge.fill') {
+          const hd      = (msg.data ?? msg) as Record<string, unknown>;
+          const clordId  = hd.clord_id  as string | undefined;
+          const ruleId   = hd.rule_id   as number | null | undefined;
+          const ruleName = hd.rule_name as string | null | undefined;
+          if (!clordId || ruleId === undefined || ruleId === null) return;
+
+          // Find the row via secondary clord_id index
+          const tradeId = clordIdMapRef.current.get(clordId);
+          if (!tradeId) {
+            // Fill row hasn't arrived yet — store and apply when it does
+            pendingHedgeFillsRef.current.set(clordId, { rule_id: ruleId, rule_name: ruleName ?? null });
+            return;
+          }
+          const existing = rowMapRef.current.get(tradeId);
+          if (!existing) return;
+
+          const updated: ExecutionReportRow = {
+            ...existing,
+            rule_id:   ruleId,
+            rule_name: ruleName ?? null,
+          };
+          rowMapRef.current.set(tradeId, updated);
+          clordIdMapRef.current.set(clordId, tradeId);
+          gridRef.current?.api?.applyTransaction({ update: [updated] });
+          return; // handled — do not fall through to type-based handlers
+
         // ALL fixbridge execution events arrive as type:"EXECUTION_REPORT" because
         // nexrisk_service overwrites the type for everything on the execution ZMQ topic.
         // The original payload is always wrapped under msg.data by NexRiskService.cpp:1275.
@@ -839,7 +901,7 @@ export function ExecutionReportPage() {
         // AE fill shape:   { type:"EXECUTION_REPORT", lp_id, data:{ trade_report_id, symbol, side, ... } }
         //
         // Distinguish by presence of cl_ord_id vs trade_report_id in msg.data.
-        if (msg.type === 'EXECUTION_REPORT') {
+        } else if (msg.type === 'EXECUTION_REPORT') {
           const lp_id   = msg.lp_id as string ?? '';
           const inner   = msg.data as Record<string, unknown> ?? {};
 
@@ -860,6 +922,8 @@ export function ExecutionReportPage() {
             const pendingRow = buildPendingRow(nosRecord, lp_id);
             const existing = rowMapRef.current.get(pendingRow.trade_report_id);
             rowMapRef.current.set(pendingRow.trade_report_id, pendingRow);
+            // Keep clordIdMapRef in sync — hedge.fill uses clord_id to find the row
+            clordIdMapRef.current.set(nosRecord.clord_id, pendingRow.trade_report_id);
             if (existing) {
               gridRef.current?.api?.applyTransaction({ update: [pendingRow] });
             } else {
@@ -885,7 +949,23 @@ export function ExecutionReportPage() {
             }
 
             const row = buildRowFromAE(ae, lp_id, validNos);
+            // Enrich with strategy name from hedge records map (ground truth)
+            if (row.clord_id) {
+              const match = hedgeRuleMapRef.current.get(row.clord_id);
+              if (match) { row.rule_id = match.rule_id; row.rule_name = match.rule_name; }
+            }
             const existing = rowMapRef.current.get(row.trade_report_id);
+            // Keep clordIdMapRef in sync — hedge.fill uses clord_id to find the row
+            if (row.clord_id) clordIdMapRef.current.set(row.clord_id, row.trade_report_id);
+
+            // Apply any pending hedge.fill that arrived before this fill row
+            const pendingFill = row.clord_id ? pendingHedgeFillsRef.current.get(row.clord_id) : undefined;
+            if (pendingFill) {
+              row.rule_id   = pendingFill.rule_id;
+              row.rule_name = pendingFill.rule_name;
+              pendingHedgeFillsRef.current.delete(row.clord_id!);
+            }
+
             rowMapRef.current.set(row.trade_report_id, row);
             if (existing) {
               gridRef.current?.api?.applyTransaction({ update: [row] });
@@ -918,7 +998,23 @@ export function ExecutionReportPage() {
           }
 
           const row = buildRowFromAE(ae, lp_id, validNos);
+          // Enrich with strategy name from hedge records map (ground truth)
+          if (row.clord_id) {
+            const match = hedgeRuleMapRef.current.get(row.clord_id);
+            if (match) { row.rule_id = match.rule_id; row.rule_name = match.rule_name; }
+          }
           const existing = rowMapRef.current.get(row.trade_report_id);
+          // Keep clordIdMapRef in sync — hedge.fill uses clord_id to find the row
+          if (row.clord_id) clordIdMapRef.current.set(row.clord_id, row.trade_report_id);
+
+          // Apply any pending hedge.fill that arrived before this fill row
+          const pendingFill2 = row.clord_id ? pendingHedgeFillsRef.current.get(row.clord_id) : undefined;
+          if (pendingFill2) {
+            row.rule_id   = pendingFill2.rule_id;
+            row.rule_name = pendingFill2.rule_name;
+            pendingHedgeFillsRef.current.delete(row.clord_id!);
+          }
+
           rowMapRef.current.set(row.trade_report_id, row);
           if (existing) {
             gridRef.current?.api?.applyTransaction({ update: [row] });
@@ -992,6 +1088,48 @@ export function ExecutionReportPage() {
     };
   }, [connectWs]);
 
+  // ── Hedge records map — loads on mount, refreshes every 30s ──
+  // Ground truth for strategy names. Keyed by clord_id.
+  // Enriches both historical seed rows and live fill rows.
+  useEffect(() => {
+    const loadHedgeRecords = async () => {
+      try {
+        const res = await fetch('/api/v1/hedge/records?page_size=200');
+        if (!res.ok) return;
+        const json = await res.json();
+        const records: Array<{ clord_id: string; rule_id: number | null; rule_name: string | null }>
+          = json.data ?? [];
+        const map = new Map<string, { rule_id: number; rule_name: string | null }>();
+        for (const r of records) {
+          if (r.clord_id && r.rule_id !== null) {
+            map.set(r.clord_id, { rule_id: r.rule_id, rule_name: r.rule_name ?? null });
+          }
+        }
+        hedgeRuleMapRef.current = map;
+
+        // Enrich any rows already in the grid that don't yet have a strategy name
+        const updates: ExecutionReportRow[] = [];
+        for (const [, row] of rowMapRef.current) {
+          if (row.clord_id && row.rule_id === null) {
+            const match = map.get(row.clord_id);
+            if (match) {
+              const updated = { ...row, rule_id: match.rule_id, rule_name: match.rule_name };
+              rowMapRef.current.set(row.trade_report_id, updated);
+              updates.push(updated);
+            }
+          }
+        }
+        if (updates.length > 0) {
+          gridRef.current?.api?.applyTransaction({ update: updates });
+        }
+      } catch { /* non-fatal */ }
+    };
+
+    loadHedgeRecords();
+    const t = setInterval(loadHedgeRecords, 30_000);
+    return () => clearInterval(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Escape key → close side panel
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1034,6 +1172,47 @@ export function ExecutionReportPage() {
   // COLUMN DEFINITIONS
   // ══════════════════════════════════════════════════════════════
   const columnDefs = useMemo<(ColDef<ExecutionReportRow> | ColGroupDef<ExecutionReportRow>)[]>(() => [
+
+    // ── EXECUTION TYPE — pinned left, first column ─────────────────
+    {
+      headerName: 'Execution Type',
+      children: [
+        {
+          field: 'rule_name',
+          headerName: 'Execution Type',
+          headerTooltip: 'Hedging strategy that triggered this order — Auto if rule-driven, Manual if DOM/direct',
+          width: 180,
+          pinned: 'left',
+          filter: 'agSetColumnFilter',
+          cellRenderer: (p: { value: string | null; data?: ExecutionReportRow }) => {
+            if (!p.value) {
+              return <span style={{ color: '#aaa', fontSize: 11, fontStyle: 'italic' }}>Manual</span>;
+            }
+            return (
+              <span
+                onClick={() => {
+                  if (p.data?.rule_id != null) {
+                    sessionStorage.setItem('nexrisk:hedging:selected', String(p.data.rule_id));
+                    navigate('/hedge-rules');
+                  }
+                }}
+                title={`Rule #${p.data?.rule_id} — click to open in Hedging Strategies`}
+                style={{
+                  color: '#4ecdc4',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textDecoration: 'underline',
+                  whiteSpace: 'nowrap' as const,
+                }}
+              >
+                {p.value}
+              </span>
+            );
+          },
+        },
+      ],
+    },
 
     // ── META ─────────────────────────────────────────────────────
     {
@@ -1081,7 +1260,7 @@ export function ExecutionReportPage() {
         },
         {
           field: 'te_status',
-          headerName: 'TE Status',
+          headerName: 'LP Status',
           headerTooltip: 'FILLED = 35=AE received; PENDING = NOS sent, no AE yet',
           width: 100,
           filter: 'agSetColumnFilter',
@@ -1133,19 +1312,9 @@ export function ExecutionReportPage() {
           filter: 'agSetColumnFilter',
         },
         {
-          field: 'clord_id',
-          headerName: 'ClOrdID',
-          headerTooltip: 'Our client order ID (tag 11) — correlated from NOS',
-          width: 200,
-          pinned: 'left',
-          filter: 'agTextColumnFilter',
-          cellStyle: { fontFamily: 'monospace', fontSize: 11 },
-          tooltipField: 'clord_id',
-        },
-        {
           field: 'order_id',
-          headerName: 'TE OrderID',
-          headerTooltip: 'TE order ID (tag 37)',
+          headerName: 'LP Order ID',
+          headerTooltip: 'LP order ID (tag 37)',
           width: 100,
           filter: 'agTextColumnFilter',
           cellStyle: { fontFamily: 'monospace' },
@@ -1270,7 +1439,23 @@ export function ExecutionReportPage() {
         },
       ],
     },
-  ], []);
+
+    // ── CLORDID — last column, unpinned ──────────────────────────
+    {
+      headerName: 'Reference',
+      children: [
+        {
+          field: 'clord_id',
+          headerName: 'ClOrdID',
+          headerTooltip: 'Our client order ID (tag 11) — correlated from NOS',
+          width: 200,
+          filter: 'agTextColumnFilter',
+          cellStyle: { fontFamily: 'monospace', fontSize: 11 },
+          tooltipField: 'clord_id',
+        },
+      ],
+    },
+  ], [navigate]);
 
   const defaultColDef = useMemo<ColDef>(() => ({
     sortable:  true,

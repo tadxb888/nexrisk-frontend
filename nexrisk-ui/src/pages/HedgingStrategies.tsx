@@ -40,6 +40,9 @@ const RED        = '#ff6b6b';
 const TEXT_PRI   = '#fff';
 const TEXT_SEC   = '#ccc';
 const TEXT_MUT   = '#888';
+// ── Right-panel specific tokens (brighter — smaller surface, denser info) ──
+const RP_LABEL   = '#f0f0f0';   // primary label text in right panel
+const RP_HINT    = '#a8a8a8';   // secondary / metadata text in right panel
 const FONT_MONO  = 'IBM Plex Mono, monospace';
 
 const SS_KEY = 'nexrisk:hedging:selected';
@@ -148,8 +151,31 @@ interface LpOption {
 interface Mt5Node {
   id:                number;
   node_name:         string;
+  node_type:         string;  // MASTER | STANDBY | BACKUP | CLIENT | PARTNER
   connection_status: string;
   is_enabled:        boolean;
+}
+
+interface EscalatedPosition {
+  record_id:         number;
+  position_id:       number;
+  login_id:          number;
+  mt5_symbol:        string;
+  direction:         'LONG' | 'SHORT';
+  hedge_volume_mt5:  number;
+  hedge_volume_lp:   number;
+  rule_id:           number | null;
+  rule_name:         string | null;
+  hedging_lp_id:     string;
+  hedge_state:       'TIMEOUT_ESCALATED' | 'REJECTED_ESCALATED' | 'NORMALIZER_ERROR';
+  clord_id:          string;
+  lp_position_id:    string | null;
+  dispatched_at:     string;
+  escalated_at:      string;
+  escalation_reason: string | null;
+  rejection_code:    string | null;
+  acknowledged_by:   string | null;
+  acknowledged_at:   string | null;
 }
 
 // ── Draft state (form working copy) ──────────────────────────
@@ -522,10 +548,10 @@ function FormRow({ label, hint, required, children }: { label: string; hint?: st
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ marginBottom: 5, display: 'flex', alignItems: 'baseline', gap: 6 }}>
-        <span style={{ fontSize: 11, color: TEXT_SEC, fontWeight: 500 }}>
+        <span style={{ fontSize: 11, color: TEXT_PRI, fontWeight: 500 }}>
           {label}{required && <span style={{ color: RED, marginLeft: 2 }}>*</span>}
         </span>
-        {hint && <span style={{ fontSize: 10, color: TEXT_MUT }}>{hint}</span>}
+        {hint && <span style={{ fontSize: 10, color: TEXT_SEC }}>{hint}</span>}
       </div>
       {children}
     </div>
@@ -543,6 +569,12 @@ const inputStyle: React.CSSProperties = {
 
 const selectStyle: React.CSSProperties = {
   ...inputStyle, cursor: 'pointer', appearance: 'auto' as const, colorScheme: 'dark',
+};
+
+const escalBtnStyle: React.CSSProperties = {
+  padding: '3px 9px', borderRadius: 3, cursor: 'pointer',
+  fontSize: 10, fontFamily: FONT_MONO, background: 'none',
+  border: '1px solid', transition: 'opacity 0.1s',
 };
 
 // ── Toggle chip set (fixed options) ──────────────────────────
@@ -674,13 +706,14 @@ function DayPicker({ value, onChange }: { value: number; onChange: (v: number) =
 
 // ── Strategy card (left panel) ────────────────────────────────
 function StrategyCard({
-  rule, selected, hasConflict, lpHealthMap, onClick,
+  rule, selected, hasConflict, escalationCount, lpHealthMap, onClick,
 }: {
-  rule:        HedgeRule;
-  selected:    boolean;
-  hasConflict: boolean;
-  lpHealthMap: Map<string, LpHealth>;
-  onClick:     () => void;
+  rule:            HedgeRule;
+  selected:        boolean;
+  hasConflict:     boolean;
+  escalationCount: number;
+  lpHealthMap:     Map<string, LpHealth>;
+  onClick:         () => void;
 }) {
   const health = lpHealthMap.get(rule.hedging_lp_id);
   const hColor = health?.connectivity_status === 'CONNECTED' ? GREEN
@@ -741,6 +774,14 @@ function StrategyCard({
             backgroundColor: '#201400', color: AMBER, border: `1px solid ${AMBER}44`,
           }}>
             ⚠ Overlap
+          </span>
+        )}
+        {escalationCount > 0 && (
+          <span style={{
+            padding: '1px 6px', borderRadius: 2, fontSize: 10, fontFamily: FONT_MONO,
+            backgroundColor: '#200808', color: RED, border: `1px solid ${RED}44`,
+          }}>
+            ⚠ {escalationCount} escalated
           </span>
         )}
       </div>
@@ -865,11 +906,18 @@ export function HedgeRulesPage() {
 
   // ── UI state ────────────────────────────────────────────────
   const [statusFilter, setStatusFilter] = useState<'ALL' | RuleStatus>('ALL');
+  const [rightTab,     setRightTab]     = useState<'lp_health' | 'route_sanity' | 'escalations'>('lp_health');
   const [loading,      setLoading]      = useState(false);
   const [saving,       setSaving]       = useState(false);
+  const [sanitySaving, setSanitySaving] = useState(false);
   const [loadError,    setLoadError]    = useState<string | null>(null);
   const [saveError,    setSaveError]    = useState<string | null>(null);
+  const [sanityError,  setSanityError]  = useState<string | null>(null);
   const [toast,        setToast]        = useState<string | null>(null);
+
+  // ── Escalations state ────────────────────────────────────────
+  const [escalations,      setEscalations]      = useState<EscalatedPosition[]>([]);
+  const [escalationBusy,   setEscalationBusy]   = useState<Record<number, boolean>>({});
 
   const mountedRef = useRef(true);
 
@@ -948,6 +996,16 @@ export function HedgeRulesPage() {
     } catch { setBBookGroups([]); }
   }, []);
 
+  const loadEscalations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/hedge/positions/escalated');
+      if (!res.ok || !mountedRef.current) return;
+      const json = await res.json();
+      const arr: EscalatedPosition[] = json.data ?? json ?? [];
+      setEscalations(Array.isArray(arr) ? arr : []);
+    } catch { /* best effort */ }
+  }, []);
+
   const loadSanityConfig = useCallback(async (ruleId: number) => {
     setSanityUnavailable(false);
     setSanityIsGlobal(false);
@@ -999,6 +1057,13 @@ export function HedgeRulesPage() {
     return () => clearInterval(t);
   }, [loadLpHealth]);
 
+  // 10s escalation poll
+  useEffect(() => {
+    loadEscalations();
+    const t = setInterval(loadEscalations, 10_000);
+    return () => clearInterval(t);
+  }, [loadEscalations]);
+
   // Selection change → load rule + sanity config
   useEffect(() => {
     if (selectedId === null) { sessionStorage.removeItem(SS_KEY); return; }
@@ -1013,10 +1078,15 @@ export function HedgeRulesPage() {
     }
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load B-Book groups when server selection changes
+  // Master node — declared here so all effects below can reference it safely
+  const masterNode = mt5Nodes.find(n => n.node_type === 'MASTER' && n.is_enabled)
+                  ?? mt5Nodes.find(n => n.is_enabled); // fallback: first enabled node
+
+  // Load B-Book groups from master node whenever it is available
   useEffect(() => {
-    loadBBookGroups(draftRule.mt5_server_id);
-  }, [draftRule.mt5_server_id, loadBBookGroups]);
+    if (masterNode) loadBBookGroups(String(masterNode.id));
+    else setBBookGroups([]);
+  }, [masterNode, loadBBookGroups]);
 
   // Sync sanity lp_id with primary LP
   useEffect(() => {
@@ -1024,6 +1094,14 @@ export function HedgeRulesPage() {
       setDraftSanity(s => ({ ...s, lp_id: draftRule.hedging_lp_id }));
     }
   }, [draftRule.hedging_lp_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Always keep mt5_server_id in sync with the master node.
+  // Covers: new strategies, existing rules with empty mt5_servers[], late node loads.
+  useEffect(() => {
+    if (masterNode && draftRule.mt5_server_id !== String(masterNode.id)) {
+      setDraftRule(d => ({ ...d, mt5_server_id: String(masterNode.id) }));
+    }
+  }, [masterNode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════════
   // HANDLERS
@@ -1036,7 +1114,7 @@ export function HedgeRulesPage() {
   const handleNewStrategy = useCallback(() => {
     setSelectedId(null);
     setIsCreating(true);
-    setDraftRule(EMPTY_RULE);
+    setDraftRule({ ...EMPTY_RULE, mt5_server_id: masterNode ? String(masterNode.id) : '' });
     setDraftSanity(EMPTY_SANITY);
     setSanityIsGlobal(false);
     setSanityOverrideEnabled(false);
@@ -1044,7 +1122,7 @@ export function HedgeRulesPage() {
     setIsRuleDirty(false);
     setIsSanityDirty(false);
     setSaveError(null);
-  }, []);
+  }, [masterNode]);
 
   const handleCancel = useCallback(() => {
     setIsCreating(false);
@@ -1096,23 +1174,6 @@ export function HedgeRulesPage() {
         const json = await res.json();
         if (!res.ok) { setSaveError(json.error ?? `Error ${res.status}`); return; }
         setIsRuleDirty(false);
-
-        // Save sanity config if override enabled and dirty
-        if (sanityOverrideEnabled && isSanityDirty) {
-          const sRes = await fetch(`/api/v1/hedge/rules/${selectedId}/sanity-config`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(sanityToApiBody(draftSanity)),
-          });
-          if (sRes.ok) {
-            setIsSanityDirty(false);
-            setSanityIsGlobal(false);
-          } else {
-            const sJson = await sRes.json();
-            setSaveError(`Route config: ${sJson.error ?? `Error ${sRes.status}`}`);
-            // Don't return — rule was saved OK, partial success
-          }
-        }
         await loadRules();
         showToast('Strategy saved');
       }
@@ -1121,7 +1182,7 @@ export function HedgeRulesPage() {
     } finally {
       if (mountedRef.current) setSaving(false);
     }
-  }, [isCreating, selectedId, draftRule, draftSanity, sanityOverrideEnabled, isSanityDirty, loadRules, showToast]);
+  }, [isCreating, selectedId, draftRule, loadRules, showToast]);
 
   const handleStatusAction = useCallback(async (action: 'activate' | 'pause' | 'stop') => {
     if (selectedId === null) return;
@@ -1162,15 +1223,74 @@ export function HedgeRulesPage() {
     } catch { /* silent */ }
   }, [selectedId, loadSanityConfig, showToast]);
 
+  const handleSanitySave = useCallback(async () => {
+    if (selectedId === null) return;
+    setSanitySaving(true);
+    setSanityError(null);
+    try {
+      const res = await fetch(`/api/v1/hedge/rules/${selectedId}/sanity-config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sanityToApiBody(draftSanity)),
+      });
+      const json = await res.json();
+      if (!res.ok) { setSanityError(json.error ?? `Error ${res.status}`); return; }
+      setIsSanityDirty(false);
+      setSanityIsGlobal(false);
+      setSanityOverrideEnabled(true);
+      showToast('Route config saved');
+    } catch (err) {
+      setSanityError(err instanceof Error ? err.message : 'Unexpected error');
+    } finally {
+      if (mountedRef.current) setSanitySaving(false);
+    }
+  }, [selectedId, draftSanity, showToast]);
+
+  const handleEscalationAction = useCallback(async (
+    recordId: number,
+    action: 'retry' | 'force-close' | 'bbook' | 'acknowledge',
+    lpPositionId: string | null,
+  ) => {
+    if (action === 'force-close' && !lpPositionId) return; // guard — endpoint will reject
+    setEscalationBusy(b => ({ ...b, [recordId]: true }));
+    try {
+      const res = await fetch(`/api/v1/hedge/positions/${recordId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operator: 'manager' }),
+      });
+      const json = await res.json();
+      if (!res.ok) { showToast(`Error: ${json.error ?? res.status}`); return; }
+      await loadEscalations(); // refresh immediately after action
+      showToast(`Position ${recordId} — ${action} sent`);
+    } catch { showToast('Action failed'); }
+    finally { setEscalationBusy(b => { const n = { ...b }; delete n[recordId]; return n; }); }
+  }, [loadEscalations, showToast]);
+
   // ══════════════════════════════════════════════════════════
   // DERIVED
   // ══════════════════════════════════════════════════════════
   const selectedRule = rules.find(r => r.rule_id === selectedId) ?? null;
   const panelVisible = isCreating || selectedId !== null;
   const isEditMode   = !isCreating && selectedId !== null;
-  const isDirtyAny   = isRuleDirty || (sanityOverrideEnabled && isSanityDirty);
+  const isDirtyAny   = isRuleDirty; // sanity saves independently in right panel
   const activeCount  = rules.filter(r => r.status === 'ACTIVE').length;
   const enabledLps   = lpOptions.filter(l => l.enabled);
+  const totalEscalations = escalations.length;
+
+  // Per-rule escalation counts for card badges
+  const escalationsByRule = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const e of escalations) {
+      if (e.rule_id !== null) map.set(e.rule_id, (map.get(e.rule_id) ?? 0) + 1);
+    }
+    return map;
+  }, [escalations]);
+
+  // Escalations filtered to currently selected rule
+  const ruleEscalations = useMemo(() =>
+    selectedId !== null ? escalations.filter(e => e.rule_id === selectedId) : [],
+  [escalations, selectedId]);
 
   // ══════════════════════════════════════════════════════════
   // RENDER
@@ -1198,6 +1318,12 @@ export function HedgeRulesPage() {
               <>
                 <span style={{ color: TEXT_MUT }}>·</span>
                 <span style={{ color: AMBER, fontFamily: FONT_MONO }}>⚠ {Math.ceil(conflictSet.size / 2)} overlap{conflictSet.size > 2 ? 's' : ''}</span>
+              </>
+            )}
+            {totalEscalations > 0 && (
+              <>
+                <span style={{ color: TEXT_MUT }}>·</span>
+                <span style={{ color: RED, fontFamily: FONT_MONO }}>⚠ {totalEscalations} escalated (all strategies)</span>
               </>
             )}
           </div>
@@ -1283,6 +1409,7 @@ export function HedgeRulesPage() {
                   rule={r}
                   selected={r.rule_id === selectedId}
                   hasConflict={conflictSet.has(r.rule_id)}
+                  escalationCount={escalationsByRule.get(r.rule_id) ?? 0}
                   lpHealthMap={lpHealthMap}
                   onClick={() => handleSelectRule(r.rule_id)}
                 />
@@ -1292,9 +1419,13 @@ export function HedgeRulesPage() {
         </div>
 
         {/* ════════════════════════════════════════════════════
-            RIGHT PANEL — Detail form
+            MIDDLE PANEL — Definition form (480px)
         ════════════════════════════════════════════════════ */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{
+          width: 720, flexShrink: 0,
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          borderRight: `1px solid ${BORDER_MD}`,
+        }}>
 
           {!panelVisible ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
@@ -1423,18 +1554,42 @@ export function HedgeRulesPage() {
                 <SectionCard n={2} label="Source Targeting">
                   <InfoBanner msg="Empty selections match all within B-Book scope. Groups must already be assigned to B-Book in MT5 Server configuration." />
 
-                  {/* MT5 Server */}
-                  <FormRow label="MT5 Server" required hint="one per strategy">
-                    <select value={draftRule.mt5_server_id} onChange={e => setRule({ mt5_server_id: e.target.value, groups: [] })} style={selectStyle}>
-                      <option value="">— Apply to all servers —</option>
-                      {mt5Nodes.filter(n => n.is_enabled).map(n => (
-                        <option key={n.id} value={String(n.id)}>{n.node_name} ({n.connection_status})</option>
-                      ))}
-                    </select>
+                  {/* MT5 Server — always the Master node, shown as static (not a dropdown) */}
+                  <FormRow label="MT5 Server" required hint="strategies always target the Master node">
+                    {masterNode ? (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '7px 12px', borderRadius: 4,
+                        backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
+                      }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, backgroundColor:
+                          masterNode.connection_status === 'CONNECTED' ? GREEN :
+                          masterNode.connection_status === 'DEGRADED'  ? AMBER : RED,
+                        }} />
+                        <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: TEXT_PRI, fontWeight: 500 }}>
+                          {masterNode.node_name}
+                        </span>
+                        <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: TEXT_MUT }}>
+                          {masterNode.node_type}
+                        </span>
+                        <span style={{
+                          marginLeft: 'auto', fontFamily: FONT_MONO, fontSize: 10, fontWeight: 600,
+                          color: masterNode.connection_status === 'CONNECTED' ? GREEN : AMBER,
+                        }}>
+                          {masterNode.connection_status}
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ padding: '7px 12px', borderRadius: 4, backgroundColor: BG_FIELD, border: `1px solid ${BORDER}` }}>
+                        <span style={{ fontSize: 12, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                          No enabled MT5 node — configure one in MT5 Servers
+                        </span>
+                      </div>
+                    )}
                   </FormRow>
 
                   {/* B-Book Groups */}
-                  <FormRow label="B-Book Groups" hint={draftRule.mt5_server_id ? `${bBookGroups.length} assigned groups` : 'select a server first'}>
+                  <FormRow label="B-Book Groups" hint={masterNode ? `${bBookGroups.length} B-Book group${bBookGroups.length !== 1 ? 's' : ''} on ${masterNode.node_name}` : 'loading…'}>
                     {bBookGroups.length > 0 ? (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {bBookGroups.map(g => {
@@ -1454,7 +1609,7 @@ export function HedgeRulesPage() {
                     ) : (
                       <div style={{ padding: '6px 10px', borderRadius: 4, border: `1px solid ${BORDER}`, backgroundColor: BG_FIELD }}>
                         <span style={{ fontSize: 11, color: TEXT_MUT, fontFamily: FONT_MONO }}>
-                          {draftRule.mt5_server_id ? 'No B-Book groups assigned to this server' : 'Select a server to load B-Book groups'}
+                          {masterNode ? 'No B-Book groups assigned on this server' : 'Loading…'}
                         </span>
                       </div>
                     )}
@@ -1635,178 +1790,9 @@ export function HedgeRulesPage() {
                 </SectionCard>
 
                 {/* ─────────────────────────────────────────────────
-                    SECTION 5 — Route & Fallback
+                    SECTION 5 — Activation Window
                 ───────────────────────────────────────────────── */}
-                <SectionCard n={5} label="Route & Fallback">
-                  {sanityUnavailable ? (
-                    <WarnBanner msg="Route sanity config endpoint not yet available (🟡 pending C++ implementation). Configure thresholds once the endpoint is live." />
-                  ) : (
-                    <>
-                      {sanityIsGlobal && !sanityOverrideEnabled && (
-                        <div style={{
-                          padding: '10px 12px', borderRadius: 4, marginBottom: 12,
-                          backgroundColor: '#101828', border: '1px solid #1e3a5f',
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        }}>
-                          <span style={{ fontSize: 11, color: '#7bafd4', fontFamily: FONT_MONO }}>
-                            ℹ Inheriting global default config for LP <strong>{draftSanity.lp_id}</strong>.
-                            No per-rule override is defined.
-                          </span>
-                          <button onClick={() => setSanityOverrideEnabled(true)} style={{
-                            padding: '3px 10px', borderRadius: 3, cursor: 'pointer',
-                            fontSize: 11, fontFamily: FONT_MONO, backgroundColor: '#1e3a5f',
-                            border: '1px solid #2a5080', color: '#a5c8f0',
-                          }}>
-                            Override
-                          </button>
-                        </div>
-                      )}
-
-                      {sanityOverrideEnabled && (
-                        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'flex-end' }}>
-                          {!sanityIsGlobal && (
-                            <button onClick={handleRevertSanity} style={{
-                              fontSize: 10, fontFamily: FONT_MONO, background: 'none',
-                              border: `1px solid ${BORDER}`, color: TEXT_MUT, borderRadius: 3, padding: '2px 8px', cursor: 'pointer',
-                            }}>
-                              ↩ Revert to global default
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      <fieldset disabled={!sanityOverrideEnabled && sanityIsGlobal} style={{ border: 'none', padding: 0, margin: 0, opacity: (!sanityOverrideEnabled && sanityIsGlobal) ? 0.45 : 1 }}>
-                        {/* Thresholds grid */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
-                          <FormRow label="Max Latency" hint="ms · null = disabled">
-                            <input type="number" min={0} value={draftSanity.max_latency_ms} onChange={e => setSanity({ max_latency_ms: e.target.value })} placeholder="e.g. 500" style={inputStyle} />
-                          </FormRow>
-                          <FormRow label="Min Fill Rate" hint="% 0–100">
-                            <input type="number" min={0} max={100} value={draftSanity.min_fill_rate_pct} onChange={e => setSanity({ min_fill_rate_pct: e.target.value })} placeholder="e.g. 90" style={inputStyle} />
-                          </FormRow>
-                          <FormRow label="Max Reject Rate" hint="% 0–100">
-                            <input type="number" min={0} max={100} value={draftSanity.max_reject_rate_pct} onChange={e => setSanity({ max_reject_rate_pct: e.target.value })} placeholder="e.g. 5" style={inputStyle} />
-                          </FormRow>
-                          <FormRow label="Max Slippage" hint="pips">
-                            <input type="number" min={0} step={0.1} value={draftSanity.max_slippage_pips} onChange={e => setSanity({ max_slippage_pips: e.target.value })} placeholder="e.g. 1.0" style={inputStyle} />
-                          </FormRow>
-                          <FormRow label="Heartbeat Timeout" hint="ms">
-                            <input type="number" min={0} value={draftSanity.heartbeat_timeout_ms} onChange={e => setSanity({ heartbeat_timeout_ms: e.target.value })} placeholder="e.g. 10000" style={inputStyle} />
-                          </FormRow>
-                          <FormRow label="Rolling Window" hint="seconds">
-                            <input type="number" min={10} value={draftSanity.rolling_window_seconds} onChange={e => setSanity({ rolling_window_seconds: e.target.value })} style={inputStyle} />
-                          </FormRow>
-                        </div>
-
-                        {/* Breach action */}
-                        <FormRow label="On Breach">
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            {(['PAUSE_RULE', 'STOP_RULE', 'FALLBACK_LP'] as BreachAction[]).map(a => (
-                              <button key={a} onClick={() => setSanity({ breach_action: a })} style={{
-                                flex: 1, padding: '6px 8px', borderRadius: 4, cursor: 'pointer',
-                                fontFamily: FONT_MONO, fontSize: 11,
-                                border: `1px solid ${draftSanity.breach_action === a ? AMBER : BORDER}`,
-                                backgroundColor: draftSanity.breach_action === a ? `${AMBER}14` : BG_FIELD,
-                                color: draftSanity.breach_action === a ? AMBER : TEXT_SEC,
-                              }}>
-                                {a.replace('_', ' ')}
-                              </button>
-                            ))}
-                          </div>
-                        </FormRow>
-
-                        {/* Fallback LP */}
-                        {draftSanity.breach_action === 'FALLBACK_LP' && (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                            <FormRow label="Fallback LP" required>
-                              <select value={draftSanity.fallback_lp_id} onChange={e => setSanity({ fallback_lp_id: e.target.value })} style={selectStyle}>
-                                <option value="">— Select fallback LP —</option>
-                                {enabledLps.filter(lp => lp.lp_id !== draftRule.hedging_lp_id).map(lp => (
-                                  <option key={lp.lp_id} value={lp.lp_id}>{lp.lp_name}</option>
-                                ))}
-                              </select>
-                              {draftSanity.fallback_lp_id && (
-                                <div style={{ marginTop: 5 }}>
-                                  <LpHealthInline health={lpHealthMap.get(draftSanity.fallback_lp_id)} />
-                                </div>
-                              )}
-                            </FormRow>
-                            <FormRow label="Fallback LP Account" hint="optional">
-                              <input value={draftSanity.fallback_lp_account_id} onChange={e => setSanity({ fallback_lp_account_id: e.target.value })} placeholder="optional" style={inputStyle} />
-                            </FormRow>
-                          </div>
-                        )}
-
-                        {/* Notifications */}
-                        <div style={{ display: 'flex', gap: 20, marginBottom: 12 }}>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={draftSanity.notify_on_breach} onChange={e => setSanity({ notify_on_breach: e.target.checked })} />
-                            <span style={{ fontSize: 11, color: TEXT_SEC }}>Notify on breach</span>
-                          </label>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={draftSanity.notify_on_recovery} onChange={e => setSanity({ notify_on_recovery: e.target.checked })} />
-                            <span style={{ fontSize: 11, color: TEXT_SEC }}>Notify on recovery</span>
-                          </label>
-                        </div>
-
-                        {/* Recovery policy */}
-                        <FormRow label="Recovery Policy">
-                          <select value={draftSanity.recovery_policy} onChange={e => setSanity({ recovery_policy: e.target.value as RecoveryPolicy })} style={selectStyle}>
-                            <option value="AUTO_RESTORE">Auto-restore — route back immediately on recovery</option>
-                            <option value="HOLD_THEN_RESTORE">Hold then restore — wait + confirm stability before switching back</option>
-                            <option value="MANUAL_ONLY">Manual only — operator must act to restore</option>
-                          </select>
-                        </FormRow>
-
-                        {draftSanity.recovery_policy === 'HOLD_THEN_RESTORE' && (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                            <FormRow label="Hold Period" hint="seconds" required>
-                              <input type="number" min={0} value={draftSanity.hold_period_seconds} onChange={e => setSanity({ hold_period_seconds: e.target.value })} placeholder="e.g. 300" style={inputStyle} />
-                            </FormRow>
-                            <FormRow label="Stability Checks" hint="consecutive" required>
-                              <input type="number" min={1} value={draftSanity.stability_confirmations} onChange={e => setSanity({ stability_confirmations: e.target.value })} placeholder="e.g. 5" style={inputStyle} />
-                            </FormRow>
-                            <FormRow label="Restore Target">
-                              <select value={draftSanity.restore_target} onChange={e => setSanity({ restore_target: e.target.value as RestoreTarget })} style={selectStyle}>
-                                <option value="ORIGINAL_LP">Return to primary LP</option>
-                                <option value="STAY_ON_FALLBACK">Stay on fallback LP</option>
-                              </select>
-                            </FormRow>
-                          </div>
-                        )}
-
-                        {/* Final fallback */}
-                        <div style={{ margin: '14px 0 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
-                          <span style={{ fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO, letterSpacing: '0.06em' }}>FINAL FALLBACK — ALL LPs EXHAUSTED</span>
-                          <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
-                        </div>
-
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          {(Object.entries(FINAL_FALLBACK_CFG) as [FinalFallback, typeof FINAL_FALLBACK_CFG[FinalFallback]][]).map(([k, v]) => (
-                            <button key={k} onClick={() => setSanity({ final_fallback_action: k })} style={{
-                              flex: 1, padding: '8px 10px', borderRadius: 4, cursor: 'pointer', textAlign: 'left' as const,
-                              border: `1px solid ${draftSanity.final_fallback_action === k ? v.color : BORDER}`,
-                              backgroundColor: draftSanity.final_fallback_action === k ? `${v.color}12` : BG_FIELD,
-                            }}>
-                              <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 3 }}>
-                                {v.label}
-                              </div>
-                              <div style={{ fontSize: 10, color: TEXT_MUT, lineHeight: 1.4 }}>
-                                {v.desc}
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      </fieldset>
-                    </>
-                  )}
-                </SectionCard>
-
-                {/* ─────────────────────────────────────────────────
-                    SECTION 6 — Activation Window
-                ───────────────────────────────────────────────── */}
-                <SectionCard n={6} label="Activation Window">
+                <SectionCard n={5} label="Activation Window">
                   <FormRow label="Activation Type">
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {(['ALWAYS', 'SCHEDULE', 'NEWS_EVENT', 'PNL_TRIGGER', 'MANUAL'] as ActivationType[]).map(t => {
@@ -1899,7 +1885,477 @@ export function HedgeRulesPage() {
               </div>{/* end scroll */}
             </>
           )}
+        </div>{/* end middle panel */}
+
+        {/* ════════════════════════════════════════════════════
+            RIGHT PANEL — Strategy Intelligence (flex-1)
+            Tabs: LP Health · Route Sanity · Escalations
+        ════════════════════════════════════════════════════ */}
+        <div style={{
+          flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          backgroundColor: BG_PANEL,
+        }}>
+          {/* Panel tab bar */}
+          <div style={{
+            display: 'flex', borderBottom: `1px solid ${BORDER}`,
+            backgroundColor: BG_SECTION, flexShrink: 0,
+          }}>
+            {([
+              { key: 'lp_health',    label: 'LP Health' },
+              { key: 'route_sanity', label: 'Route Sanity' },
+              { key: 'escalations',  label: 'Escalations', badge: ruleEscalations.length },
+            ] as { key: typeof rightTab; label: string; badge?: number }[]).map(t => (
+              <button key={t.key} onClick={() => setRightTab(t.key)} style={{
+                flex: 1, padding: '7px 4px', border: 'none', cursor: 'pointer',
+                fontFamily: FONT_MONO, fontSize: 10, letterSpacing: '0.04em',
+                backgroundColor: 'transparent',
+                borderBottom: rightTab === t.key ? `2px solid ${TEAL}` : '2px solid transparent',
+                color: rightTab === t.key ? TEAL : TEXT_PRI,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+              }}>
+                {t.label}
+                {t.badge !== undefined && t.badge > 0 && (
+                  <span style={{
+                    backgroundColor: RED, color: '#fff', borderRadius: 8,
+                    fontSize: 9, fontWeight: 700, padding: '0 5px', lineHeight: '14px',
+                  }}>
+                    {t.badge}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          {!panelVisible ? (
+            <EmptyState msg="No strategy selected" sub="Select a strategy to view details" />
+          ) : (
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
+
+              {/* ══════════════════════════════════════════════
+                  TAB: LP HEALTH
+              ══════════════════════════════════════════════ */}
+              {rightTab === 'lp_health' && (() => {
+                const primaryLp  = selectedRule ? lpHealthMap.get(selectedRule.hedging_lp_id) : undefined;
+                const fallbackLp = draftSanity.fallback_lp_id ? lpHealthMap.get(draftSanity.fallback_lp_id) : undefined;
+
+                const metricRow = (
+                  label: string,
+                  actual: number | null,
+                  threshold: number | null,
+                  mode: 'lower_better' | 'higher_better',
+                  unit: string,
+                ) => {
+                  let color = actual === null ? RP_HINT : RP_LABEL;
+                  if (actual !== null && threshold !== null) {
+                    const breach = mode === 'lower_better' ? actual > threshold : actual < threshold;
+                    color = breach ? RED : GREEN;
+                  }
+                  return (
+                    <div key={label} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '6px 0', borderBottom: `1px solid ${BORDER}`,
+                    }}>
+                      <span style={{ fontSize: 13, color: RP_LABEL, fontFamily: FONT_MONO }}>{label}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        {threshold !== null && (
+                          <span style={{ fontSize: 12, color: RP_HINT, fontFamily: FONT_MONO }}>
+                            {mode === 'lower_better' ? '≤' : '≥'} {threshold}{unit}
+                          </span>
+                        )}
+                        <span style={{ fontSize: 13, fontFamily: FONT_MONO, fontWeight: 600, color, minWidth: 80, textAlign: 'right' as const }}>
+                          {actual !== null ? `${actual.toFixed(1)}${unit}` : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                };
+
+                const LpCard = ({ lp, label, health }: { lp: string; label: string; health: LpHealth | undefined }) => {
+                  const connColor = !health ? RP_HINT
+                    : health.connectivity_status === 'CONNECTED' ? GREEN
+                    : health.connectivity_status === 'DEGRADED'  ? AMBER : RED;
+                  const allMetricsNull = health && (
+                    health.latency_ms === null &&
+                    health.fill_rate_pct === null &&
+                    health.reject_rate_pct === null &&
+                    health.slippage_avg_pips === null
+                  );
+                  return (
+                    <div style={{
+                      backgroundColor: BG_SECTION, border: `1px solid ${BORDER}`,
+                      borderRadius: 6, marginBottom: 12, overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        padding: '8px 12px', borderBottom: `1px solid ${BORDER}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        backgroundColor: '#1a191e',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 11, color: RP_HINT, fontFamily: FONT_MONO, letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>{label}</span>
+                          <span style={{ fontSize: 14, color: TEXT_PRI, fontFamily: FONT_MONO, fontWeight: 600 }}>{lp}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: connColor }} />
+                          <span style={{ fontSize: 12, color: connColor, fontFamily: FONT_MONO, fontWeight: 600 }}>
+                            {health?.connectivity_status ?? 'UNKNOWN'}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ padding: '4px 12px 10px' }}>
+                        {metricRow('Latency',     health?.latency_ms         ?? null, nullableFloat(draftSanity.max_latency_ms),      'lower_better',  ' ms')}
+                        {metricRow('Fill Rate',   health?.fill_rate_pct      ?? null, nullableFloat(draftSanity.min_fill_rate_pct),   'higher_better', '%')}
+                        {metricRow('Reject Rate', health?.reject_rate_pct    ?? null, nullableFloat(draftSanity.max_reject_rate_pct), 'lower_better',  '%')}
+                        {metricRow('Slippage',    health?.slippage_avg_pips  ?? null, nullableFloat(draftSanity.max_slippage_pips),   'lower_better',  ' pip')}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6 }}>
+                          <span style={{ fontSize: 11, color: RP_HINT, fontFamily: FONT_MONO }}>
+                            Last heartbeat: {health?.last_heartbeat_at
+                              ? new Date(health.last_heartbeat_at).toLocaleTimeString('en-GB')
+                              : '—'}
+                          </span>
+                          <span style={{ fontSize: 11, color: RP_HINT, fontFamily: FONT_MONO }}>
+                            Checked: {health?.last_checked_at
+                              ? new Date(health.last_checked_at).toLocaleTimeString('en-GB')
+                              : '—'}
+                          </span>
+                        </div>
+                        {allMetricsNull && (
+                          <div style={{
+                            marginTop: 8, padding: '6px 8px', borderRadius: 3,
+                            backgroundColor: '#101828', border: '1px solid #1e3a5f',
+                            fontSize: 11, color: '#7bafd4', fontFamily: FONT_MONO, lineHeight: 1.5,
+                          }}>
+                            ℹ Metrics populate once RouteSanityChecker has collected FIX session data.
+                            Connectivity is live — metric sampling begins on first hedge dispatch.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                };
+
+                return (
+                  <>
+                    {selectedRule && <LpCard lp={selectedRule.hedging_lp_id} label="Primary LP" health={primaryLp} />}
+                    {draftSanity.breach_action === 'FALLBACK_LP' && draftSanity.fallback_lp_id && (
+                      <LpCard lp={draftSanity.fallback_lp_id} label="Fallback LP" health={fallbackLp} />
+                    )}
+                    <div style={{ fontSize: 11, color: RP_HINT, fontFamily: FONT_MONO, marginTop: 4 }}>
+                      Thresholds shown from Route Sanity config · Polled every 5s
+                    </div>
+                  </>
+                );
+              })()}
+
+              {/* ══════════════════════════════════════════════
+                  TAB: ROUTE SANITY
+              ══════════════════════════════════════════════ */}
+              {rightTab === 'route_sanity' && (
+                <>
+                  {/* Global default banner */}
+                  {sanityIsGlobal && !sanityOverrideEnabled && (
+                    <div style={{
+                      padding: '10px 12px', borderRadius: 4, marginBottom: 12,
+                      backgroundColor: '#101828', border: '1px solid #1e3a5f',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    }}>
+                      <span style={{ fontSize: 11, color: '#7bafd4', fontFamily: FONT_MONO }}>
+                        ℹ Inheriting global default for LP <strong>{draftSanity.lp_id || selectedRule?.hedging_lp_id}</strong>.
+                        No per-rule override defined.
+                      </span>
+                      <button onClick={() => setSanityOverrideEnabled(true)} style={{
+                        padding: '3px 10px', borderRadius: 3, cursor: 'pointer',
+                        fontSize: 11, fontFamily: FONT_MONO, backgroundColor: '#1e3a5f',
+                        border: '1px solid #2a5080', color: '#a5c8f0', whiteSpace: 'nowrap' as const,
+                      }}>
+                        Override
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Save error */}
+                  {sanityError && (
+                    <div style={{
+                      padding: '6px 10px', borderRadius: 4, marginBottom: 10,
+                      backgroundColor: '#1c1010', border: `1px solid #5a2020`,
+                      fontSize: 11, color: '#ff8888', fontFamily: FONT_MONO,
+                    }}>
+                      ⚠ {sanityError}
+                    </div>
+                  )}
+
+                  <fieldset disabled={!sanityOverrideEnabled && sanityIsGlobal}
+                    style={{ border: 'none', padding: 0, margin: 0, opacity: (!sanityOverrideEnabled && sanityIsGlobal) ? 0.45 : 1 }}>
+
+                    {/* Thresholds */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                      <FormRow label="Max Latency" hint="ms">
+                        <input type="number" min={0} value={draftSanity.max_latency_ms}
+                          onChange={e => setSanity({ max_latency_ms: e.target.value })} placeholder="e.g. 500" style={inputStyle} />
+                      </FormRow>
+                      <FormRow label="Min Fill Rate" hint="%">
+                        <input type="number" min={0} max={100} value={draftSanity.min_fill_rate_pct}
+                          onChange={e => setSanity({ min_fill_rate_pct: e.target.value })} placeholder="e.g. 90" style={inputStyle} />
+                      </FormRow>
+                      <FormRow label="Max Reject Rate" hint="%">
+                        <input type="number" min={0} max={100} value={draftSanity.max_reject_rate_pct}
+                          onChange={e => setSanity({ max_reject_rate_pct: e.target.value })} placeholder="e.g. 5" style={inputStyle} />
+                      </FormRow>
+                      <FormRow label="Max Slippage" hint="pips">
+                        <input type="number" min={0} step={0.1} value={draftSanity.max_slippage_pips}
+                          onChange={e => setSanity({ max_slippage_pips: e.target.value })} placeholder="e.g. 1.0" style={inputStyle} />
+                      </FormRow>
+                      <FormRow label="Heartbeat Timeout" hint="ms">
+                        <input type="number" min={0} value={draftSanity.heartbeat_timeout_ms}
+                          onChange={e => setSanity({ heartbeat_timeout_ms: e.target.value })} placeholder="e.g. 10000" style={inputStyle} />
+                      </FormRow>
+                      <FormRow label="Rolling Window" hint="seconds">
+                        <input type="number" min={10} value={draftSanity.rolling_window_seconds}
+                          onChange={e => setSanity({ rolling_window_seconds: e.target.value })} style={inputStyle} />
+                      </FormRow>
+                    </div>
+
+                    {/* Breach action */}
+                    <FormRow label="On Breach">
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {(['PAUSE_RULE', 'STOP_RULE', 'FALLBACK_LP'] as BreachAction[]).map(a => (
+                          <button key={a} onClick={() => setSanity({ breach_action: a })} style={{
+                            flex: 1, padding: '6px 4px', borderRadius: 4, cursor: 'pointer',
+                            fontFamily: FONT_MONO, fontSize: 10,
+                            border: `1px solid ${draftSanity.breach_action === a ? AMBER : BORDER}`,
+                            backgroundColor: draftSanity.breach_action === a ? `${AMBER}14` : BG_FIELD,
+                            color: draftSanity.breach_action === a ? AMBER : TEXT_SEC,
+                          }}>
+                            {a.replace(/_/g, ' ')}
+                          </button>
+                        ))}
+                      </div>
+                    </FormRow>
+
+                    {draftSanity.breach_action === 'FALLBACK_LP' && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                        <FormRow label="Fallback LP" required>
+                          <select value={draftSanity.fallback_lp_id} onChange={e => setSanity({ fallback_lp_id: e.target.value })} style={selectStyle}>
+                            <option value="">— Select —</option>
+                            {enabledLps.filter(lp => lp.lp_id !== selectedRule?.hedging_lp_id).map(lp => (
+                              <option key={lp.lp_id} value={lp.lp_id}>{lp.lp_name}</option>
+                            ))}
+                          </select>
+                        </FormRow>
+                        <FormRow label="Fallback Account" hint="optional">
+                          <input value={draftSanity.fallback_lp_account_id}
+                            onChange={e => setSanity({ fallback_lp_account_id: e.target.value })} style={inputStyle} />
+                        </FormRow>
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 16, margin: '8px 0 12px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={draftSanity.notify_on_breach}
+                          onChange={e => setSanity({ notify_on_breach: e.target.checked })} />
+                        <span style={{ fontSize: 11, color: TEXT_SEC }}>Notify on breach</span>
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={draftSanity.notify_on_recovery}
+                          onChange={e => setSanity({ notify_on_recovery: e.target.checked })} />
+                        <span style={{ fontSize: 11, color: TEXT_SEC }}>Notify on recovery</span>
+                      </label>
+                    </div>
+
+                    <FormRow label="Recovery Policy">
+                      <select value={draftSanity.recovery_policy}
+                        onChange={e => setSanity({ recovery_policy: e.target.value as RecoveryPolicy })} style={selectStyle}>
+                        <option value="AUTO_RESTORE">Auto-restore immediately</option>
+                        <option value="HOLD_THEN_RESTORE">Hold then restore</option>
+                        <option value="MANUAL_ONLY">Manual only</option>
+                      </select>
+                    </FormRow>
+
+                    {draftSanity.recovery_policy === 'HOLD_THEN_RESTORE' && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                        <FormRow label="Hold Period" hint="sec" required>
+                          <input type="number" min={0} value={draftSanity.hold_period_seconds}
+                            onChange={e => setSanity({ hold_period_seconds: e.target.value })} placeholder="300" style={inputStyle} />
+                        </FormRow>
+                        <FormRow label="Stability Checks" required>
+                          <input type="number" min={1} value={draftSanity.stability_confirmations}
+                            onChange={e => setSanity({ stability_confirmations: e.target.value })} placeholder="5" style={inputStyle} />
+                        </FormRow>
+                        <FormRow label="Restore To">
+                          <select value={draftSanity.restore_target}
+                            onChange={e => setSanity({ restore_target: e.target.value as RestoreTarget })} style={selectStyle}>
+                            <option value="ORIGINAL_LP">Original LP</option>
+                            <option value="STAY_ON_FALLBACK">Stay on fallback</option>
+                          </select>
+                        </FormRow>
+                      </div>
+                    )}
+
+                    {/* Final fallback */}
+                    <div style={{ margin: '12px 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
+                      <span style={{ fontSize: 9, color: TEXT_MUT, fontFamily: FONT_MONO, letterSpacing: '0.05em' }}>FINAL FALLBACK — ALL LPs EXHAUSTED</span>
+                      <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+                      {(Object.entries(FINAL_FALLBACK_CFG) as [FinalFallback, typeof FINAL_FALLBACK_CFG[FinalFallback]][]).map(([k, v]) => (
+                        <button key={k} onClick={() => setSanity({ final_fallback_action: k })} style={{
+                          flex: 1, padding: '7px 6px', borderRadius: 4, cursor: 'pointer', textAlign: 'left' as const,
+                          border: `1px solid ${draftSanity.final_fallback_action === k ? v.color : BORDER}`,
+                          backgroundColor: draftSanity.final_fallback_action === k ? `${v.color}12` : BG_FIELD,
+                        }}>
+                          <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 2 }}>
+                            {v.label}
+                          </div>
+                          <div style={{ fontSize: 9, color: TEXT_MUT, lineHeight: 1.4 }}>{v.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+
+                  {/* Save / Revert row */}
+                  {(sanityOverrideEnabled || !sanityIsGlobal) && (
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4, borderTop: `1px solid ${BORDER}` }}>
+                      {!sanityIsGlobal && (
+                        <button onClick={handleRevertSanity} style={{
+                          fontSize: 11, fontFamily: FONT_MONO, background: 'none',
+                          border: `1px solid ${BORDER}`, color: TEXT_MUT, borderRadius: 3,
+                          padding: '4px 10px', cursor: 'pointer',
+                        }}>
+                          ↩ Revert to global
+                        </button>
+                      )}
+                      <button onClick={handleSanitySave} disabled={sanitySaving || !isSanityDirty} style={{
+                        fontSize: 11, fontFamily: FONT_MONO, fontWeight: 600, borderRadius: 3,
+                        padding: '4px 14px', cursor: isSanityDirty ? 'pointer' : 'default',
+                        backgroundColor: isSanityDirty ? `${TEAL}22` : 'transparent',
+                        border: `1px solid ${isSanityDirty ? TEAL : BORDER}`,
+                        color: isSanityDirty ? TEAL : TEXT_MUT,
+                        opacity: sanitySaving ? 0.6 : 1,
+                      }}>
+                        {sanitySaving ? 'Saving…' : isSanityDirty ? '● Save Config' : 'Saved'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ══════════════════════════════════════════════
+                  TAB: ESCALATIONS
+              ══════════════════════════════════════════════ */}
+              {rightTab === 'escalations' && (
+                <>
+                  {ruleEscalations.length === 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, paddingTop: 40 }}>
+                      <span style={{ color: RP_LABEL, fontSize: 14, fontFamily: FONT_MONO }}>No escalated positions</span>
+                      <span style={{ color: RP_HINT, fontSize: 12, fontFamily: FONT_MONO }}>All hedge orders for this strategy resolved normally</span>
+                      {totalEscalations > 0 && (
+                        <span style={{
+                          marginTop: 8, padding: '5px 12px', borderRadius: 4,
+                          backgroundColor: '#200808', border: `1px solid ${RED}44`,
+                          fontSize: 12, color: RED, fontFamily: FONT_MONO,
+                        }}>
+                          ⚠ {totalEscalations} escalation{totalEscalations > 1 ? 's' : ''} exist across other strategies
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      {ruleEscalations.map(e => {
+                        const stateColor = e.hedge_state === 'TIMEOUT_ESCALATED' ? AMBER : RED;
+                        const busy = escalationBusy[e.record_id] ?? false;
+                        const canForceClose = !!e.lp_position_id;
+                        return (
+                          <div key={e.record_id} style={{
+                            backgroundColor: BG_SECTION, border: `1px solid ${BORDER}`,
+                            borderLeft: `3px solid ${stateColor}`,
+                            borderRadius: 4, marginBottom: 8, padding: '10px 12px',
+                          }}>
+                            {/* Header row */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontFamily: FONT_MONO, fontSize: 14, color: TEXT_PRI, fontWeight: 600 }}>{e.mt5_symbol}</span>
+                                <span style={{
+                                  padding: '1px 6px', borderRadius: 2, fontSize: 12, fontFamily: FONT_MONO,
+                                  backgroundColor: e.direction === 'LONG' ? '#0d2020' : '#200d10',
+                                  color: e.direction === 'LONG' ? TEAL : RED,
+                                  border: `1px solid ${e.direction === 'LONG' ? TEAL : RED}44`,
+                                }}>
+                                  {e.direction}
+                                </span>
+                                <span style={{ fontSize: 12, fontFamily: FONT_MONO, color: RP_LABEL }}>{e.hedge_volume_mt5 != null ? e.hedge_volume_mt5.toFixed(2) : '—'} lots</span>
+                              </div>
+                              <span style={{
+                                padding: '2px 8px', borderRadius: 2, fontSize: 11, fontFamily: FONT_MONO,
+                                backgroundColor: `${stateColor}12`, color: stateColor, border: `1px solid ${stateColor}44`,
+                                fontWeight: 600,
+                              }}>
+                                {e.hedge_state.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+
+                            {/* Detail row */}
+                            <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
+                              <span style={{ fontSize: 12, fontFamily: FONT_MONO, color: RP_HINT }}>
+                                Login: <span style={{ color: RP_LABEL }}>{e.login_id}</span>
+                              </span>
+                              <span style={{ fontSize: 12, fontFamily: FONT_MONO, color: RP_HINT }}>
+                                LP: <span style={{ color: RP_LABEL }}>{e.hedging_lp_id}</span>
+                              </span>
+                              <span style={{ fontSize: 12, fontFamily: FONT_MONO, color: RP_HINT }}>
+                                {e.escalated_at ? new Date(e.escalated_at).toLocaleTimeString('en-GB') : '—'}
+                              </span>
+                            </div>
+
+                            {/* Reason */}
+                            {e.escalation_reason && (
+                              <div style={{ fontSize: 12, fontFamily: FONT_MONO, color: RP_HINT, marginBottom: 8, lineHeight: 1.5 }}>
+                                {e.escalation_reason}
+                                {e.rejection_code && <span style={{ color: RED }}> (code: {e.rejection_code})</span>}
+                              </div>
+                            )}
+
+                            {/* Action buttons */}
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              {e.hedge_state !== 'NORMALIZER_ERROR' && (
+                                <button disabled={busy} onClick={() => handleEscalationAction(e.record_id, 'retry', e.lp_position_id)}
+                                  style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${TEAL}55`, color: TEAL, opacity: busy ? 0.5 : 1 }}>
+                                  Retry
+                                </button>
+                              )}
+                              <button
+                                disabled={busy || !canForceClose}
+                                title={!canForceClose ? 'Disabled — lp_position_id is null (LP fill not confirmed)' : undefined}
+                                onClick={() => canForceClose && handleEscalationAction(e.record_id, 'force-close', e.lp_position_id)}
+                                style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${AMBER}55`, color: AMBER, opacity: (busy || !canForceClose) ? 0.35 : 1, cursor: !canForceClose ? 'not-allowed' : 'pointer' }}>
+                                Force Close
+                              </button>
+                              <button disabled={busy} onClick={() => handleEscalationAction(e.record_id, 'bbook', e.lp_position_id)}
+                                style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${RED}55`, color: RED, opacity: busy ? 0.5 : 1 }}>
+                                B-Book
+                              </button>
+                              <button disabled={busy} onClick={() => handleEscalationAction(e.record_id, 'acknowledge', e.lp_position_id)}
+                                style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${RP_HINT}55`, color: RP_LABEL, opacity: busy ? 0.5 : 1 }}>
+                                Dismiss
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div style={{ fontSize: 12, color: RP_HINT, fontFamily: FONT_MONO, paddingTop: 4 }}>
+                        Showing escalations for this strategy only · Polled every 10s
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div style={{ height: 20 }} />
+            </div>
+          )}
         </div>{/* end right panel */}
+
       </div>{/* end body */}
     </div>
   );

@@ -87,8 +87,12 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
       const connected = nodes.filter((n: any) => n.connection_status === 'CONNECTED' && n.is_enabled);
 
       // Fetch symbols from all connected nodes in parallel
+      // C++ returns `id` on the node object, not `node_id`
       const results = await Promise.allSettled(
-        connected.map((n: any) => nexriskApi.get(`/api/v1/mt5/nodes/${n.node_id}/symbols`))
+        connected.map((n: any) => {
+          const nodeId = n.id ?? n.node_id;
+          return nexriskApi.get(`/api/v1/mt5/nodes/${nodeId}/symbols`);
+        })
       );
 
       // Deduplicate by symbol name
@@ -115,9 +119,13 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
     async (_request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.get('/api/v1/mappings/lp/unmapped');
       if (!response.ok) return reply.code(response.status).send(response.error);
-      // Normalise: C++ returns { unmapped_symbols: [...] }, frontend expects { unmapped: [...] }
+      // Normalise: C++ returns { unmapped_symbols: [...] } — items may be plain strings
+      // OR objects like { mt5_symbol: "GBPUSD", ... }. Always produce a string array.
       const data = response.data as any;
-      const unmapped = data?.unmapped_symbols ?? data?.unmapped ?? [];
+      const rawList: any[] = data?.unmapped_symbols ?? data?.unmapped ?? [];
+      const unmapped = rawList.map((item: any) =>
+        typeof item === 'string' ? item : (item?.mt5_symbol ?? item?.symbol ?? String(item))
+      );
       return reply.send({ unmapped, total: unmapped.length });
     }
   );

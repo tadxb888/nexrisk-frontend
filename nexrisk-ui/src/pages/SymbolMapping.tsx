@@ -497,7 +497,10 @@ export function SymbolMappingPage() {
 
   // ── Derived ────────────────────────────────────────────────
   const mappings    = mappingData?.mappings ?? [];
-  const connNodes   = (nodeData?.nodes ?? []).filter(n => n.connection_status === 'CONNECTED' && n.is_enabled);
+  // C++ returns `id` on node objects; MT5Node interface uses node_id — normalise once here
+  const connNodes   = (nodeData?.nodes ?? [])
+    .map((n: any) => ({ ...n, node_id: n.node_id ?? n.id }) as MT5Node)
+    .filter(n => n.connection_status === 'CONNECTED' && n.is_enabled);
   const lps         = (lpListData?.data?.lps ?? []).filter(l => l.enabled);
   const mt5Syms     = mt5SymData?.symbols ?? [];
   const lpInstrs    = instrData?.data?.instruments ?? [];
@@ -693,7 +696,8 @@ export function SymbolMappingPage() {
         const connected = (nodesRes.nodes ?? []).filter(n => n.connection_status === 'CONNECTED' && n.is_enabled);
         const master = connected.find(n => n.is_master) ?? connected[0];
         if (!master) throw new Error('no node');
-        targetNodeId = master.node_id;
+        // C++ returns `id` on the node object; MT5Node interface uses node_id — accept both
+        targetNodeId = (master as any).id ?? master.node_id;
       }
       const posRes = await api<{ positions: { symbol: string; price_current: number }[] }>(
         `/api/v1/mt5/nodes/${targetNodeId}/positions`
