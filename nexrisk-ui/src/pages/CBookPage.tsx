@@ -235,7 +235,9 @@ const SEED_CAPABILITIES: Record<string, FIXCapabilities> = {
 // =============================================================================
 // CBOOK TYPES
 // =============================================================================
-export type CBookOrderType = 'Terminal' | 'DOM Trader';
+// 'Terminal' and 'DOM Trader' are the built-in labels.
+// Any other value is treated as a hedge strategy name (e.g. "Hedging All").
+export type CBookOrderType = string;
 export type CBookSide = 'BUY' | 'SELL';
 
 export interface CBookOrder {
@@ -294,9 +296,10 @@ interface FIXMessage {
   raw: string;
 }
 
-const TYPE_COLORS: Record<CBookOrderType, string> = {
-  Terminal:     '#a78bfa',
-  'DOM Trader': '#4ecdc4',
+const TYPE_COLORS: Record<string, string> = {
+  Terminal:     '#FFFA60',
+  'DOM Trader': '#1ca3de',
+  // Hedge strategy names are not listed here; the cell renderer falls back to teal.
 };
 
 // =============================================================================
@@ -600,6 +603,12 @@ export function CBookPage() {
     })()
   );
 
+  // lp_position_id → rule_name — built from GET /api/v1/hedge/records and refreshed every 30s.
+  // Hedge records join rule_name server-side, so no second request is needed.
+  // Join key: hedge_record.lp_position_id === FIXPosition.position_id
+  // DOM Trader (posOverrideRef) takes precedence over this map.
+  const hedgeRecordMapRef = useRef<Map<string, string>>(new Map());
+
   const saveOverrides = () => {
     try {
       localStorage.setItem('nexrisk_pos_overrides', JSON.stringify([...posOverrideRef.current.entries()]));
@@ -652,6 +661,45 @@ export function CBookPage() {
       .catch(() => { /* seed data shown */ })
       .finally(() => { if (!cancelled) setLpsLoading(false); });
     return () => { cancelled = true; };
+  }, []);
+
+  // ── Hedge records — build lp_position_id → rule_name map, refresh every 30s ─
+  // GET /api/v1/hedge/records returns records with rule_name joined server-side.
+  // Join key: hedge_record.lp_position_id === FIXPosition.position_id
+  // page_size=200 covers all recently-open hedge positions in a normal session.
+  // Non-fatal: if unavailable, hedge positions remain labelled 'Terminal'.
+  useEffect(() => {
+    let cancelled = false;
+    const buildMap = () => {
+      fetch('/api/v1/hedge/records?page_size=200')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (cancelled || !json) return;
+          const records: { lp_position_id?: string | null; rule_name?: string | null }[] =
+            json.data ?? (Array.isArray(json) ? json : []);
+          const map = new Map<string, string>();
+          for (const r of records) {
+            if (r.lp_position_id && r.rule_name) map.set(r.lp_position_id, r.rule_name);
+          }
+          hedgeRecordMapRef.current = map;
+          // Backfill: enrich any grid rows already present that don't yet have a
+          // strategy name — mirrors the ExecutionReport post-map-load enrichment step.
+          const api = gridRef.current?.api;
+          if (api) {
+            api.forEachNode((node) => {
+              if (!node.data) return;
+              const row: CBookOrder = node.data;
+              if (row.type !== 'Terminal') return; // already labelled — leave it
+              const ruleName = map.get(row.positionId);
+              if (ruleName) node.setData({ ...row, type: ruleName });
+            });
+          }
+        })
+        .catch(() => { /* non-fatal */ });
+    };
+    buildMap();
+    const timer = setInterval(buildMap, 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   // ── LP status + instruments + capabilities when DOM LP changes ────────────
@@ -735,6 +783,9 @@ export function CBookPage() {
           .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
           .map((p) => {
             const row = positionToCBook(p, gridLpId, instrMap);
+            // Identify hedge strategy positions by LP account match (lower priority than DOM Trader)
+            const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
+            if (hedgeName) row.type = hedgeName;
             const ov = posOverrideRef.current.get(p.position_id);
             if (ov) { row.type = ov.type; row.comments = ov.comments; }
             return row;
@@ -863,7 +914,12 @@ export function CBookPage() {
             posR.data.positions
               .filter((p) => p.position_id !== '' && p.open_price > 0)
           .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
-              .map((p) => positionToCBook(p, domLpId, instrMap))
+              .map((p) => {
+                const row = positionToCBook(p, domLpId, instrMap);
+                const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
+                if (hedgeName) row.type = hedgeName;
+                return row;
+              })
           );
         }
       } catch { /* non-fatal */ }
@@ -919,6 +975,9 @@ export function CBookPage() {
                     .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
                     .map((p) => {
                       const row = positionToCBook(p, lpSnap, instrMap);
+                      // Identify hedge strategy positions by LP account match (lower priority than DOM Trader)
+                      const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
+                      if (hedgeName) row.type = hedgeName;
                       // If a DOM order is pending and this is a new position_id → stamp it
                       if (pending && !pending.preIds.has(p.position_id)) {
                         posOverrideRef.current.set(p.position_id, {
@@ -961,6 +1020,24 @@ export function CBookPage() {
           // EXECUTION_REPORT is the fill type for ALL LPs incl TE.
           // nexrisk_service normalises TE's 35=AE TradeCaptureReport → EXECUTION_REPORT.
           // Do NOT add TRADE_CAPTURE_REPORT case — will never arrive.
+          // ── HEDGE FILL — strategy name enrichment (mirrors ExecutionReport pattern)
+          // hedge.fill fires when the hedging engine confirms an LP fill.
+          // Carries lp_position_id + rule_name — use to label the CBook position row.
+          // Must be checked BEFORE EXECUTION_REPORT (same WS topic, topic field distinguishes).
+          if (msg.topic === 'hedge.fill') {
+            const hd       = (msg.data ?? msg) as Record<string, unknown>;
+            const lpPosId  = hd.lp_position_id as string | undefined;
+            const ruleName = hd.rule_name      as string | undefined;
+            if (lpPosId && ruleName) {
+              // Update the map so subsequent position loads pick it up
+              hedgeRecordMapRef.current.set(lpPosId, ruleName);
+              // Immediately update the grid row if the position is already present
+              const rowId = `pos-${gridLpIdRef.current || wsLpIdRef.current}-${lpPosId}`;
+              const node  = gridRef.current?.api?.getRowNode(rowId);
+              if (node?.data) node.setData({ ...node.data, type: ruleName });
+            }
+          }
+
           if (msg.type === 'EXECUTION_REPORT') {
             // Brief Section 9.5: fields may be at event.data.* or event.* level
             const fill = msg.data ?? msg;
@@ -1099,6 +1176,9 @@ export function CBookPage() {
                 gridRef.current?.api?.applyTransaction({ remove: [{ id: closedId } as CBookOrder] });
               } else {
               const row = positionToCBook(pos, resolvedLp, instrMap);
+              // Identify hedge strategy positions by LP account match (lower priority than DOM Trader)
+              const hedgeName = hedgeRecordMapRef.current.get(pos.position_id);
+              if (hedgeName) row.type = hedgeName;
               // If a DOM order is pending and this position_id is new → stamp it
               const pending = pendingDomRef.current;
               if (pending && !pending.preIds.has(pos.position_id)) {
@@ -1313,6 +1393,39 @@ export function CBookPage() {
     };
   }, [gridRows]);
 
+  // Unrealized P/L per hedge strategy — same formula as unrealizedPnlTotal but grouped
+  // by execution type. Only includes types that are not 'Terminal' or 'DOM Trader'.
+  // Realized P/L per type is not available client-side (dailyStats is aggregate-only).
+  // Uses gridRows (not livePositions) so session order rows are included.
+  // Count includes ALL hedge rows; P/L is only computed for open rows with a live price.
+  const hedgeStrategyPnl = useMemo(() => {
+    const map = new Map<string, { unrealized: number | null; count: number; color: string }>();
+    for (const pos of gridRows) {
+      if (!pos.symbol) continue;
+      if (pos.type === 'Terminal' || pos.type === 'DOM Trader') continue;
+      const existing = map.get(pos.type);
+      // P/L — only for open positions with a live close price
+      let pnl: number | null = null;
+      if (pos._isOpen) {
+        const key = pos.side === 'BUY' ? pos.symbol + ':bid' : pos.symbol + ':ask';
+        const closePrice = currentPricesRef.current.get(key) ?? pos.currentPrice ?? null;
+        const dir = pos.side === 'BUY' ? 1 : pos.side === 'SELL' ? -1 : 0;
+        if (closePrice != null && dir !== 0) pnl = (closePrice - pos.fillPrice) * pos.displayQty * dir;
+      }
+      if (existing) {
+        existing.count += 1;
+        if (pnl !== null) existing.unrealized = (existing.unrealized ?? 0) + pnl;
+      } else {
+        map.set(pos.type, {
+          unrealized: pnl,
+          count: 1,
+          color: TYPE_COLORS[pos.type] ?? '#4ecdc4',
+        });
+      }
+    }
+    return [...map.entries()].map(([name, v]) => ({ name, ...v }));
+  }, [gridRows, priceTickCounter]);
+
   // Unrealized P/L — summed client-side from all open grid rows using live book prices.
   // LP-agnostic: same formula as the per-row P/L valueGetter in columnDefs.
   const unrealizedPnlTotal = useMemo(() => {
@@ -1514,6 +1627,12 @@ export function CBookPage() {
   // COLUMN DEFINITIONS
   // ==========================================================================
   const columnDefs = useMemo<ColDef<CBookOrder>[]>(() => [
+    {
+      field: 'type', headerName: 'Execution Type', filter: 'agSetColumnFilter', width: 130, pinned: 'left',
+      cellRenderer: (p: { value: CBookOrderType }) => (
+        <span style={{ color: TYPE_COLORS[p.value] ?? '#4ecdc4', fontWeight: 500 }}>{p.value}</span>
+      ),
+    },
     { field: 'date',       headerName: 'Date',        filter: 'agDateColumnFilter',  width: 110, pinned: 'left', valueFormatter: fmtDate, sort: 'desc' },
     { field: 'time',       headerName: useLocalTime ? 'Time (Local)' : 'Time (UTC)', filter: 'agDateColumnFilter', width: 130, pinned: 'left', valueFormatter: useLocalTime ? fmtTime : fmtTimeUTC },
     { field: 'dealerId',   headerName: 'Account',     filter: 'agSetColumnFilter',   width: 140 },
@@ -1554,13 +1673,7 @@ export function CBookPage() {
     },
     { field: 'stopLoss',   headerName: 'S/L', filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value ? fmtPrice(p) : '—' },
     { field: 'takeProfit', headerName: 'T/P', filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value ? fmtPrice(p) : '—' },
-    {
-      field: 'type', headerName: 'Type', filter: 'agSetColumnFilter', width: 110,
-      filterParams: { values: ['Hedge', 'Opportunity', 'Repair'] },
-      cellRenderer: (p: { value: CBookOrderType }) => (
-        <span style={{ color: TYPE_COLORS[p.value] || '#999', fontWeight: 500 }}>{p.value}</span>
-      ),
-    },
+
     {
       headerName: 'Status', width: 90, suppressSizeToFit: true,
       cellRenderer: (p: { data?: CBookOrder }) => {
@@ -1809,6 +1922,80 @@ export function CBookPage() {
           <span className="ml-1 font-mono text-white">{stats.volDisplay}</span>
         </div>
       </div>
+
+      {/* ── Row 3: Hedge strategy P/L cards ─────────────────────────────────── */}
+      {hedgeStrategyPnl.length > 0 && (() => {
+        const totalUnrealized = hedgeStrategyPnl.reduce<number | null>((acc, s) => {
+          if (s.unrealized == null) return acc;
+          return (acc ?? 0) + s.unrealized;
+        }, null);
+        const totalCount = hedgeStrategyPnl.reduce((acc, s) => acc + s.count, 0);
+        return (
+          <div className="border-b border-[#444] flex items-stretch flex-shrink-0" style={{ backgroundColor: '#1a191e' }}>
+
+            {/* ── Summary card — sticky, never scrolls ─────────────── */}
+            <div className="flex items-center gap-3 flex-shrink-0 px-4 py-2" style={{ borderRight: '1px solid #3a3a3e' }}>
+              <div className="flex items-center gap-3 rounded px-3 py-1.5"
+                style={{ backgroundColor: '#252429', border: '1px solid #4ecdc444', borderLeft: '3px solid #4ecdc4' }}>
+                <div>
+                  <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">All Strategies</div>
+                  <div className="text-xs font-medium font-mono text-white">{hedgeStrategyPnl.length} strat · {totalCount} pos</div>
+                </div>
+                <div className="w-px self-stretch bg-[#3a3a3e]" />
+                <div>
+                  <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
+                  {totalUnrealized != null ? (
+                    <div className="text-sm font-mono font-semibold" style={{ color: totalUnrealized >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                      {totalUnrealized >= 0 ? '+' : ''}{totalUnrealized.toFixed(2)}
+                    </div>
+                  ) : (
+                    <div className="text-sm font-mono text-white">—</div>
+                  )}
+                </div>
+                <div className="w-px self-stretch bg-[#3a3a3e]" />
+                <div>
+                  <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
+                  <div className="text-sm font-mono text-white" title="Per-strategy realized P/L requires backend breakdown">—</div>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Individual strategy cards — scrollable ────────────── */}
+            <div className="flex items-center gap-2 overflow-x-auto px-3 py-2 flex-1 min-w-0" style={{ scrollbarWidth: 'thin' }}>
+              {hedgeStrategyPnl.map(({ name, unrealized, count, color }) => (
+                <div
+                  key={name}
+                  className="flex items-center gap-3 rounded px-3 py-1.5 flex-shrink-0"
+                  style={{ backgroundColor: '#252429', border: `1px solid ${color}44`, borderLeft: `3px solid ${color}` }}
+                >
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Strategy</div>
+                    <div className="text-xs font-medium font-mono" style={{ color }}>{name}</div>
+                    <div className="text-[9px] text-white mt-0.5">{count} pos</div>
+                  </div>
+                  <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
+                    {unrealized != null ? (
+                      <div className="text-sm font-mono font-semibold" style={{ color: unrealized >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                        {unrealized >= 0 ? '+' : ''}{unrealized.toFixed(2)}
+                      </div>
+                    ) : (
+                      <div className="text-sm font-mono text-white">—</div>
+                    )}
+                  </div>
+                  <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
+                  <div>
+                    <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
+                    <div className="text-sm font-mono text-white" title="Per-strategy realized P/L requires backend breakdown">—</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+          </div>
+        );
+      })()}
 
       {/* ── Body ─────────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden p-2 gap-2 min-h-0">
