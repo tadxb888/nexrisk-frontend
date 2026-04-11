@@ -130,6 +130,24 @@ interface NewsEvent {
   active_now: boolean;
   window_start: string;
   window_end: string;
+  te_calendar_id: string | null;
+}
+
+// ── Trading Economics calendar event (from GET /api/v1/calendar/events) ──
+interface CalendarEvent {
+  calendar_id:    string;
+  event_name:     string;
+  country:        string;
+  category:       string;
+  currency:       string | null;
+  event_time_utc: string;
+  importance:     1 | 2 | 3;
+  status:         'SCHEDULED' | 'RELEASED' | 'CANCELLED';
+  actual:         string | null;
+  previous:       string | null;
+  consensus:      string | null;
+  forecast:       string | null;
+  ticker:         string | null;
 }
 
 interface GroupSpreadRule {
@@ -1345,6 +1363,11 @@ interface RuleFormState {
   days_bitmask: number; hhmm_from: string; hhmm_to: string;
   atr_min: string; atr_max: string;
   spread_mode: SpreadMode; value_points: string;
+  // NEWS condition
+  news_te_cal_id:  string;   // te_calendar_id from picker
+  news_pre_min:    string;   // pre_minutes
+  news_post_min:   string;   // post_minutes
+  news_symbol:     string;   // optional symbol scope
 }
 
 const blankRule = (defaultFeedId?: number): RuleFormState => ({
@@ -1355,6 +1378,7 @@ const blankRule = (defaultFeedId?: number): RuleFormState => ({
   days_bitmask: 31, hhmm_from: '08:00', hhmm_to: '16:30',
   atr_min: '', atr_max: '',
   spread_mode: 'FROM_MID', value_points: '10',
+  news_te_cal_id: '', news_pre_min: '5', news_post_min: '10', news_symbol: '',
 });
 
 const inferModeAndPoints = (bid: number, ask: number): { mode: SpreadMode; pts: number } => {
@@ -1380,6 +1404,8 @@ const ruleToForm = (r: SpreadRule): RuleFormState => {
     atr_min: r.volatility?.atr_ratio_min != null ? String(r.volatility.atr_ratio_min) : '',
     atr_max: r.volatility?.atr_ratio_max != null ? String(r.volatility.atr_ratio_max) : '',
     spread_mode: mode, value_points: String(pts),
+    // NEWS fields — populated separately when picker is opened
+    news_te_cal_id: '', news_pre_min: '5', news_post_min: '10', news_symbol: '',
   };
 };
 
@@ -1398,6 +1424,48 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // ── Calendar / NEWS picker state ────────────────────────────
+  const [calEvents,     setCalEvents]     = useState<CalendarEvent[]>([]);
+  const [calLoading,    setCalLoading]    = useState(false);
+  const [calSearch,     setCalSearch]     = useState('');
+  const [calImportance, setCalImportance] = useState<number[]>([2, 3]);
+  const [calPickerOpen, setCalPickerOpen] = useState(false);
+  const [selCalEvt,     setSelCalEvt]     = useState<CalendarEvent | null>(null);
+  const calMountedRef = useRef(true);
+  useEffect(() => { calMountedRef.current = true; return () => { calMountedRef.current = false; }; }, []);
+
+  const loadCalEvents = useCallback(async (imp: number[]) => {
+    setCalLoading(true);
+    try {
+      const today = new Date();
+      const from  = today.toISOString().slice(0, 10);
+      const to    = new Date(today.getTime() + 14 * 86400_000).toISOString().slice(0, 10);
+      const res   = await bff<CalendarEvent[]>(
+        `/api/v1/calendar/events?importance=${imp.join(',')}&from=${from}&to=${to}&limit=500`
+      );
+      if (calMountedRef.current) setCalEvents(Array.isArray(res) ? res : []);
+    } catch { /* best effort */ }
+    finally { if (calMountedRef.current) setCalLoading(false); }
+  }, []);
+
+  const openCalPicker = () => {
+    if (calEvents.length === 0) loadCalEvents(calImportance);
+    setCalPickerOpen(true);
+  };
+
+  const selectCalEvt = (evt: CalendarEvent) => {
+    setSelCalEvt(evt);
+    sf('news_te_cal_id', evt.calendar_id);
+    setCalPickerOpen(false);
+    setCalSearch('');
+  };
+
+  const clearCalEvt = () => {
+    setSelCalEvt(null);
+    sf('news_te_cal_id', '');
+  };
+
+  // ── Form helpers ────────────────────────────────────────────
   const sf = (k: keyof RuleFormState, v: any) => setForm(x => ({ ...x, [k]: v }));
   const ct  = form.condition_type;
   const pts = Number(form.value_points) || 0;
@@ -1426,10 +1494,27 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
   const save = async () => {
     if (!form.name.trim())  { setErr('Rule name is required'); return; }
     if (!form.feed_id)      { setErr('Select a feed'); return; }
+    if (ct === 'NEWS' && !form.news_te_cal_id) {
+      setErr('Select an economic event for the NEWS condition'); return;
+    }
     setSaving(true); setErr(null);
     try {
+      const feedId = Number(form.feed_id);
+
+      // For NEWS condition: create/update the news window first
+      if (ct === 'NEWS' && form.news_te_cal_id) {
+        await bff('/api/v1/price-rules/news', {
+          method: 'POST',
+          body: JSON.stringify({
+            te_calendar_id: form.news_te_cal_id,
+            pre_minutes:    Number(form.news_pre_min)  || 5,
+            post_minutes:   Number(form.news_post_min) || 10,
+            ...(form.news_symbol ? { symbol: form.news_symbol } : {}),
+          }),
+        });
+      }
+
       const payload = buildPayload();
-      const feedId  = Number(form.feed_id);
       if (rule) {
         await bff(`/api/v1/price-rules/feeds/${feedId}/rules/${rule.rule_id}`, {
           method: 'PUT', body: JSON.stringify(payload),
@@ -1442,6 +1527,12 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
       onSave();
     } catch (e: any) { setErr(e.message); }
     setSaving(false);
+  };
+
+  // Importance star renderer (inline — no shared component in this file)
+  const impStars = (v: 1 | 2 | 3) => {
+    const color = v === 3 ? C.red : v === 2 ? C.amber : C.textHint;
+    return <span style={{ fontFamily: 'monospace', fontSize: 11, color, letterSpacing: 1 }}>{'★'.repeat(v)}{'☆'.repeat(3 - v)}</span>;
   };
 
   return (
@@ -1495,20 +1586,19 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
         <div style={{ fontSize: 11, color: C.label, fontWeight: 600, letterSpacing: '0.06em' }}>CONDITION</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
           {(['ALWAYS', 'SCHEDULE', 'VOLATILITY', 'NEWS'] as ConditionType[]).map(condType => {
-            const isNews = condType === 'NEWS';
             const active = ct === condType;
             const clr = conditionColor(condType);
             return (
-              <button key={condType} disabled={isNews}
-                onClick={() => !isNews && sf('condition_type', condType)}
+              <button key={condType}
+                onClick={() => { sf('condition_type', condType); if (condType !== 'NEWS') setCalPickerOpen(false); }}
                 style={{
-                  padding: '7px 10px', borderRadius: 5, cursor: isNews ? 'not-allowed' : 'pointer',
+                  padding: '7px 10px', borderRadius: 5, cursor: 'pointer',
                   backgroundColor: active ? `${clr}18` : C.input,
                   border: `1px solid ${active ? clr : C.border}`,
-                  color: isNews ? C.newsGray : active ? clr : C.textSec,
-                  textAlign: 'left', opacity: isNews ? 0.4 : 1, fontSize: 12, fontWeight: active ? 600 : 400,
+                  color: active ? clr : C.textSec,
+                  textAlign: 'left', fontSize: 12, fontWeight: active ? 600 : 400,
                 }}>
-                {condType}{isNews ? ' 🔒' : ''}
+                {condType}
               </button>
             );
           })}
@@ -1548,6 +1638,194 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
                 <span style={{ color: C.textHint }}>{t.label} → {t.hint}</span>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* ── NEWS condition ─────────────────────────────────── */}
+        {ct === 'NEWS' && (
+          <div style={{
+            backgroundColor: `${C.newsGray}0a`, border: `1px solid ${C.newsGray}33`,
+            borderRadius: 6, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
+          }}>
+            <div style={{ fontSize: 11, color: C.label, fontWeight: 600, letterSpacing: '0.06em' }}>
+              ECONOMIC EVENT WINDOW
+            </div>
+
+            {/* Selected event chip or picker trigger */}
+            {selCalEvt && selCalEvt.calendar_id === form.news_te_cal_id ? (
+              <div style={{
+                backgroundColor: C.card, border: `1px solid ${C.teal}44`,
+                borderRadius: 5, padding: '8px 10px',
+                display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
+                    {impStars(selCalEvt.importance)}
+                    <span style={{ fontSize: 12, color: C.teal, fontWeight: 600 }}>{selCalEvt.event_name}</span>
+                    <span style={{
+                      fontSize: 10, padding: '1px 6px', borderRadius: 3,
+                      backgroundColor: selCalEvt.status === 'SCHEDULED' ? `${C.teal}18` : `${C.amber}18`,
+                      color: selCalEvt.status === 'SCHEDULED' ? C.teal : C.amber,
+                      border: `1px solid ${selCalEvt.status === 'SCHEDULED' ? C.teal : C.amber}44`,
+                    }}>{selCalEvt.status}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, fontSize: 11, color: C.textHint, flexWrap: 'wrap' }}>
+                    <span>
+                      {new Date(selCalEvt.event_time_utc).toLocaleString('en-GB', {
+                        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+                      })} UTC
+                    </span>
+                    <span>{selCalEvt.country}</span>
+                    {selCalEvt.currency && <span>{selCalEvt.currency}</span>}
+                    {selCalEvt.consensus && <span>Cons: <span style={{ color: C.textSec }}>{selCalEvt.consensus}</span></span>}
+                    {selCalEvt.previous  && <span>Prev: <span style={{ color: C.textSec }}>{selCalEvt.previous}</span></span>}
+                  </div>
+                </div>
+                <button onClick={clearCalEvt} title="Clear event"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textHint, fontSize: 16, lineHeight: 1, flexShrink: 0 }}>×</button>
+              </div>
+            ) : (
+              <button onClick={openCalPicker} style={{
+                padding: '8px 12px', borderRadius: 5, cursor: 'pointer',
+                backgroundColor: C.input, textAlign: 'left',
+                border: `1px solid ${form.news_te_cal_id ? C.amber : C.inputBorder}`,
+                color: C.textSec, fontSize: 12, display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <span style={{ color: C.teal }}>📅</span>
+                {form.news_te_cal_id
+                  ? `Event ID ${form.news_te_cal_id} — click to resolve`
+                  : 'Select Economic Event…'}
+              </button>
+            )}
+
+            {/* Inline calendar picker */}
+            {calPickerOpen && (
+              <div style={{
+                backgroundColor: C.card, border: `1px solid ${C.inputBorder}`,
+                borderRadius: 5, overflow: 'hidden',
+              }}>
+                {/* Picker toolbar */}
+                <div style={{
+                  padding: '7px 10px', borderBottom: `1px solid ${C.border}`,
+                  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  backgroundColor: C.input,
+                }}>
+                  <input
+                    value={calSearch}
+                    onChange={e => setCalSearch(e.target.value)}
+                    placeholder="Search events…"
+                    autoFocus
+                    style={{ ...inputStyle, width: 160, fontSize: 11, padding: '4px 8px' }}
+                  />
+                  {/* Importance filter */}
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {([3, 2] as const).map(imp => {
+                      const on = calImportance.includes(imp);
+                      const starsColor = imp === 3 ? C.red : C.amber;
+                      return (
+                        <button key={imp} onClick={() => {
+                          const next = on
+                            ? calImportance.filter(x => x !== imp)
+                            : [...calImportance, imp].sort((a, b) => b - a);
+                          setCalImportance(next);
+                          loadCalEvents(next);
+                        }} style={{
+                          padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontSize: 10,
+                          border: `1px solid ${on ? starsColor : C.border}`,
+                          backgroundColor: on ? `${starsColor}18` : C.input,
+                          color: on ? starsColor : C.textHint,
+                        }}>
+                          {'★'.repeat(imp)}{'☆'.repeat(3 - imp)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {calLoading && <span style={{ fontSize: 10, color: C.textHint }}>Loading…</span>}
+                  <button onClick={() => setCalPickerOpen(false)}
+                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textHint, fontSize: 16 }}>×</button>
+                </div>
+
+                {/* Event list */}
+                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                  {(() => {
+                    const q = calSearch.trim().toLowerCase();
+                    const filtered = calEvents.filter(e =>
+                      calImportance.includes(e.importance) &&
+                      (q === '' || e.event_name.toLowerCase().includes(q) || e.country.toLowerCase().includes(q))
+                    );
+                    if (filtered.length === 0) {
+                      return (
+                        <div style={{ padding: '14px 12px', textAlign: 'center', fontSize: 12, color: C.textHint }}>
+                          {calLoading ? 'Loading events…' : 'No events match current filters'}
+                        </div>
+                      );
+                    }
+                    return filtered.map(evt => (
+                      <div key={evt.calendar_id}
+                        onMouseDown={e => { e.preventDefault(); selectCalEvt(evt); }}
+                        style={{
+                          padding: '7px 10px', cursor: 'pointer',
+                          borderBottom: `1px solid ${C.border}`,
+                          backgroundColor: form.news_te_cal_id === evt.calendar_id ? `${C.teal}12` : 'transparent',
+                        }}
+                        onMouseEnter={e => { if (form.news_te_cal_id !== evt.calendar_id) (e.currentTarget as HTMLDivElement).style.backgroundColor = C.cardHover; }}
+                        onMouseLeave={e => { if (form.news_te_cal_id !== evt.calendar_id) (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                          {impStars(evt.importance)}
+                          <span style={{ fontSize: 12, color: C.text, fontWeight: 500 }}>{evt.event_name}</span>
+                          <span style={{ fontSize: 11, color: C.textHint, marginLeft: 'auto' }}>{evt.country}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, fontSize: 11, color: C.textHint }}>
+                          <span>
+                            {new Date(evt.event_time_utc).toLocaleString('en-GB', {
+                              day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+                            })} UTC
+                          </span>
+                          {evt.currency && <span>{evt.currency}</span>}
+                          {evt.consensus && <span>Cons: {evt.consensus}</span>}
+                          {evt.previous  && <span>Prev: {evt.previous}</span>}
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+
+                {/* Footer */}
+                <div style={{ padding: '4px 10px', borderTop: `1px solid ${C.border}`, backgroundColor: C.input }}>
+                  <span style={{ fontSize: 10, color: C.textHint }}>
+                    {calEvents.filter(e => calImportance.includes(e.importance)).length} events · next 14 days
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Window timing */}
+            {!calPickerOpen && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <Field label="Pre-event (min)" hint="Activate N min before event">
+                  <input style={{ ...inputStyle, fontFamily: 'monospace' }} type="number" min={0} max={1440}
+                    value={form.news_pre_min} onChange={e => sf('news_pre_min', e.target.value)} />
+                </Field>
+                <Field label="Post-event (min)" hint="Deactivate M min after event">
+                  <input style={{ ...inputStyle, fontFamily: 'monospace' }} type="number" min={0} max={1440}
+                    value={form.news_post_min} onChange={e => sf('news_post_min', e.target.value)} />
+                </Field>
+              </div>
+            )}
+
+            {/* Optional symbol scope */}
+            {!calPickerOpen && (
+              <Field label="Symbol scope" hint="Leave empty to apply across all symbols">
+                <SymbolInput value={form.news_symbol} onChange={v => sf('news_symbol', v)} candidates={mappedSymbols} />
+              </Field>
+            )}
+
+            {!form.news_te_cal_id && (
+              <div style={{ fontSize: 11, color: C.amber }}>
+                ⚠ An economic event must be selected before saving.
+              </div>
+            )}
           </div>
         )}
 

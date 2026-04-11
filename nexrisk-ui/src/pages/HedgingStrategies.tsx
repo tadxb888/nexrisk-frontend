@@ -66,6 +66,23 @@ type RestoreTarget = 'ORIGINAL_LP' | 'STAY_ON_FALLBACK';
 type FinalFallback = 'B_BOOK' | 'REJECT' | 'REJECT_NOTIFY';
 type LpConnectivity = 'CONNECTED' | 'DISCONNECTED' | 'DEGRADED';
 
+// ── Trading Economics calendar event (from GET /api/v1/calendar/events) ──
+interface CalendarEvent {
+  calendar_id:    string;
+  event_name:     string;
+  country:        string;
+  category:       string;
+  currency:       string | null;
+  event_time_utc: string;
+  importance:     1 | 2 | 3;
+  status:         'SCHEDULED' | 'RELEASED' | 'CANCELLED';
+  actual:         string | null;
+  previous:       string | null;
+  consensus:      string | null;
+  forecast:       string | null;
+  ticker:         string | null;
+}
+
 interface HedgeRule {
   rule_id:               number;
   name:                  string;
@@ -80,6 +97,7 @@ interface HedgeRule {
   schedule_time_from:    string | null;
   schedule_time_to:      string | null;
   news_event_id:         number | null;
+  te_calendar_id:        string | null;
   minutes_before:        number | null;
   minutes_after:         number | null;
   activation_pnl_type:   string | null;
@@ -189,6 +207,10 @@ interface DraftRule {
   schedule_days:         number;
   schedule_time_from:    string;
   schedule_time_to:      string;
+  // NEWS_EVENT activation
+  te_calendar_id:        string;   // selected TE calendar_id
+  minutes_before:        string;
+  minutes_after:         string;
   activation_pnl_type:   string;
   activation_operator:   string;
   activation_value:      string;
@@ -242,6 +264,9 @@ const EMPTY_RULE: DraftRule = {
   schedule_days: 31,
   schedule_time_from: '00:00',
   schedule_time_to: '23:59',
+  te_calendar_id: '',
+  minutes_before: '10',
+  minutes_after: '15',
   activation_pnl_type: 'OVERALL_PNL',
   activation_operator: 'LT',
   activation_value: '',
@@ -302,6 +327,7 @@ function nullableInt(s: string): number | null {
 function ruleToApiBody(d: DraftRule): Record<string, unknown> {
   const isSchedule   = d.activation_type === 'SCHEDULE';
   const isPnlTrigger = d.activation_type === 'PNL_TRIGGER';
+  const isNewsEvent  = d.activation_type === 'NEWS_EVENT';
   const hasGuard     = d.condition_type !== 'NONE';
   return {
     name:            d.name.trim(),
@@ -315,6 +341,13 @@ function ruleToApiBody(d: DraftRule): Record<string, unknown> {
       schedule_days:      d.schedule_days,
       schedule_time_from: d.schedule_time_from,
       schedule_time_to:   d.schedule_time_to,
+    } : {}),
+
+    // NEWS_EVENT — pass te_calendar_id + window config
+    ...(isNewsEvent ? {
+      te_calendar_id: d.te_calendar_id || undefined,
+      minutes_before: nullableInt(d.minutes_before),
+      minutes_after:  nullableInt(d.minutes_after),
     } : {}),
 
     // PNL_TRIGGER — omit entirely when unused (chk_activation_pnl_type rejects "")
@@ -382,6 +415,9 @@ function draftFromRule(r: HedgeRule): DraftRule {
     schedule_days:    r.schedule_days ?? 31,
     schedule_time_from: r.schedule_time_from ?? '00:00',
     schedule_time_to:   r.schedule_time_to ?? '23:59',
+    te_calendar_id:       r.te_calendar_id ?? '',
+    minutes_before:       r.minutes_before !== null ? String(r.minutes_before) : '10',
+    minutes_after:        r.minutes_after  !== null ? String(r.minutes_after)  : '15',
     activation_pnl_type:  r.activation_pnl_type ?? 'OVERALL_PNL',
     activation_operator:  r.activation_operator ?? 'LT',
     activation_value:     r.activation_value !== null ? String(r.activation_value) : '',
@@ -462,6 +498,16 @@ const DAYS = [
 // ══════════════════════════════════════════════════════════════
 // SUB-COMPONENTS
 // ══════════════════════════════════════════════════════════════
+
+// ── Importance stars ──────────────────────────────────────────
+function ImpStars({ v }: { v: 1 | 2 | 3 }) {
+  const color = v === 3 ? RED : v === 2 ? AMBER : TEXT_MUT;
+  return (
+    <span style={{ fontFamily: FONT_MONO, fontSize: 10, color, letterSpacing: 1 }}>
+      {'★'.repeat(v)}{'☆'.repeat(3 - v)}
+    </span>
+  );
+}
 
 // ── Status pill ───────────────────────────────────────────────
 function StatusPill({ status }: { status: RuleStatus }) {
@@ -919,6 +965,14 @@ export function HedgeRulesPage() {
   const [escalations,      setEscalations]      = useState<EscalatedPosition[]>([]);
   const [escalationBusy,   setEscalationBusy]   = useState<Record<number, boolean>>({});
 
+  // ── Calendar / NEWS_EVENT picker state ───────────────────────
+  const [calEvents,        setCalEvents]        = useState<CalendarEvent[]>([]);
+  const [calLoading,       setCalLoading]       = useState(false);
+  const [calSearch,        setCalSearch]        = useState('');
+  const [calImportance,    setCalImportance]    = useState<number[]>([2, 3]);
+  const [calPickerOpen,    setCalPickerOpen]    = useState(false);
+  const [selectedCalEvent, setSelectedCalEvent] = useState<CalendarEvent | null>(null);
+
   const mountedRef = useRef(true);
 
   const showToast = useCallback((msg: string) => {
@@ -1006,6 +1060,33 @@ export function HedgeRulesPage() {
     } catch { /* best effort */ }
   }, []);
 
+  const loadCalendarEvents = useCallback(async () => {
+    setCalLoading(true);
+    try {
+      const today = new Date();
+      const from  = today.toISOString().slice(0, 10);
+      const to    = new Date(today.getTime() + 14 * 86400_000).toISOString().slice(0, 10);
+      const imp   = calImportance.join(',');
+      const res   = await fetch(`/api/v1/calendar/events?importance=${imp}&from=${from}&to=${to}&limit=500`);
+      if (!res.ok || !mountedRef.current) return;
+      const json  = await res.json();
+      const arr: CalendarEvent[] = Array.isArray(json) ? json : json.data ?? [];
+      setCalEvents(arr);
+    } catch { /* best effort */ }
+    finally { if (mountedRef.current) setCalLoading(false); }
+  }, [calImportance]);
+
+  const loadSingleCalEvent = useCallback(async (calId: string) => {
+    if (!calId) { setSelectedCalEvent(null); return; }
+    try {
+      const res = await fetch(`/api/v1/calendar/events/${calId}`);
+      if (!res.ok || !mountedRef.current) return;
+      const json = await res.json();
+      const evt: CalendarEvent = json.data ?? json;
+      if (evt && evt.calendar_id) setSelectedCalEvent(evt);
+    } catch { /* best effort */ }
+  }, []);
+
   const loadSanityConfig = useCallback(async (ruleId: number) => {
     setSanityUnavailable(false);
     setSanityIsGlobal(false);
@@ -1063,6 +1144,20 @@ export function HedgeRulesPage() {
     const t = setInterval(loadEscalations, 10_000);
     return () => clearInterval(t);
   }, [loadEscalations]);
+
+  // Reload calendar events when importance filter changes — only if picker was previously opened
+  useEffect(() => {
+    if (calEvents.length > 0) loadCalendarEvents();
+  }, [calImportance]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When selecting an existing rule with te_calendar_id, resolve the event for display
+  useEffect(() => {
+    if (draftRule.te_calendar_id) {
+      loadSingleCalEvent(draftRule.te_calendar_id);
+    } else {
+      setSelectedCalEvent(null);
+    }
+  }, [draftRule.te_calendar_id, loadSingleCalEvent]);
 
   // Selection change → load rule + sanity config
   useEffect(() => {
@@ -1137,6 +1232,23 @@ export function HedgeRulesPage() {
     setIsRuleDirty(true);
   }, []);
 
+  const handleOpenCalPicker = useCallback(() => {
+    if (calEvents.length === 0) loadCalendarEvents();
+    setCalPickerOpen(true);
+  }, [calEvents.length, loadCalendarEvents]);
+
+  const handleSelectCalEvent = useCallback((evt: CalendarEvent) => {
+    setSelectedCalEvent(evt);
+    setRule({ te_calendar_id: evt.calendar_id });
+    setCalPickerOpen(false);
+    setCalSearch('');
+  }, [setRule]);
+
+  const handleClearCalEvent = useCallback(() => {
+    setSelectedCalEvent(null);
+    setRule({ te_calendar_id: '' });
+  }, [setRule]);
+
   const setSanity = useCallback((patch: Partial<DraftSanity>) => {
     setDraftSanity(d => ({ ...d, ...patch }));
     setIsSanityDirty(true);
@@ -1145,6 +1257,9 @@ export function HedgeRulesPage() {
   const handleSave = useCallback(async () => {
     if (!draftRule.name.trim()) { setSaveError('Strategy name is required.'); return; }
     if (!draftRule.hedging_lp_id) { setSaveError('Primary LP is required.'); return; }
+    if (draftRule.activation_type === 'NEWS_EVENT' && !draftRule.te_calendar_id) {
+      setSaveError('An economic event must be selected for NEWS_EVENT activation.'); return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -1796,24 +1911,25 @@ export function HedgeRulesPage() {
                   <FormRow label="Activation Type">
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {(['ALWAYS', 'SCHEDULE', 'NEWS_EVENT', 'PNL_TRIGGER', 'MANUAL'] as ActivationType[]).map(t => {
-                        const isNewsEvent = t === 'NEWS_EVENT';
                         const isActive = draftRule.activation_type === t;
                         return (
                           <button
                             key={t}
-                            onClick={() => { if (!isNewsEvent) setRule({ activation_type: t }); }}
-                            title={isNewsEvent ? 'Coming soon — news provider integration pending' : undefined}
+                            onClick={() => {
+                              setRule({ activation_type: t });
+                              if (t !== 'NEWS_EVENT') {
+                                setCalPickerOpen(false);
+                              }
+                            }}
                             style={{
-                              padding: '5px 12px', borderRadius: 4,
-                              cursor: isNewsEvent ? 'not-allowed' : 'pointer',
+                              padding: '5px 12px', borderRadius: 4, cursor: 'pointer',
                               fontFamily: FONT_MONO, fontSize: 11,
                               border: `1px solid ${isActive ? TEAL : BORDER}`,
                               backgroundColor: isActive ? `${TEAL}18` : BG_FIELD,
-                              color: isNewsEvent ? TEXT_MUT : isActive ? TEAL : TEXT_SEC,
-                              opacity: isNewsEvent ? 0.45 : 1,
+                              color: isActive ? TEAL : TEXT_SEC,
                             }}
                           >
-                            {t === 'NEWS_EVENT' ? 'NEWS EVENT ·· soon' : t.replace('_', ' ')}
+                            {t.replace('_', ' ')}
                           </button>
                         );
                       })}
@@ -1835,6 +1951,213 @@ export function HedgeRulesPage() {
                         </FormRow>
                       </div>
                     </>
+                  )}
+
+                  {/* NEWS_EVENT fields */}
+                  {draftRule.activation_type === 'NEWS_EVENT' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                      {/* Selected event display / picker trigger */}
+                      {selectedCalEvent && selectedCalEvent.calendar_id === draftRule.te_calendar_id ? (
+                        <div style={{
+                          backgroundColor: '#0d2020', border: `1px solid ${TEAL}44`,
+                          borderRadius: 5, padding: '10px 12px',
+                          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10,
+                        }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: TEAL, fontWeight: 600 }}>
+                                {selectedCalEvent.event_name}
+                              </span>
+                              <ImpStars v={selectedCalEvent.importance} />
+                              <span style={{
+                                fontSize: 10, fontFamily: FONT_MONO, padding: '1px 6px', borderRadius: 2,
+                                backgroundColor: selectedCalEvent.status === 'SCHEDULED' ? '#0d2020' : '#201400',
+                                color: selectedCalEvent.status === 'SCHEDULED' ? TEAL : AMBER,
+                                border: `1px solid ${selectedCalEvent.status === 'SCHEDULED' ? TEAL : AMBER}44`,
+                              }}>
+                                {selectedCalEvent.status}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 12, fontSize: 11, fontFamily: FONT_MONO }}>
+                              <span style={{ color: TEXT_SEC }}>
+                                {new Date(selectedCalEvent.event_time_utc).toLocaleString('en-GB', {
+                                  day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+                                })} UTC
+                              </span>
+                              <span style={{ color: TEXT_MUT }}>{selectedCalEvent.country}</span>
+                              {selectedCalEvent.currency && (
+                                <span style={{ color: TEXT_MUT }}>{selectedCalEvent.currency}</span>
+                              )}
+                              {selectedCalEvent.consensus && (
+                                <span style={{ color: TEXT_MUT }}>Consensus: <span style={{ color: TEXT_SEC }}>{selectedCalEvent.consensus}</span></span>
+                              )}
+                              {selectedCalEvent.previous && (
+                                <span style={{ color: TEXT_MUT }}>Prev: <span style={{ color: TEXT_SEC }}>{selectedCalEvent.previous}</span></span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={handleClearCalEvent}
+                            title="Clear — choose a different event"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: TEXT_MUT, fontSize: 16, lineHeight: 1, padding: 2, flexShrink: 0 }}
+                          >×</button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={handleOpenCalPicker}
+                          style={{
+                            padding: '8px 14px', borderRadius: 4, cursor: 'pointer',
+                            fontFamily: FONT_MONO, fontSize: 11, textAlign: 'left',
+                            border: `1px solid ${draftRule.te_calendar_id ? AMBER : BORDER}`,
+                            backgroundColor: BG_FIELD, color: TEXT_SEC,
+                            display: 'flex', alignItems: 'center', gap: 8,
+                          }}
+                        >
+                          <span style={{ color: TEAL }}>📅</span>
+                          {draftRule.te_calendar_id
+                            ? `Event ID ${draftRule.te_calendar_id} — click to resolve`
+                            : 'Select Economic Event…'}
+                        </button>
+                      )}
+
+                      {/* Inline calendar picker */}
+                      {calPickerOpen && (
+                        <div style={{
+                          backgroundColor: BG_SECTION, border: `1px solid ${BORDER_MD}`,
+                          borderRadius: 5, overflow: 'hidden',
+                        }}>
+                          {/* Picker toolbar */}
+                          <div style={{
+                            padding: '8px 10px', borderBottom: `1px solid ${BORDER}`,
+                            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                            backgroundColor: '#1a191e',
+                          }}>
+                            <input
+                              value={calSearch}
+                              onChange={e => setCalSearch(e.target.value)}
+                              placeholder="Search events…"
+                              autoFocus
+                              style={{ ...inputStyle, width: 180, fontSize: 11, padding: '4px 8px' }}
+                            />
+                            {/* Importance filter chips */}
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              {([3, 2] as const).map(imp => {
+                                const on = calImportance.includes(imp);
+                                const starsColor = imp === 3 ? RED : AMBER;
+                                return (
+                                  <button key={imp} onClick={() => {
+                                    setCalImportance(prev =>
+                                      on ? prev.filter(x => x !== imp) : [...prev, imp].sort((a, b) => b - a)
+                                    );
+                                  }} style={{
+                                    padding: '3px 8px', borderRadius: 3, cursor: 'pointer',
+                                    fontFamily: FONT_MONO, fontSize: 10,
+                                    border: `1px solid ${on ? starsColor : BORDER}`,
+                                    backgroundColor: on ? `${starsColor}18` : BG_FIELD,
+                                    color: on ? starsColor : TEXT_MUT,
+                                  }}>
+                                    {'★'.repeat(imp)}{'☆'.repeat(3 - imp)}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {calLoading && <span style={{ fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO }}>Loading…</span>}
+                            <button
+                              onClick={() => setCalPickerOpen(false)}
+                              style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: TEXT_MUT, fontSize: 16, lineHeight: 1 }}
+                            >×</button>
+                          </div>
+
+                          {/* Event list */}
+                          <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                            {(() => {
+                              const q = calSearch.trim().toLowerCase();
+                              const filtered = calEvents.filter(e =>
+                                calImportance.includes(e.importance) &&
+                                (q === '' || e.event_name.toLowerCase().includes(q) || e.country.toLowerCase().includes(q))
+                              );
+                              if (filtered.length === 0) {
+                                return (
+                                  <div style={{ padding: '16px 12px', textAlign: 'center', color: TEXT_MUT, fontSize: 11, fontFamily: FONT_MONO }}>
+                                    {calLoading ? 'Loading events…' : 'No events match current filters'}
+                                  </div>
+                                );
+                              }
+                              return filtered.map(evt => (
+                                <div
+                                  key={evt.calendar_id}
+                                  onClick={() => handleSelectCalEvent(evt)}
+                                  style={{
+                                    padding: '8px 10px', cursor: 'pointer',
+                                    borderBottom: `1px solid ${BORDER}`,
+                                    backgroundColor: draftRule.te_calendar_id === evt.calendar_id ? '#0d2020' : 'transparent',
+                                    transition: 'background 0.08s',
+                                  }}
+                                  onMouseEnter={e => { if (draftRule.te_calendar_id !== evt.calendar_id) (e.currentTarget as HTMLDivElement).style.backgroundColor = '#1e1d22'; }}
+                                  onMouseLeave={e => { if (draftRule.te_calendar_id !== evt.calendar_id) (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                                    <ImpStars v={evt.importance} />
+                                    <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: TEXT_PRI, fontWeight: 500 }}>
+                                      {evt.event_name}
+                                    </span>
+                                    <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: TEXT_MUT, marginLeft: 'auto' }}>
+                                      {evt.country}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 10, fontSize: 10, fontFamily: FONT_MONO, color: TEXT_MUT }}>
+                                    <span>
+                                      {new Date(evt.event_time_utc).toLocaleString('en-GB', {
+                                        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+                                      })} UTC
+                                    </span>
+                                    {evt.currency && <span>{evt.currency}</span>}
+                                    {evt.consensus && <span>Cons: {evt.consensus}</span>}
+                                    {evt.previous && <span>Prev: {evt.previous}</span>}
+                                  </div>
+                                </div>
+                              ));
+                            })()}
+                          </div>
+
+                          {/* Picker footer */}
+                          <div style={{ padding: '5px 10px', borderTop: `1px solid ${BORDER}`, backgroundColor: '#1a191e' }}>
+                            <span style={{ fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                              {calEvents.filter(e => calImportance.includes(e.importance)).length} events · next 14 days
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* minutes_before / minutes_after */}
+                      {!calPickerOpen && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          <FormRow label="Activate before event (min)" required>
+                            <input
+                              type="number" min={0} max={1440}
+                              value={draftRule.minutes_before}
+                              onChange={e => setRule({ minutes_before: e.target.value })}
+                              style={inputStyle}
+                            />
+                          </FormRow>
+                          <FormRow label="Deactivate after event (min)" required>
+                            <input
+                              type="number" min={0} max={1440}
+                              value={draftRule.minutes_after}
+                              onChange={e => setRule({ minutes_after: e.target.value })}
+                              style={inputStyle}
+                            />
+                          </FormRow>
+                        </div>
+                      )}
+
+                      {!draftRule.te_calendar_id && (
+                        <div style={{ fontSize: 10, color: AMBER, fontFamily: FONT_MONO }}>
+                          ⚠ An economic event must be selected before saving.
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {/* PNL_TRIGGER fields */}

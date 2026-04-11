@@ -21,6 +21,7 @@ import { symbolMappingRoutes } from './routes/symbol-mapping.js';
 import { routeSanityRoutes } from './routes/route-sanity.js';
 import { priceRulesRoutes } from './routes/price-rules.js';
 import { hedgingRoutes } from './routes/hedging.js';
+import { calendarRoutes } from './routes/calendar.js';
 
 /**
  * Create and configure Fastify server
@@ -149,6 +150,7 @@ async function buildServer() {
       await api.register(routeSanityRoutes);
       await api.register(priceRulesRoutes);
       await api.register(hedgingRoutes);
+      await api.register(calendarRoutes);
     },
     { prefix: '/api/v1' }
   );
