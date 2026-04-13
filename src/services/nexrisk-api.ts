@@ -5,6 +5,10 @@ import type { ApiError } from '../types/index.js';
 /**
  * HTTP client for NexRisk C++ API
  * Uses undici for optimal performance
+ *
+ * Key guarantees:
+ *  - X-Internal-Secret is injected on every request (required by C++ AuthMiddleware)
+ *  - setCookies in the response lets auth routes forward Set-Cookie headers to the browser
  */
 
 // Connection pool for keep-alive connections
@@ -20,6 +24,8 @@ export interface NexRiskRequestOptions {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
   timeout?: number;
+  /** Additional headers merged into the request (e.g. Authorization, X-Enrollment-Token, Cookie) */
+  headers?: Record<string, string>;
 }
 
 export interface NexRiskResponse<T> {
@@ -27,6 +33,11 @@ export interface NexRiskResponse<T> {
   status: number;
   data?: T;
   error?: ApiError;
+  /**
+   * Raw Set-Cookie header values from the C++ response.
+   * Auth routes use this to forward the nexrisk_refresh HttpOnly cookie to the browser.
+   */
+  setCookies?: string[];
 }
 
 /**
@@ -47,13 +58,14 @@ function buildUrl(path: string, query?: Record<string, string | number | boolean
 }
 
 /**
- * Make a request to the NexRisk C++ API
+ * Make a request to the NexRisk C++ API.
+ * X-Internal-Secret is injected automatically — never pass it manually.
  */
 export async function nexriskFetch<T>(
   path: string,
   options: NexRiskRequestOptions = {}
 ): Promise<NexRiskResponse<T>> {
-  const { method = 'GET', body, query, timeout = config.nexriskApiTimeoutMs } = options;
+  const { method = 'GET', body, query, timeout = config.nexriskApiTimeoutMs, headers = {} } = options;
 
   const url = buildUrl(path, query);
 
@@ -61,8 +73,12 @@ export async function nexriskFetch<T>(
     const response = await request(url, {
       method,
       headers: {
+        // Required on every BFF → C++ call (see auth spec §1)
+        'X-Internal-Secret': config.internalSecret,
         ...(body ? { 'Content-Type': 'application/json' } : {}),
         Accept: 'application/json',
+        // Caller-supplied headers (Authorization, X-Enrollment-Token, Cookie, etc.)
+        ...headers,
       },
       body: body ? JSON.stringify(body) : undefined,
       dispatcher: agent,
@@ -71,6 +87,12 @@ export async function nexriskFetch<T>(
     });
 
     const responseBody = await response.body.text();
+
+    // Capture Set-Cookie headers so auth routes can forward them to the browser
+    const rawSetCookie = response.headers['set-cookie'];
+    const setCookies: string[] | undefined = rawSetCookie
+      ? Array.isArray(rawSetCookie) ? rawSetCookie : [rawSetCookie]
+      : undefined;
     
     // Try to parse JSON response
     let data: T | ApiError | undefined;
@@ -83,6 +105,7 @@ export async function nexriskFetch<T>(
           ok: false,
           status: response.statusCode,
           error: { error: responseBody || 'Unknown error' },
+          setCookies,
         };
       }
     }
@@ -92,6 +115,7 @@ export async function nexriskFetch<T>(
         ok: false,
         status: response.statusCode,
         error: data as ApiError,
+        setCookies,
       };
     }
 
@@ -99,6 +123,7 @@ export async function nexriskFetch<T>(
       ok: true,
       status: response.statusCode,
       data: data as T,
+      setCookies,
     };
   } catch (error) {
     // Network or timeout error
@@ -118,17 +143,20 @@ export async function nexriskFetch<T>(
  * Convenience methods for common operations
  */
 export const nexriskApi = {
-  get: <T>(path: string, query?: Record<string, string | number | boolean | undefined>) =>
-    nexriskFetch<T>(path, { method: 'GET', query }),
+  get: <T>(path: string, query?: Record<string, string | number | boolean | undefined>, headers?: Record<string, string>) =>
+    nexriskFetch<T>(path, { method: 'GET', query, headers }),
 
-  post: <T>(path: string, body?: unknown) =>
-    nexriskFetch<T>(path, { method: 'POST', body }),
+  post: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+    nexriskFetch<T>(path, { method: 'POST', body, headers }),
 
-  put: <T>(path: string, body?: unknown) =>
-    nexriskFetch<T>(path, { method: 'PUT', body }),
+  put: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+    nexriskFetch<T>(path, { method: 'PUT', body, headers }),
 
-  delete: <T>(path: string) =>
-    nexriskFetch<T>(path, { method: 'DELETE' }),
+  patch: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+    nexriskFetch<T>(path, { method: 'PATCH', body, headers }),
+
+  delete: <T>(path: string, headers?: Record<string, string>) =>
+    nexriskFetch<T>(path, { method: 'DELETE', headers }),
 };
 
 /**

@@ -4,6 +4,7 @@
 // ============================================
 
 import { useState } from 'react';
+import { useAuth } from '@/stores/AuthContext';
 import { NavLink, useLocation } from 'react-router-dom';
 import { clsx } from 'clsx';
 
@@ -121,6 +122,20 @@ const ArchetypeIcon = () => (
   </svg>
 );
 
+const UserManagementIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="M9,12A6,6,0,1,0,3,6,6.006,6.006,0,0,0,9,12ZM9,2A4,4,0,1,1,5,6,4,4,0,0,1,9,2Z"/>
+    <polygon points="21 10 21 7 19 7 19 10 16 10 16 12 19 12 19 15 21 15 21 12 24 12 24 10 21 10"/>
+    <path d="M13.043,14H4.957A4.963,4.963,0,0,0,0,18.957V24H2V18.957A2.96,2.96,0,0,1,4.957,16h8.086A2.96,2.96,0,0,1,16,18.957V24h2V18.957A4.963,4.963,0,0,0,13.043,14Z"/>
+  </svg>
+);
+
+const LogoutIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+    <path d="M17,2H7A3,3,0,0,0,4,5V11h9.586L11.293,8.707a1,1,0,0,1,1.414-1.414l4,4a1,1,0,0,1,0,1.414l-4,4a1,1,0,0,1-1.414-1.414L13.586,13H4v6a3,3,0,0,0,3,3H17a3,3,0,0,0,3-3V5A3,3,0,0,0,17,2Z"/>
+  </svg>
+);
+
 const ChevronLeft = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M10 12L6 8L10 4" />
@@ -193,6 +208,10 @@ const navSections: NavSection[] = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(true); // Collapsed by default
   const location = useLocation();
+  const { user, logout } = useAuth();
+
+  // Only root and admin can see the User Management item
+  const canManageUsers = user?.role === 'root' || user?.role === 'administrator';
 
   // Check if current path starts with /settings for highlighting
   const isSettingsActive = location.pathname.startsWith('/settings');
@@ -263,8 +282,58 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Collapse toggle button */}
-      <div className="border-t border-[#808080] p-2">
+      {/* User Management item — admin/root only */}
+      {canManageUsers && (
+        <div className="px-2 pb-1">
+          {!collapsed && (
+            <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-[#666]">
+              Admin
+            </div>
+          )}
+          <NavLink
+            to="/users"
+            className={clsx(
+              'flex items-center gap-2 rounded transition-colors relative',
+              collapsed ? 'justify-center p-2' : 'px-2 py-1.5',
+              location.pathname === '/users'
+                ? 'text-[#4ecdc4]'
+                : 'text-[#999] hover:text-white hover:bg-[#3a3a3c]'
+            )}
+          >
+            <div className="flex items-center justify-center">
+              <UserManagementIcon />
+            </div>
+            {!collapsed && <span className="text-sm truncate">Users</span>}
+            {location.pathname === '/users' && (
+              <div
+                className={clsx(
+                  'absolute bottom-0 h-0.5 bg-[#4ecdc4]',
+                  collapsed ? 'left-2 right-2' : 'left-0 right-0'
+                )}
+              />
+            )}
+          </NavLink>
+        </div>
+      )}
+
+      {/* Bottom bar — logout + collapse toggle */}
+      <div className="border-t border-[#808080] p-2 flex flex-col gap-1">
+        {/* Logout button */}
+        <button
+          onClick={() => void logout()}
+          title="Sign out"
+          className={clsx(
+            'flex items-center gap-2 rounded transition-colors text-[#999] hover:text-[#ff6b6b] hover:bg-[#3a2020]',
+            collapsed ? 'justify-center p-2' : 'px-2 py-1.5'
+          )}
+        >
+          <div className="flex items-center justify-center">
+            <LogoutIcon />
+          </div>
+          {!collapsed && <span className="text-sm">Sign out</span>}
+        </button>
+
+        {/* Collapse toggle */}
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="w-full flex items-center justify-center p-2 text-[#999] hover:text-white hover:bg-[#3a3a3c] rounded transition-colors"

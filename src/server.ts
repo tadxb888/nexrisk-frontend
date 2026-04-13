@@ -22,6 +22,8 @@ import { routeSanityRoutes } from './routes/route-sanity.js';
 import { priceRulesRoutes } from './routes/price-rules.js';
 import { hedgingRoutes } from './routes/hedging.js';
 import { calendarRoutes } from './routes/calendar.js';
+import { authRoutes } from './routes/auth.js';
+import { usersRoutes } from './routes/users.js';
 
 /**
  * Create and configure Fastify server
@@ -132,9 +134,16 @@ async function buildServer() {
   // Health routes (no /api prefix)
   await fastify.register(healthRoutes);
 
+  // Auth routes — registered OUTSIDE the session-guarded block.
+  // These ARE the mechanism for obtaining a session; they must not require one.
+  await fastify.register(authRoutes, { prefix: '/api/v1' });
+
   // API routes
   await fastify.register(
     async (api) => {
+      // User management (session guard is enforced inside usersRoutes)
+      await api.register(usersRoutes);
+
       await api.register(tradersRoutes);
       await api.register(alertsRoutes);
       await api.register(explanationsRoutes);

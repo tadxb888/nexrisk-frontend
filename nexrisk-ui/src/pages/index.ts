@@ -31,3 +31,4 @@ export {
   NotificationsSettingsPage,
   RiskLogicSettingsPage,
 } from './SettingsSubPages';
+export { UserManagementPage } from './UserManagementPage';

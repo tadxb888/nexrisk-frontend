@@ -12,13 +12,13 @@ export default {
         
         // Base Palette (Structural)
         background: {
-          DEFAULT: '#0b0c0e',      // Slightly cleaner near-black (less muddy)
+          DEFAULT: '#1E1E1E',      // Slightly cleaner near-black (less muddy)
           secondary: '#121318',    // Lifted a touch for separation
           tertiary: '#171820',     // Slight lift for elevated surfaces
         },
         
         surface: {
-          DEFAULT: '#1b1c22',      // Slight lift: better contrast with text
+          DEFAULT: '#313032',      // Slight lift: better contrast with text
           hover: '#23242b',        // More noticeable hover
           active: '#2a2b33',       // More visible active
         },
@@ -31,7 +31,7 @@ export default {
         
         // Text Colors - MAXIMUM READABILITY
         text: {
-          primary: '#ffffff',      // Keep pure white
+          primary: '#E6E6E6',      // Keep pure white
           secondary: '#e2e4ec',    // Brighter secondary (much easier on dark)
           muted: '#d2d6e2',        // Muted still clearly readable
           inverse: '#0b0c0e',      // Match updated background

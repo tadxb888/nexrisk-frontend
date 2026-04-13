@@ -21,6 +21,13 @@ const configSchema = z.object({
   authAudience: z.string().optional(),
   jwtSecret: z.string().default('dev-secret-change-in-production'),
 
+  /**
+   * Shared secret between this BFF and the C++ nexrisk_service.
+   * Injected as X-Internal-Secret on every BFF → C++ request.
+   * Must match NEXRISK_INTERNAL_SECRET on the C++ side exactly.
+   */
+  internalSecret: z.string().default('dev-internal-secret-change-in-production'),
+
   // CORS
   corsOrigins: z
     .string()
@@ -37,6 +44,16 @@ const configSchema = z.object({
   // WebSocket
   wsHeartbeatIntervalMs: z.coerce.number().default(30000),
   wsMaxConnectionsPerUser: z.coerce.number().default(5),
+
+  // SMTP — invite email delivery
+  smtpHost: z.string().optional(),
+  smtpPort: z.coerce.number().optional(),
+  smtpUser: z.string().optional(),
+  smtpPass: z.string().optional(),
+  smtpFrom: z.string().default('noreply@nexrisk.io'),
+
+  // Frontend — used to build invite setup links
+  frontendUrl: z.string().url().default('http://localhost:5174'),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -53,12 +70,19 @@ function loadConfig(): Config {
     authClientId: process.env.AUTH_CLIENT_ID,
     authAudience: process.env.AUTH_AUDIENCE,
     jwtSecret: process.env.JWT_SECRET,
+    internalSecret: process.env.NEXRISK_INTERNAL_SECRET,
     corsOrigins: process.env.CORS_ORIGINS,
     rateLimitMax: process.env.RATE_LIMIT_MAX,
     rateLimitWindowMs: process.env.RATE_LIMIT_WINDOW_MS,
     logLevel: process.env.LOG_LEVEL,
     wsHeartbeatIntervalMs: process.env.WS_HEARTBEAT_INTERVAL_MS,
     wsMaxConnectionsPerUser: process.env.WS_MAX_CONNECTIONS_PER_USER,
+    smtpHost: process.env.SMTP_HOST,
+    smtpPort: process.env.SMTP_PORT,
+    smtpUser: process.env.SMTP_USER,
+    smtpPass: process.env.SMTP_PASS,
+    smtpFrom: process.env.SMTP_FROM,
+    frontendUrl: process.env.FRONTEND_URL,
   };
 
   const result = configSchema.safeParse(rawConfig);
@@ -67,6 +91,18 @@ function loadConfig(): Config {
     console.error('❌ Invalid configuration:');
     console.error(result.error.format());
     process.exit(1);
+  }
+
+  // Hard-fail in production if placeholder secrets are still in use
+  if (result.data.nodeEnv === 'production') {
+    if (result.data.internalSecret === 'dev-internal-secret-change-in-production') {
+      console.error('❌ NEXRISK_INTERNAL_SECRET must be set in production');
+      process.exit(1);
+    }
+    if (result.data.jwtSecret === 'dev-secret-change-in-production') {
+      console.error('❌ JWT_SECRET must be set in production');
+      process.exit(1);
+    }
   }
 
   return result.data;

@@ -13,6 +13,7 @@ async function fetchAPI<T>(
   
   const response = await fetch(url, {
     ...options,
+    credentials: 'include',   // send nexrisk_session cookie on every request
     headers: {
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
@@ -743,10 +744,6 @@ export const mt5Api = {
     return { positions, nodes: respondingNodes };
   },
 };
-// ============================================================
-// ADD THIS BLOCK TO api.ts
-// Place after the mt5Api export
-// ============================================================
 
 // ============================================
 // Symbol Mapping API
@@ -867,6 +864,7 @@ export const symbolMappingApi = {
     return fetchAPI<{ unmapped: string[]; total: number }>(`/api/v1/symbol-mappings/unmapped${q}`);
   },
 };
+
 // ============================================
 // WebSocket — real-time feeds
 // ============================================
@@ -938,4 +936,91 @@ export const wsApi = {
         connected_sec: number;
       }[];
     }>('/api/v1/ws/stats'),
+};
+
+// ============================================
+// Auth API
+// ============================================
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: string;
+  role_label: string;
+  can_trade: boolean;
+}
+
+export interface NexRiskRole {
+  id: number;
+  name: string;
+  label: string;
+}
+
+export interface NexRiskUser {
+  id: string;
+  email: string;
+  role: string;
+  role_label?: string;
+  is_active: boolean;
+  created_at?: string;
+}
+
+export const authApi = {
+  /** Probe for an active session. Returns user + permissions, or null on 401. */
+  me: async (): Promise<{ user: AuthUser; permissions: Record<string, string> } | null> => {
+    const res = await fetch(`${API_BASE}/api/v1/auth/me`, { credentials: 'include' });
+    if (res.status === 401) return null;
+    if (!res.ok) throw new Error(`/auth/me failed: ${res.status}`);
+    return res.json();
+  },
+};
+
+// ============================================
+// Users & Roles API
+// ============================================
+
+export const usersApi = {
+  /** Create a new user. BFF sends the invite email automatically. */
+  create: (email: string, roleId: number) =>
+    fetchAPI<{
+      user: NexRiskUser;
+      invite_expires_at: string;
+      invite_sent: boolean;
+      message: string;
+    }>('/api/v1/users', {
+      method: 'POST',
+      body: JSON.stringify({ email, role_id: roleId }),
+    }),
+
+  getAll: () =>
+    fetchAPI<{ users: NexRiskUser[]; total: number }>('/api/v1/users'),
+
+  getById: (id: string) =>
+    fetchAPI<NexRiskUser>(`/api/v1/users/${id}`),
+
+  update: (id: string, patch: { role_id?: number; is_active?: boolean }) =>
+    fetchAPI<NexRiskUser>(`/api/v1/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deactivate: (id: string) =>
+    fetchAPI<{ status: string }>(`/api/v1/users/${id}`, { method: 'DELETE' }),
+
+  /** Reissue invite and resend email. Only valid for unenrolled users. */
+  reissueInvite: (id: string) =>
+    fetchAPI<{
+      user: Pick<NexRiskUser, 'id' | 'email'>;
+      invite_expires_at: string;
+      invite_sent: boolean;
+      message: string;
+    }>(`/api/v1/users/${id}/invite`, { method: 'POST' }),
+
+  getRoles: () =>
+    fetchAPI<{ roles: NexRiskRole[] }>('/api/v1/roles'),
+
+  getRolePermissions: (roleId: number) =>
+    fetchAPI<{ role_id: number; permissions: Record<string, string> }>(
+      `/api/v1/roles/${roleId}/permissions`
+    ),
 };
