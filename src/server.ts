@@ -24,6 +24,7 @@ import { hedgingRoutes } from './routes/hedging.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { authRoutes } from './routes/auth.js';
 import { usersRoutes } from './routes/users.js';
+import { auditLogRoutes } from './routes/audit-log.js';
 
 /**
  * Create and configure Fastify server
@@ -160,6 +161,7 @@ async function buildServer() {
       await api.register(priceRulesRoutes);
       await api.register(hedgingRoutes);
       await api.register(calendarRoutes);
+      await api.register(auditLogRoutes);
     },
     { prefix: '/api/v1' }
   );
