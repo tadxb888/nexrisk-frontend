@@ -40,7 +40,7 @@ function TotpInput({ value, onChange, hasError }: {
         <input key={i} ref={refs[i]} type="text" inputMode="numeric" maxLength={1} value={d}
           onChange={e => handleChange(i, e.target.value)}
           onKeyDown={e => handleKeyDown(i, e)}
-          style={{ ...A.digitInput, borderColor: hasError ? '#ff6b6b' : d ? '#4ecdc4' : '#3a3840' }}
+          style={{ ...A.digitInput, borderColor: hasError ? '#ff5c5c' : d ? '#49b3b3' : '#3a3840' }}
           autoComplete="one-time-code"
         />
       ))}
@@ -124,7 +124,7 @@ export function LoginPage() {
                 onChange={e => setEmail(e.target.value)}
                 onFocus={() => setEmailFocused(true)}
                 onBlur={() => setEmailFocused(false)}
-                style={{ ...A.input, borderColor: emailFocused ? '#4ecdc4' : '#3a3840' }}
+                style={{ ...A.input, borderColor: emailFocused ? '#49b3b3' : '#3a3840' }}
                 placeholder="you@example.com" autoComplete="email" autoFocus required />
             </div>
 
@@ -134,7 +134,7 @@ export function LoginPage() {
                 onChange={e => setPassword(e.target.value)}
                 onFocus={() => setPasswordFocused(true)}
                 onBlur={() => setPasswordFocused(false)}
-                style={{ ...A.input, borderColor: passwordFocused ? '#4ecdc4' : '#3a3840' }}
+                style={{ ...A.input, borderColor: passwordFocused ? '#49b3b3' : '#3a3840' }}
                 placeholder="••••••••••" autoComplete="current-password" required />
             </div>
 

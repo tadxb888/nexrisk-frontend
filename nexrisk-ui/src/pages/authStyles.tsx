@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared auth design tokens — LoginPage, SetupPage, ChangePasswordPage
-// Brand: Taiga · #4ecdc4 teal · IBM Plex Mono
+// Brand: Taiga · #49b3b3 teal · IBM Plex Mono
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const A = {
@@ -95,7 +95,7 @@ export const A = {
 
   hintError: {
     fontSize: 13,
-    color: '#ff6b6b',
+    color: '#ff5c5c',
     marginTop: 6,
     lineHeight: 1.5,
   } as React.CSSProperties,
@@ -104,7 +104,7 @@ export const A = {
   btnPrimary: {
     width: '100%',
     padding: '12px 0',
-    background: '#4ecdc4',
+    background: '#49b3b3',
     border: 'none',
     borderRadius: 5,
     fontSize: 15,     // 13 + 2
@@ -170,7 +170,7 @@ export const A = {
     borderRadius: 5,
     padding: '11px 14px',
     fontSize: 13,
-    color: '#4ecdc4',
+    color: '#49b3b3',
     marginBottom: 20,
     lineHeight: 1.5,
   } as React.CSSProperties,
@@ -223,7 +223,7 @@ export function AuthLogo() {
         }}
       />
       {/* Text fallback */}
-      <span style={{ display: 'none', fontSize: 24, fontWeight: 700, color: '#4ecdc4', letterSpacing: '0.08em' }}>
+      <span style={{ display: 'none', fontSize: 24, fontWeight: 700, color: '#49b3b3', letterSpacing: '0.08em' }}>
         TAIGA
       </span>
     </div>
@@ -254,19 +254,19 @@ export function AuthFooter() {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' as const, justifyContent: 'center' }}>
         <a href="/terms" style={linkStyle}
-          onMouseEnter={e => (e.currentTarget.style.color = '#4ecdc4')}
+          onMouseEnter={e => (e.currentTarget.style.color = '#49b3b3')}
           onMouseLeave={e => (e.currentTarget.style.color = '#808080')}>
           Terms of Use
         </a>
         <span style={{ color: '#3a3840', fontSize: 11 }}>·</span>
         <a href="/disclosure" style={linkStyle}
-          onMouseEnter={e => (e.currentTarget.style.color = '#4ecdc4')}
+          onMouseEnter={e => (e.currentTarget.style.color = '#49b3b3')}
           onMouseLeave={e => (e.currentTarget.style.color = '#808080')}>
           Disclosure
         </a>
         <span style={{ color: '#3a3840', fontSize: 11 }}>·</span>
         <a href="/privacy" style={linkStyle}
-          onMouseEnter={e => (e.currentTarget.style.color = '#4ecdc4')}
+          onMouseEnter={e => (e.currentTarget.style.color = '#49b3b3')}
           onMouseLeave={e => (e.currentTarget.style.color = '#808080')}>
           Privacy Policy
         </a>

@@ -24,7 +24,7 @@ import {
 // THEME — identical to BBookPage
 // ══════════════════════════════════════════════════════════════
 const gridTheme = themeQuartz.withParams({
-  backgroundColor: '#313032',
+  backgroundColor: '#232326',
   browserColorScheme: 'dark',
   chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.11, onto: 'backgroundColor' },
   fontFamily: { googleFont: 'IBM Plex Mono' },
@@ -154,7 +154,7 @@ const WS_BADGE: Record<WsStatus, { color: string; label: string }> = {
   connecting:   { color: '#e0a020', label: 'Connecting…'   },
   live:         { color: '#66e07a', label: 'Live'           },
   reconnecting: { color: '#e0a020', label: 'Reconnecting…' },
-  error:        { color: '#ff6b6b', label: 'Disconnected'  },
+  error:        { color: '#ff5c5c', label: 'Disconnected'  },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -353,7 +353,7 @@ function generateExplanation(row: ExecutionReportRow): string {
 function lpStateColor(trading_session?: string): string {
   if (trading_session === 'LOGGED_ON')                                          return '#66e07a';
   if (trading_session === 'CONNECTING' || trading_session === 'RECONNECTING')   return '#e0a020';
-  if (trading_session === 'DISCONNECTED')                                       return '#ff6b6b';
+  if (trading_session === 'DISCONNECTED')                                       return '#ff5c5c';
   return '#e0a020'; // unknown / stale initial state — amber, not red
 }
 
@@ -1198,7 +1198,7 @@ export function ExecutionReportPage() {
                 }}
                 title={`Rule #${p.data?.rule_id} — click to open in Hedging Strategies`}
                 style={{
-                  color: '#4ecdc4',
+                  color: '#49b3b3',
                   cursor: 'pointer',
                   fontSize: 11,
                   fontWeight: 600,
@@ -1294,7 +1294,7 @@ export function ExecutionReportPage() {
           cellRenderer: (p: { value: number | null }) => {
             if (p.value === null || p.value === undefined)
               return <span style={{ color: '#555' }}>—</span>;
-            const color = p.value <= 200 ? '#66e07a' : p.value <= 600 ? '#e0a020' : '#ff6b6b';
+            const color = p.value <= 200 ? '#66e07a' : p.value <= 600 ? '#e0a020' : '#ff5c5c';
             return <span style={{ color, fontWeight: 700 }}>{p.value}</span>;
           },
         },
@@ -1335,7 +1335,7 @@ export function ExecutionReportPage() {
           filter: 'agSetColumnFilter',
           filterParams: { values: ['BUY', 'SELL'] },
           cellRenderer: (p: { value: 'BUY' | 'SELL' }) => (
-            <span style={{ color: p.value === 'BUY' ? '#4ecdc4' : '#e0a020', fontWeight: 700 }}>
+            <span style={{ color: p.value === 'BUY' ? '#49b3b3' : '#e0a020', fontWeight: 700 }}>
               {p.value}
             </span>
           ),
@@ -1572,7 +1572,7 @@ export function ExecutionReportPage() {
   // RENDER
   // ══════════════════════════════════════════════════════════════
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
       {/* ── Page Header ─────────────────────────────────────────── */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between flex-shrink-0">
@@ -1591,7 +1591,7 @@ export function ExecutionReportPage() {
               <select
                 value={selectedLp}
                 onChange={e => setSelectedLp(e.target.value)}
-                className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
+                className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
               >
                 <option value="all">All Liquidity Providers</option>
                 {lpStatuses.map(lp => (
@@ -1615,7 +1615,7 @@ export function ExecutionReportPage() {
           <div>
             <span className="text-[#999]">Long / Short:</span>
             <span className="ml-1 font-mono">
-              <span className="text-[#4ecdc4]">{stats.longCount}</span>
+              <span className="text-[#49b3b3]">{stats.longCount}</span>
               <span className="text-[#505050]"> / </span>
               <span className="text-[#e0a020]">{stats.shortCount}</span>
             </span>
@@ -1642,7 +1642,7 @@ export function ExecutionReportPage() {
           </div>
           <div>
             <span className="text-[#999]">Worst RT:</span>
-            <span className="ml-1 font-mono text-[#ff6b6b]">
+            <span className="ml-1 font-mono text-[#ff5c5c]">
               {stats.worstRt !== null ? `${stats.worstRt}ms` : '—'}
             </span>
           </div>
@@ -1651,11 +1651,11 @@ export function ExecutionReportPage() {
 
           <div>
             <span className="text-[#999]">Rejections:</span>
-            <span className="ml-1 font-mono text-[#ff6b6b]">{stats.rejectionCount}</span>
+            <span className="ml-1 font-mono text-[#ff5c5c]">{stats.rejectionCount}</span>
           </div>
           <div>
             <span className="text-[#999]">Rejection %:</span>
-            <span className="ml-1 font-mono text-[#ff6b6b]">
+            <span className="ml-1 font-mono text-[#ff5c5c]">
               {stats.rejectionPct.toFixed(1)}%
             </span>
           </div>
@@ -1672,7 +1672,7 @@ export function ExecutionReportPage() {
 
       {/* ── Error banner ─────────────────────────────────────────── */}
       {wsStatus === 'error' && wsError && (
-        <div className="px-4 py-2 bg-[#3a1f1f] border-b border-[#ff6b6b] text-xs text-[#ff6b6b] flex items-center justify-between flex-shrink-0">
+        <div className="px-4 py-2 bg-[#3a1f1f] border-b border-[#ff5c5c] text-xs text-[#ff5c5c] flex items-center justify-between flex-shrink-0">
           <span>⚠ {wsError}</span>
           <button onClick={reconnect} className="ml-4 underline hover:no-underline">Reconnect</button>
         </div>
@@ -1705,7 +1705,7 @@ export function ExecutionReportPage() {
             {/* Permanently disconnected */}
             {wsStatus === 'error' && rows.length === 0 && (
               <div className="flex-1 flex flex-col items-center justify-center gap-3">
-                <p className="text-[#ff6b6b] text-sm font-mono">Connection lost</p>
+                <p className="text-[#ff5c5c] text-sm font-mono">Connection lost</p>
                 <button
                   onClick={reconnect}
                   className="text-xs text-[#999] border border-[#444] rounded px-3 py-1 hover:text-white hover:border-[#888] transition-colors"
@@ -1754,7 +1754,7 @@ export function ExecutionReportPage() {
               'border-t border-[#808080] flex-shrink-0 transition-all duration-300 overflow-hidden',
               chartsCollapsed ? 'h-[40px]' : 'h-[300px]'
             )}
-            style={{ backgroundColor: '#313032' }}
+            style={{ backgroundColor: '#232326' }}
           >
             {/* Toggle bar — exact BBookCharts pattern */}
             <div className="flex justify-center py-1 shrink-0">
@@ -1802,7 +1802,7 @@ export function ExecutionReportPage() {
                 <div className="flex items-center gap-2 min-w-0">
                   <span
                     className="text-sm font-semibold"
-                    style={{ color: selectedRow.side === 'BUY' ? '#4ecdc4' : '#e0a020' }}
+                    style={{ color: selectedRow.side === 'BUY' ? '#49b3b3' : '#e0a020' }}
                   >
                     {selectedRow.side} {selectedRow.symbol}
                   </span>

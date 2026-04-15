@@ -12,7 +12,7 @@ import { mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAP
 // THEME (Quartz dark)
 // ======================
 const gridTheme = themeQuartz.withParams({
-  backgroundColor: "#313032",
+  backgroundColor: "#232326",
   browserColorScheme: "dark",
   chromeBackgroundColor: { ref: "foregroundColor", mix: 0.11, onto: "backgroundColor" },
   fontFamily: { googleFont: "IBM Plex Mono" },
@@ -58,7 +58,7 @@ const WS_BADGE: Record<WsStatus, { color: string; label: string }> = {
   connecting:   { color: '#e0a020', label: 'Connecting…'   },
   live:         { color: '#66e07a', label: 'Live'           },
   reconnecting: { color: '#e0a020', label: 'Reconnecting…' },
-  error:        { color: '#ff6b6b', label: 'Disconnected'  },
+  error:        { color: '#ff5c5c', label: 'Disconnected'  },
 };
 
 // ======================
@@ -340,7 +340,7 @@ export function BBookPage() {
       filter: 'agSetColumnFilter',
       width: 90,
       cellRenderer: (p: { value: string }) => (
-        <span style={{ color: p.value === 'BUY' ? '#4ecdc4' : '#e0a020' }}>{p.value}</span>
+        <span style={{ color: p.value === 'BUY' ? '#49b3b3' : '#e0a020' }}>{p.value}</span>
       ),
     },
     { field: 'volume',        headerName: 'Volume',   filter: 'agNumberColumnFilter', valueFormatter: fmtNum(2),  width: 100, type: 'rightAligned' },
@@ -356,7 +356,7 @@ export function BBookPage() {
       type: 'rightAligned',
       cellRenderer: (p: { value: number }) => {
         const val = p.value;
-        const color = val > 0 ? '#66e07a' : val < 0 ? '#ff6b6b' : '#999';
+        const color = val > 0 ? '#66e07a' : val < 0 ? '#ff5c5c' : '#999';
         const prefix = val >= 0 ? '$' : '-$';
         return <span style={{ color }}>{prefix}{Math.abs(val).toFixed(2)}</span>;
       },
@@ -447,7 +447,7 @@ export function BBookPage() {
   // RENDER
   // ======================
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
       {/* Page Header */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between">
@@ -475,17 +475,17 @@ export function BBookPage() {
           {/* Stats */}
           <div><span className="text-[#999]">Positions:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
           <div className="w-px h-4 bg-[#808080]" />
-          <div><span className="text-[#999]">Long / Short:</span><span className="ml-1 font-mono"><span className="text-[#4ecdc4]">{stats.buyCount}</span><span className="text-[#505050]"> / </span><span className="text-[#e0a020]">{stats.sellCount}</span></span></div>
+          <div><span className="text-[#999]">Long / Short:</span><span className="ml-1 font-mono"><span className="text-[#49b3b3]">{stats.buyCount}</span><span className="text-[#505050]"> / </span><span className="text-[#e0a020]">{stats.sellCount}</span></span></div>
           <div><span className="text-[#999]">Volume:</span><span className="ml-1 font-mono text-white">{stats.totalVolume.toFixed(2)} lots</span></div>
           <div>
             <span className="text-[#999]">Float P&amp;L:</span>
-            <span className={clsx('ml-1 font-mono', stats.totalPnL >= 0 ? 'text-[#66e07a]' : 'text-[#ff6b6b]')}>
+            <span className={clsx('ml-1 font-mono', stats.totalPnL >= 0 ? 'text-[#66e07a]' : 'text-[#ff5c5c]')}>
               {stats.totalPnL >= 0 ? '' : '-'}${Math.abs(stats.totalPnL).toFixed(2)}
             </span>
           </div>
           <div>
             <span className="text-[#999]">Net P&amp;L:</span>
-            <span className={clsx('ml-1 font-mono', stats.netPnL >= 0 ? 'text-[#66e07a]' : 'text-[#ff6b6b]')}>
+            <span className={clsx('ml-1 font-mono', stats.netPnL >= 0 ? 'text-[#66e07a]' : 'text-[#ff5c5c]')}>
               {stats.netPnL >= 0 ? '' : '-'}${Math.abs(stats.netPnL).toFixed(2)}
             </span>
           </div>
@@ -513,7 +513,7 @@ export function BBookPage() {
 
       {/* Error banner */}
       {error && (
-        <div className="px-4 py-2 bg-[#3a1f1f] border-b border-[#ff6b6b] text-xs text-[#ff6b6b] flex items-center justify-between">
+        <div className="px-4 py-2 bg-[#3a1f1f] border-b border-[#ff5c5c] text-xs text-[#ff5c5c] flex items-center justify-between">
           <span>⚠ {error}</span>
           <button onClick={fetchPositions} className="ml-4 underline hover:no-underline">Retry</button>
         </div>
@@ -530,7 +530,7 @@ export function BBookPage() {
             value={groupInput}
             onChange={(e) => setGroupInput(e.target.value)}
             placeholder="All Groups / All Accounts"
-            className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#4ecdc4]"
+            className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#49b3b3]"
           />
           <datalist id="bbookgroup-options">
             {uniqueGroups.map(g => <option key={g} value={g} />)}
@@ -545,7 +545,7 @@ export function BBookPage() {
             value={symbolInput}
             onChange={(e) => setSymbolInput(e.target.value)}
             placeholder="All Symbols"
-            className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#4ecdc4]"
+            className="w-[240px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#49b3b3]"
           />
           <datalist id="bbooksymbol-options">
             {uniqueSymbols.map(s => <option key={s} value={s} />)}
@@ -555,7 +555,7 @@ export function BBookPage() {
         <select
           value={filterServer}
           onChange={(e) => setFilterServer(e.target.value)}
-          className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
+          className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
         >
           {uniqueServers.map(s => <option key={s} value={s}>{s === 'ALL' ? 'All Servers' : s}</option>)}
         </select>
@@ -570,7 +570,7 @@ export function BBookPage() {
         )}
 
         {hasActiveFilters && (
-          <span className="text-[10px] text-[#4ecdc4] font-mono ml-auto">
+          <span className="text-[10px] text-[#49b3b3] font-mono ml-auto">
             {filteredPositions.length} of {positions.length} positions
           </span>
         )}
@@ -625,7 +625,7 @@ export function BBookPage() {
             'border-t border-[#808080] transition-all duration-300',
             chartsCollapsed ? 'h-[40px]' : 'h-[300px]'
           )}
-          style={{ backgroundColor: '#313032' }}
+          style={{ backgroundColor: '#232326' }}
         >
           <BBookCharts
             positions={filteredPositions}

@@ -137,7 +137,7 @@ interface FormData {
 // ============================================================
 const ALL_FLAGS = ['USERS', 'GROUPS', 'SYMBOLS', 'ORDERS', 'POSITIONS', 'DEALS'];
 
-const BOOK_COLOR: Record<Book, string> = { A: '#4ecdc4', B: '#e0b84d', C: '#7b9ddb' };
+const BOOK_COLOR: Record<Book, string> = { A: '#49b3b3', B: '#e0b84d', C: '#7b9ddb' };
 const BOOK_BG:    Record<Book, string> = { A: '#0f2828', B: '#282010', C: '#121828' };
 const BOOK_BDR:   Record<Book, string> = { A: '#1f6060', B: '#6a5520', C: '#2f4a80' };
 
@@ -231,7 +231,7 @@ function ConnBadge({ status }: { status: ConnStatus }) {
     CONNECTING:   ['#e0d066', '#2a2816', '#6a6530'],
     RECONNECTING: ['#e09a55', '#2a2016', '#6a4a2f'],
     DISCONNECTED: ['#a0a0b0', '#2a2a2c', '#484848'],
-    ERROR:        ['#ff6b6b', '#2c1417', '#7a2f36'],
+    ERROR:        ['#ff5c5c', '#2c1417', '#7a2f36'],
   };
   const [color, bg, border] = cfg[status];
   return (
@@ -270,13 +270,13 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
         display: 'inline-flex', alignItems: 'center',
         width: 36, height: 20, borderRadius: 10, padding: 3,
         backgroundColor: checked ? '#163a3a' : '#383838',
-        border: `1.5px solid ${checked ? '#4ecdc4' : '#505050'}`,
+        border: `1.5px solid ${checked ? '#49b3b3' : '#505050'}`,
         cursor: 'pointer', flexShrink: 0, outline: 'none',
         transition: 'background-color .15s, border-color .15s',
       }}>
       <span style={{
         display: 'block', width: 12, height: 12, borderRadius: '50%',
-        backgroundColor: checked ? '#4ecdc4' : '#888',
+        backgroundColor: checked ? '#49b3b3' : '#888',
         transform: checked ? 'translateX(16px)' : 'translateX(0)',
         transition: 'transform .15s, background-color .15s',
       }} />
@@ -294,13 +294,13 @@ function CBX({ state, onChange }: { state: CS; onChange: () => void }) {
   return (
     <div onClick={(e) => { e.stopPropagation(); onChange(); }} style={{
       width: 14, height: 14, borderRadius: 3, flexShrink: 0, cursor: 'pointer',
-      border: `1.5px solid ${on || ind ? '#4ecdc4' : '#505050'}`,
+      border: `1.5px solid ${on || ind ? '#49b3b3' : '#505050'}`,
       backgroundColor: on || ind ? '#163a3a' : 'transparent',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       transition: 'all .1s',
     }}>
-      {on  && <svg viewBox="0 0 10 8" width="9" height="7" fill="none"><path d="M1 4l3 3 5-6" stroke="#4ecdc4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-      {ind && <div style={{ width: 8, height: 2, backgroundColor: '#4ecdc4', borderRadius: 1 }} />}
+      {on  && <svg viewBox="0 0 10 8" width="9" height="7" fill="none"><path d="M1 4l3 3 5-6" stroke="#49b3b3" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+      {ind && <div style={{ width: 8, height: 2, backgroundColor: '#49b3b3', borderRadius: 1 }} />}
     </div>
   );
 }
@@ -359,7 +359,7 @@ function NodeCard({ node, onEdit, onDelete, onConnect, onDisconnect, onPromote }
         <div className="flex flex-wrap gap-1 pt-0.5">
           {node.pump_flags.map(f => (
             <span key={f} className="px-1 py-0.5 rounded font-mono"
-              style={{ backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }}>
+              style={{ backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }}>
               {f}
             </span>
           ))}
@@ -367,8 +367,8 @@ function NodeCard({ node, onEdit, onDelete, onConnect, onDisconnect, onPromote }
         {node.last_error && (
           <div className="flex items-start gap-1.5 p-1.5 rounded mt-1"
             style={{ backgroundColor: '#2c1417', border: '1px solid #7a2f36' }}>
-            <span className="flex-shrink-0 mt-px" style={{ color: '#ff6b6b' }}><IcoWarning /></span>
-            <span style={{ color: '#ff6b6b' }} className="leading-tight">{node.last_error}</span>
+            <span className="flex-shrink-0 mt-px" style={{ color: '#ff5c5c' }}><IcoWarning /></span>
+            <span style={{ color: '#ff5c5c' }} className="leading-tight">{node.last_error}</span>
           </div>
         )}
       </div>
@@ -408,7 +408,7 @@ function NodeCard({ node, onEdit, onDelete, onConnect, onDisconnect, onPromote }
           </button>
           <button onClick={() => onDelete(node)}
             className="btn text-xs px-2 py-1"
-            style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+            style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
             <IcoTrash />
           </button>
         </div>
@@ -502,14 +502,14 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-text-muted mb-1">
-                Node Name <span style={{ color: '#ff6b6b' }}>*</span>
+                Node Name <span style={{ color: '#ff5c5c' }}>*</span>
               </label>
               <input className="input w-full text-sm" placeholder="e.g. NexRisk Master"
                 value={form.node_name} onChange={e => upd('node_name', e.target.value)} />
             </div>
             <div>
               <label className="block text-xs text-text-muted mb-1">
-                Node Type <span style={{ color: '#ff6b6b' }}>*</span>
+                Node Type <span style={{ color: '#ff5c5c' }}>*</span>
               </label>
               <select className="select w-full text-sm" value={form.node_type}
                 onChange={e => upd('node_type', e.target.value)}>
@@ -538,7 +538,7 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
           {/* Row 2: Server */}
           <div>
             <label className="block text-xs text-text-muted mb-1">
-              Server Address <span style={{ color: '#ff6b6b' }}>*</span>
+              Server Address <span style={{ color: '#ff5c5c' }}>*</span>
             </label>
             <input className="input w-full text-sm font-mono"
               placeholder="host:port — e.g. mt5-live.broker.com:443"
@@ -549,7 +549,7 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-text-muted mb-1">
-                Manager Login <span style={{ color: '#ff6b6b' }}>*</span>
+                Manager Login <span style={{ color: '#ff5c5c' }}>*</span>
               </label>
               <input className="input w-full text-sm font-mono" type="text"
                 placeholder="e.g. 500"
@@ -560,7 +560,7 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
                 Password
                 {mode === 'edit'
                   ? <span className="font-normal text-text-muted ml-1">(blank = keep)</span>
-                  : <span style={{ color: '#ff6b6b' }}> *</span>}
+                  : <span style={{ color: '#ff5c5c' }}> *</span>}
               </label>
               <div style={{ position: 'relative' }}>
                 <input className="input w-full text-sm" style={{ paddingRight: 36 }}
@@ -588,7 +588,7 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
             </button>
             {testState === 'testing' && <span className="text-xs text-text-muted">Connecting…</span>}
             {testState === 'ok'      && <span className="text-xs" style={{ color: '#66e07a' }}>Connected{testLatency ? ` — ${testLatency}ms` : ''}</span>}
-            {testState === 'fail'    && <span className="text-xs" style={{ color: '#ff6b6b' }}>Connection failed</span>}
+            {testState === 'fail'    && <span className="text-xs" style={{ color: '#ff5c5c' }}>Connection failed</span>}
           </div>
 
           <div className="border-t border-border" />
@@ -611,7 +611,7 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
                   <button key={flag} type="button" onClick={() => toggleFlag(flag)}
                     className="px-2 py-0.5 rounded text-xs font-semibold transition-colors"
                     style={form.pump_flags.includes(flag)
-                      ? { backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }
+                      ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
                       : { color: '#888', border: '1px solid #444', backgroundColor: 'transparent' }}>
                     {flag}
                   </button>
@@ -672,14 +672,14 @@ function DeleteModal({ node, onClose, onConfirm }: {
       style={{ backgroundColor: 'rgba(0,0,0,.72)' }}>
       <div className="panel w-full max-w-sm mx-4" style={{ backgroundColor: '#232225' }}>
         <div className="panel-header">
-          <span className="text-sm font-semibold" style={{ color: '#ff6b6b' }}>Delete Node</span>
+          <span className="text-sm font-semibold" style={{ color: '#ff5c5c' }}>Delete Node</span>
           <button onClick={onClose} className="btn-icon text-text-muted"><IcoX /></button>
         </div>
         <div className="p-5 space-y-4">
           {isProtected && (
             <div className="flex items-start gap-2 p-3 rounded text-xs"
               style={{ backgroundColor: '#2a1810', border: '1px solid #7a3f20' }}>
-              <span style={{ color: '#ff6b6b', flexShrink: 0, marginTop: 1 }}><IcoWarning /></span>
+              <span style={{ color: '#ff5c5c', flexShrink: 0, marginTop: 1 }}><IcoWarning /></span>
               <span style={{ color: '#e09a55' }}>
                 The <strong>MASTER</strong> node cannot be deleted. Promote the STANDBY node first, then delete.
               </span>
@@ -693,7 +693,7 @@ function DeleteModal({ node, onClose, onConfirm }: {
             <button onClick={onConfirm} disabled={isProtected} className="btn text-sm"
               style={isProtected
                 ? { backgroundColor: '#3a3a3c', color: '#666', cursor: 'not-allowed' }
-                : { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+                : { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
               Delete Node
             </button>
           </div>
@@ -893,7 +893,7 @@ function GroupsTab({ nodes }: { nodes: MT5Node[] }) {
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 rounded text-xs"
-          style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+          style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
           <IcoWarning />{error}
         </div>
       )}
@@ -985,7 +985,7 @@ function GroupsTab({ nodes }: { nodes: MT5Node[] }) {
                       { label: 'Leverage',         value: `1:${selected.leverage}` },
                       { label: 'Margin Mode',      value: `${MARGIN_MODE[selected.margin_mode] ?? selected.margin_mode} (${selected.margin_mode})` },
                       { label: 'Margin Call',      value: `${selected.margin_call.toFixed(1)}%`,  color: '#e0d066' },
-                      { label: 'Margin Stop-Out',  value: `${selected.margin_stopout.toFixed(1)}%`, color: '#ff6b6b' },
+                      { label: 'Margin Stop-Out',  value: `${selected.margin_stopout.toFixed(1)}%`, color: '#ff5c5c' },
                       { label: 'Order Limit',      value: selected.limit_orders    === 0 ? 'Unlimited' : String(selected.limit_orders) },
                       { label: 'Position Limit',   value: selected.limit_positions === 0 ? 'Unlimited' : String(selected.limit_positions) },
                       { label: 'Trade Flags (raw)', value: `0x${selected.trade_flags.toString(16).toUpperCase().padStart(4,'0')}` },
@@ -1125,7 +1125,7 @@ function SymbolsTab({ nodes }: { nodes: MT5Node[] }) {
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 rounded text-xs"
-          style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+          style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
           <IcoWarning />{error}
         </div>
       )}
@@ -1213,8 +1213,8 @@ function SymbolsTab({ nodes }: { nodes: MT5Node[] }) {
                       { label: 'Volume Max',      value: selected.volume_max.toLocaleString() },
                       { label: 'Margin Initial',  value: selected.margin_initial === 0 ? '—' : selected.margin_initial.toFixed(2) },
                       { label: 'Spread',          value: selected.spread === 0 ? 'Variable' : `${selected.spread} pts` },
-                      { label: 'Swap Long',       value: selected.swap_long.toFixed(4),  color: selected.swap_long  < 0 ? '#ff6b6b' : '#66e07a' },
-                      { label: 'Swap Short',      value: selected.swap_short.toFixed(4), color: selected.swap_short < 0 ? '#ff6b6b' : '#66e07a' },
+                      { label: 'Swap Long',       value: selected.swap_long.toFixed(4),  color: selected.swap_long  < 0 ? '#ff5c5c' : '#66e07a' },
+                      { label: 'Swap Short',      value: selected.swap_short.toFixed(4), color: selected.swap_short < 0 ? '#ff5c5c' : '#66e07a' },
                       { label: 'Trade Mode',      value: `${TRADE_MODE[selected.trade_mode] ?? selected.trade_mode} (${selected.trade_mode})` },
                       { label: 'Calc Mode',       value: `${CALC_MODE[selected.calc_mode]  ?? selected.calc_mode}  (${selected.calc_mode})` },
                     ] as { label: string; value: string; color?: string }[]).map(({ label, value, color }) => (
@@ -1367,7 +1367,7 @@ function BookPanel({ book, rows, onRemove, onReassign }: {
             {/* Remove */}
             <button onClick={handleRemove}
               className="text-xs px-2 py-1 rounded border transition-colors"
-              style={{ color: '#ff6b6b', borderColor: '#7a2f36', backgroundColor: 'transparent' }}
+              style={{ color: '#ff5c5c', borderColor: '#7a2f36', backgroundColor: 'transparent' }}
               onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2c1417')}
               onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}>
               Remove
@@ -1635,7 +1635,7 @@ function BookMappingTab({ nodes }: { nodes: MT5Node[] }) {
       {/* Error banner */}
       {error && (
         <div className="flex items-start gap-2 p-3 rounded text-xs"
-          style={{ backgroundColor: '#2c1417', border: '1px solid #7a2f36', color: '#ff6b6b' }}>
+          style={{ backgroundColor: '#2c1417', border: '1px solid #7a2f36', color: '#ff5c5c' }}>
           <span style={{ flexShrink: 0, marginTop: 1 }}><IcoWarning /></span>
           {error}
         </div>
@@ -1681,7 +1681,7 @@ function BookMappingTab({ nodes }: { nodes: MT5Node[] }) {
             <button onClick={handleAssign} disabled={!selected.size || assigning}
               className="ml-auto btn text-xs px-3 py-1"
               style={selected.size && !assigning
-                ? { backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }
+                ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
                 : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
               {assigning ? 'Assigning…' : `Assign${selected.size ? ` (${selected.size})` : ''}`}
             </button>
@@ -2066,10 +2066,10 @@ function PredictionsTab() {
   const tStyle = (type: string) =>
     type === 'success' ? { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }
     : type === 'warn'  ? { backgroundColor: '#28220a', color: '#e0d066', border: '1px solid #6a6530' }
-    :                    { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' };
+    :                    { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' };
 
   const trendColor = (t: string | null) =>
-    t === 'Up' || t === 'Bullish' ? '#66e07a' : t === 'Down' || t === 'Bearish' ? '#ff6b6b' : '#888';
+    t === 'Up' || t === 'Bullish' ? '#66e07a' : t === 'Down' || t === 'Bearish' ? '#ff5c5c' : '#888';
 
   if (loading) {
     return (
@@ -2089,7 +2089,7 @@ function PredictionsTab() {
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded text-xs font-medium shadow-lg"
           style={tStyle(pToast.type)}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
-            backgroundColor: pToast.type === 'success' ? '#66e07a' : pToast.type === 'warn' ? '#e0d066' : '#ff6b6b' }} />
+            backgroundColor: pToast.type === 'success' ? '#66e07a' : pToast.type === 'warn' ? '#e0d066' : '#ff5c5c' }} />
           {pToast.msg}
         </div>
       )}
@@ -2135,7 +2135,7 @@ function PredictionsTab() {
                 {autoMatched.map(s => (
                   <tr key={s.mt5_symbol} className="border-t border-border">
                     <td className="px-3 py-1.5 font-mono font-semibold text-text-primary">{s.mt5_symbol}</td>
-                    <td className="px-3 py-1.5 font-mono" style={{ color: '#4ecdc4' }}>{s.nexday_symbol}</td>
+                    <td className="px-3 py-1.5 font-mono" style={{ color: '#49b3b3' }}>{s.nexday_symbol}</td>
                     <td className="px-3 py-1.5 text-text-muted">{s.exchange || '—'}</td>
                     <td className="px-3 py-1.5">
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
@@ -2209,7 +2209,7 @@ function PredictionsTab() {
               {mappings.length > 0 && (
                 <button onClick={() => setClearConfirm(true)}
                   className="btn text-xs px-2 py-1"
-                  style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+                  style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
                   Clear All
                 </button>
               )}
@@ -2241,7 +2241,7 @@ function PredictionsTab() {
                   {filteredMappings.map(m => (
                     <tr key={m.id} className="border-t border-border hover:bg-surface-hover transition-colors">
                       <td className="px-3 py-2 font-mono font-semibold text-text-primary">{m.mt5_symbol}</td>
-                      <td className="px-3 py-2 font-mono" style={{ color: '#4ecdc4' }}>{m.nexday_symbol}</td>
+                      <td className="px-3 py-2 font-mono" style={{ color: '#49b3b3' }}>{m.nexday_symbol}</td>
                       <td className="px-3 py-2 text-text-secondary">{m.security_type || '—'}</td>
                       <td className="px-3 py-2 text-text-muted truncate max-w-[160px]" title={m.nexday_description}>
                         {m.nexday_description || '—'}
@@ -2262,7 +2262,7 @@ function PredictionsTab() {
                           <div className="flex items-center gap-1 justify-end">
                             <button onClick={() => handleDelete(m.id)}
                               className="text-[10px] px-1.5 py-0.5 rounded transition-colors"
-                              style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+                              style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
                               Confirm
                             </button>
                             <button onClick={() => setDeleteId(null)}
@@ -2309,7 +2309,7 @@ function PredictionsTab() {
               <div>
                 <label className="block text-xs text-text-muted mb-1">
                   NexDay Symbol
-                  {formNexDay && <span className="ml-2 font-mono" style={{ color: '#4ecdc4' }}>{formNexDay}</span>}
+                  {formNexDay && <span className="ml-2 font-mono" style={{ color: '#49b3b3' }}>{formNexDay}</span>}
                 </label>
                 <input value={ndSearch}
                   onChange={e => { setNdSearch(e.target.value); setFormNexDay(''); }}
@@ -2322,7 +2322,7 @@ function PredictionsTab() {
                         <button key={s.nexday_symbol}
                           onClick={() => { setFormNexDay(s.nexday_symbol); setNdSearch(s.nexday_symbol); }}
                           className="w-full text-left px-2.5 py-1.5 text-xs flex items-center justify-between hover:bg-surface-hover transition-colors"
-                          style={formNexDay === s.nexday_symbol ? { backgroundColor: '#0d3a3a', color: '#4ecdc4' } : {}}>
+                          style={formNexDay === s.nexday_symbol ? { backgroundColor: '#0d3a3a', color: '#49b3b3' } : {}}>
                           <span>
                             <span className="font-mono font-semibold text-text-primary">{s.nexday_symbol}</span>
                             {s.description && <span className="ml-2 text-text-muted">{s.description}</span>}
@@ -2440,7 +2440,7 @@ function PredictionsTab() {
                       <span className="text-[10px] px-1.5 py-0.5 rounded"
                         style={h.status === 'completed'
                           ? { backgroundColor: '#0d1f12', color: '#66e07a', border: '1px solid #1e4d28' }
-                          : { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+                          : { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
                         {h.status}
                       </span>
                     </div>
@@ -2461,13 +2461,13 @@ function PredictionsTab() {
           style={{ backgroundColor: 'rgba(0,0,0,.72)' }}>
           <div className="panel w-full max-w-sm mx-4" style={{ backgroundColor: '#232225' }}>
             <div className="panel-header">
-              <span className="text-sm font-semibold" style={{ color: '#ff6b6b' }}>Clear All Mappings</span>
+              <span className="text-sm font-semibold" style={{ color: '#ff5c5c' }}>Clear All Mappings</span>
               <button onClick={() => setClearConfirm(false)} className="btn-icon text-text-muted"><IcoX /></button>
             </div>
             <div className="p-5 space-y-4">
               <div className="flex items-start gap-2 p-3 rounded text-xs"
                 style={{ backgroundColor: '#2a1810', border: '1px solid #7a3f20' }}>
-                <span style={{ color: '#ff6b6b', flexShrink: 0, marginTop: 1 }}><IcoWarning /></span>
+                <span style={{ color: '#ff5c5c', flexShrink: 0, marginTop: 1 }}><IcoWarning /></span>
                 <span style={{ color: '#e09a55' }}>
                   This will delete all <strong>{mappings.length}</strong> NexDay mappings.
                   The Signal column will show <strong>—</strong> for all symbols until re-mapped.
@@ -2478,7 +2478,7 @@ function PredictionsTab() {
                 <button onClick={() => setClearConfirm(false)} className="btn btn-ghost text-sm">Cancel</button>
                 <button onClick={handleClearAll}
                   className="btn text-sm"
-                  style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+                  style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
                   Clear All
                 </button>
               </div>
@@ -2698,10 +2698,10 @@ export function NodeManagementPage() {
                 style={
                   toastType === 'success' ? { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }
                   : toastType === 'warn'  ? { backgroundColor: '#28220a', color: '#e0d066', border: '1px solid #6a6530' }
-                  :                        { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }
+                  :                        { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }
                 }>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
-                  backgroundColor: toastType === 'success' ? '#66e07a' : toastType === 'warn' ? '#e0d066' : '#ff6b6b' }} />
+                  backgroundColor: toastType === 'success' ? '#66e07a' : toastType === 'warn' ? '#e0d066' : '#ff5c5c' }} />
                 {toast}
               </span>
             )}

@@ -73,7 +73,7 @@ export function ResetPasswordPage() {
               <input id="rp-new" type="password" value={newPassword}
                 onChange={e => setNewPassword(e.target.value)}
                 onFocus={() => setNewFocused(true)} onBlur={() => setNewFocused(false)}
-                style={{ ...A.input, borderColor: newFocused ? '#4ecdc4' : '#3a3840' }}
+                style={{ ...A.input, borderColor: newFocused ? '#49b3b3' : '#3a3840' }}
                 placeholder="At least 10 characters" autoComplete="new-password"
                 autoFocus disabled={!resetToken} />
               {newPassword.length > 0 && newPassword.length < 10 && (
@@ -90,8 +90,8 @@ export function ResetPasswordPage() {
                 onFocus={() => setCfFocused(true)} onBlur={() => setCfFocused(false)}
                 style={{
                   ...A.input,
-                  borderColor: cfFocused ? '#4ecdc4'
-                    : confirmPassword && confirmPassword !== newPassword ? '#ff6b6b'
+                  borderColor: cfFocused ? '#49b3b3'
+                    : confirmPassword && confirmPassword !== newPassword ? '#ff5c5c'
                     : '#3a3840',
                 }}
                 placeholder="Re-enter new password" autoComplete="new-password"

@@ -42,7 +42,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{
     <div className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-xs">
       <p className="text-white font-medium">{d.name}</p>
       {d.login  !== undefined && <p className="text-[#999] font-mono">Login: {d.login}</p>}
-      {d.long   !== undefined && <p className="text-[#4ecdc4] font-mono">Long: {d.long.toFixed(2)}</p>}
+      {d.long   !== undefined && <p className="text-[#49b3b3] font-mono">Long: {d.long.toFixed(2)}</p>}
       {d.short  !== undefined && <p className="text-[#e0a020] font-mono">Short: {d.short.toFixed(2)}</p>}
       <p className="text-white font-mono">
         {d.value > 1000 ? `$${d.value.toLocaleString()}` : `${d.value.toFixed(2)} lots`}
@@ -83,7 +83,7 @@ function TraderConcentrationChart({ positions }: { positions: Position[] }) {
         <select
           value={mode}
           onChange={(e) => setMode(e.target.value as 'gross' | 'net')}
-          className="bg-[#313032] border border-[#606060] rounded px-1 py-0.5 text-[10px] text-white"
+          className="bg-[#232326] border border-[#606060] rounded px-1 py-0.5 text-[10px] text-white"
         >
           <option value="gross">Gross</option>
           <option value="net">Net</option>

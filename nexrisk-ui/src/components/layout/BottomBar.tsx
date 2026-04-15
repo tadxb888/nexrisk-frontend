@@ -34,7 +34,7 @@ function StatusItem({ label, value, status = 'ok', unit }: StatusItemProps) {
         'font-mono',
         status === 'ok' && 'text-white',
         status === 'warning' && 'text-[#e0a020]',
-        status === 'error' && 'text-[#ff6b6b]'
+        status === 'error' && 'text-[#ff5c5c]'
       )}>
         {value}{unit && <span className="text-[#999] text-xs ml-0.5">{unit}</span>}
       </span>
@@ -71,18 +71,18 @@ export function BottomBar() {
   }, [health, isError, setHealth, setConnected]);
 
   return (
-    <footer className="h-7 bg-[#313032] border-t border-[#808080] flex items-center justify-between px-4 text-xs shrink-0">
+    <footer className="h-7 bg-[#232326] border-t border-[#808080] flex items-center justify-between px-4 text-xs shrink-0">
       {/* Left Section - Connection Status & Server Resources */}
       <div className="flex items-center gap-4">
         {/* Connection Status */}
         <div className="flex items-center gap-2">
           <span className={clsx(
             'w-2 h-2 rounded-full',
-            isConnected ? 'bg-[#66e07a]' : 'bg-[#ff6b6b]'
+            isConnected ? 'bg-[#66e07a]' : 'bg-[#ff5c5c]'
           )} />
           <span className={clsx(
             'text-sm',
-            isConnected ? 'text-[#66e07a]' : 'text-[#ff6b6b]'
+            isConnected ? 'text-[#66e07a]' : 'text-[#ff5c5c]'
           )}>
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>

@@ -26,17 +26,17 @@ import React, {
 // ══════════════════════════════════════════════════════════════
 // CONSTANTS — color tokens (matches BBookPage reference)
 // ══════════════════════════════════════════════════════════════
-const BG_PAGE    = '#313032';
+const BG_PAGE    = '#232326';
 const BG_PANEL   = '#252429';
 const BG_SECTION = '#1e1d21';
 const BG_FIELD   = '#1a191e';
 const BORDER     = '#3a3a3e';
 const BORDER_MD  = '#505050';
 const BORDER_HDR = '#808080';
-const TEAL       = '#4ecdc4';
+const TEAL       = '#49b3b3';
 const GREEN      = '#66e07a';
 const AMBER      = '#e0a020';
-const RED        = '#ff6b6b';
+const RED        = '#ff5c5c';
 const TEXT_PRI   = '#fff';
 const TEXT_SEC   = '#ccc';
 const TEXT_MUT   = '#888';

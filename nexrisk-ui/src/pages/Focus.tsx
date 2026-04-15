@@ -1578,7 +1578,7 @@ export function FocusPage() {
 
       {/* Detail Panel - Full Height */}
       {(selectedTrader || selectedCluster) && (
-        <div className="w-[600px] h-full bg-[#313032] flex-shrink-0 border-l border-border">
+        <div className="w-[600px] h-full bg-[#232326] flex-shrink-0 border-l border-border">
           {selectedTrader ? (
             <TraderDetailPanel login={selectedTrader} />
           ) : selectedCluster ? (

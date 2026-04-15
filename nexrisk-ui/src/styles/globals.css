@@ -12,7 +12,7 @@
   }
 
   body {
-    background-color: #313032;
+    background-color: #232326;
     color: #ffffff;
     font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 16px;
@@ -25,7 +25,7 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: #313032;
+    background: #232326;
   }
 
   ::-webkit-scrollbar-thumb {
@@ -70,7 +70,7 @@
 
   .badge-critical {
     background-color: #2c1417;
-    color: #ff6b6b;
+    color: #ff5c5c;
     border: 1px solid #7a2f36;
   }
 
@@ -97,7 +97,7 @@
   }
 
   .status-dot-critical {
-    background-color: #ff6b6b;
+    background-color: #ff5c5c;
   }
 
   .status-dot-high {
@@ -144,7 +144,7 @@
   }
 
   .input:focus {
-    border-color: #4ecdc4;
+    border-color: #49b3b3;
     outline: none;
   }
 
@@ -156,7 +156,7 @@
   }
 
   .select:focus {
-    border-color: #4ecdc4;
+    border-color: #49b3b3;
     outline: none;
   }
 
@@ -169,7 +169,7 @@
   }
 
   .pnl-negative {
-    color: #ff6b6b !important;
+    color: #ff5c5c !important;
   }
 
   .pnl-neutral {
@@ -215,7 +215,7 @@
 .ag-advanced-filter input:focus,
 .ag-advanced-filter .ag-input-field-input:focus,
 .ag-advanced-filter .ag-picker-field-wrapper:focus-within {
-  border-color: #4ecdc4 !important;
+  border-color: #49b3b3 !important;
   box-shadow: none !important;
   outline: none !important;
 }

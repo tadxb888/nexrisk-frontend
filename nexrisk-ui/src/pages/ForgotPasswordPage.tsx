@@ -56,7 +56,7 @@ export function ForgotPasswordPage() {
                   onChange={e => setEmail(e.target.value)}
                   onFocus={() => setEmailFocused(true)}
                   onBlur={() => setEmailFocused(false)}
-                  style={{ ...A.input, borderColor: emailFocused ? '#4ecdc4' : '#3a3840' }}
+                  style={{ ...A.input, borderColor: emailFocused ? '#49b3b3' : '#3a3840' }}
                   placeholder="you@example.com" autoComplete="email" autoFocus required />
               </div>
 

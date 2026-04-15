@@ -21,11 +21,11 @@ function StepBar({ current }: { current: Step }) {
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
               <div style={{
                 width: 28, height: 28, borderRadius: '50%',
-                border: `2px solid ${active || done ? '#4ecdc4' : '#2e2c32'}`,
-                background: done ? '#4ecdc4' : active ? 'rgba(78,205,196,0.12)' : 'transparent',
+                border: `2px solid ${active || done ? '#49b3b3' : '#2e2c32'}`,
+                background: done ? '#49b3b3' : active ? 'rgba(78,205,196,0.12)' : 'transparent',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 11, fontWeight: 700,
-                color: done ? '#131214' : active ? '#4ecdc4' : '#3a3840',
+                color: done ? '#131214' : active ? '#49b3b3' : '#3a3840',
                 fontFamily: '"IBM Plex Mono", monospace',
               }}>
                 {done ? '✓' : n}
@@ -33,13 +33,13 @@ function StepBar({ current }: { current: Step }) {
               <span style={{
                 fontSize: 10, marginTop: 5, whiteSpace: 'nowrap',
                 fontFamily: '"IBM Plex Mono", monospace',
-                color: active ? '#e0e0e0' : done ? '#4ecdc4' : '#3a3840',
+                color: active ? '#e0e0e0' : done ? '#49b3b3' : '#3a3840',
               }}>{label}</span>
             </div>
             {i < 2 && (
               <div style={{
                 height: 2, flex: 1,
-                background: n < current ? '#4ecdc4' : '#2e2c32',
+                background: n < current ? '#49b3b3' : '#2e2c32',
                 marginBottom: 20, marginLeft: -6, marginRight: -6,
               }} />
             )}
@@ -87,7 +87,7 @@ function TotpInput({ value, onChange, hasError }: {
         <input key={i} ref={refs[i]} type="text" inputMode="numeric" maxLength={1} value={d}
           onChange={e => handleChange(i, e.target.value)}
           onKeyDown={e => handleKeyDown(i, e)}
-          style={{ ...A.digitInput, borderColor: hasError ? '#ff6b6b' : d ? '#4ecdc4' : '#2e2c32' }}
+          style={{ ...A.digitInput, borderColor: hasError ? '#ff5c5c' : d ? '#49b3b3' : '#2e2c32' }}
           autoComplete="one-time-code" autoFocus={i === 0}
         />
       ))}
@@ -199,7 +199,7 @@ export function SetupPage() {
                 <input id="sp-pw" type="password" value={password}
                   onChange={e => setPassword(e.target.value)}
                   onFocus={() => setPwFocused(true)} onBlur={() => setPwFocused(false)}
-                  style={{ ...A.input, borderColor: pwFocused ? '#4ecdc4' : '#2e2c32' }}
+                  style={{ ...A.input, borderColor: pwFocused ? '#49b3b3' : '#2e2c32' }}
                   placeholder="At least 10 characters" autoComplete="new-password"
                   autoFocus disabled={!inviteToken} />
                 {password.length > 0 && password.length < 10 && (
@@ -216,8 +216,8 @@ export function SetupPage() {
                   onFocus={() => setCfFocused(true)} onBlur={() => setCfFocused(false)}
                   style={{
                     ...A.input,
-                    borderColor: cfFocused ? '#4ecdc4'
-                      : confirmPassword && confirmPassword !== password ? '#ff6b6b'
+                    borderColor: cfFocused ? '#49b3b3'
+                      : confirmPassword && confirmPassword !== password ? '#ff5c5c'
                       : '#2e2c32',
                   }}
                   placeholder="Re-enter your password" autoComplete="new-password"
@@ -272,7 +272,7 @@ export function SetupPage() {
 
             <div style={{ marginBottom: 24 }}>
               <button
-                style={{ background: 'none', border: 'none', color: '#4ecdc4', fontSize: 11,
+                style={{ background: 'none', border: 'none', color: '#49b3b3', fontSize: 11,
                   cursor: 'pointer', fontFamily: '"IBM Plex Mono", monospace', padding: 0, marginBottom: 8 }}
                 onClick={() => setShowSecret(v => !v)}>
                 {showSecret ? '▲ Hide' : '▼ Show'} manual entry key

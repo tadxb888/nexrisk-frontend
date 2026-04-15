@@ -6,11 +6,11 @@ import {
 
 // Muted gradient colors for charts
 const DONUT_COLORS = ['#3d5a80', '#5c4d7d', '#3d7d7d', '#8b7355', '#6b5b95', '#88b04b'];
-const LINE_COLOR = '#4ecdc4';
+const LINE_COLOR = '#49b3b3';
 const GAUGE_COLORS = {
   success: '#66e07a',
   warning: '#e0d066',
-  danger: '#ff6b6b',
+  danger: '#ff5c5c',
   background: '#3a3a3c',
 };
 
@@ -87,7 +87,7 @@ function HedgeSuccessGauge({ hedges }: { hedges: ABookHedge[] }) {
   ];
 
   return (
-    <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#313032' }}>
+    <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#232326' }}>
       <div className="mb-1">
         <h4 className="text-sm font-semibold text-white">Hedge Status Rate</h4>
         <p className="text-xs text-[#999]">Overall success rate</p>
@@ -131,7 +131,7 @@ function HedgeSuccessGauge({ hedges }: { hedges: ABookHedge[] }) {
           <span className="text-white">{stats.failed}</span>
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#ff6b6b' }} />
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#ff5c5c' }} />
           <span className="text-white">{stats.rejected}</span>
         </div>
       </div>
@@ -171,7 +171,7 @@ function SlippageLatencyChart({ hedges }: { hedges: ABookHedge[] }) {
   }, [data]);
 
   return (
-    <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#313032' }}>
+    <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#232326' }}>
       <div className="flex items-start justify-between mb-1">
         <div>
           <h4 className="text-sm font-semibold text-white">
@@ -261,7 +261,7 @@ function LPVolumeShareChart({ hedges }: { hedges: ABookHedge[] }) {
   const total = data.reduce((s, d) => s + d.value, 0);
 
   return (
-    <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#313032' }}>
+    <div className="rounded p-2 flex flex-col h-full" style={{ backgroundColor: '#232326' }}>
       <div className="mb-1">
         <h4 className="text-sm font-semibold text-white">LP volume share</h4>
         <p className="text-xs text-[#999]">Total: {total.toFixed(2)} lots</p>

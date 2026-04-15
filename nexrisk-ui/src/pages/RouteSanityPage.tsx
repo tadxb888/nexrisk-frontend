@@ -46,13 +46,13 @@ const UPTIME_TICK_MS = 5_000;
 const LS_KEY         = 'nexrisk:route-sanity:thresholds-v3';
 
 // ── Color tokens ──────────────────────────────────────────────
-const BG_PAGE   = '#313032';
+const BG_PAGE   = '#232326';
 const BG_PANEL  = '#252429';
 const BG_HEADER = '#1e1e22';
 const BORDER    = '#3a3a3e';
 const AMBER     = '#e0a020';
 const GREEN     = '#66e07a';
-const RED       = '#ff6b6b';
+const RED       = '#ff5c5c';
 
 // ══════════════════════════════════════════════════════════════
 // THEME  (matches BBookPage / ExecutionReport reference)
@@ -322,7 +322,7 @@ function PanelHdr({
       backgroundColor: BG_HEADER, flexShrink: 0,
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 9, color: '#4ecdc4', textTransform: 'uppercase', letterSpacing: '0.09em', fontWeight: 600 }}>
+        <span style={{ fontSize: 9, color: '#49b3b3', textTransform: 'uppercase', letterSpacing: '0.09em', fontWeight: 600 }}>
           {label}
         </span>
         {sub && <span style={{ fontSize: 9, color: '#fff' }}>{sub}</span>}
@@ -720,7 +720,7 @@ export default function RouteSanityPage() {
                 type="checkbox"
                 checked={isSelected && !!p.context?.threshOpen}
                 onChange={() => p.context?.onThreshToggle?.(p.data?.lp_id ?? '')}
-                style={{ cursor: 'pointer', accentColor: '#4ecdc4' }}
+                style={{ cursor: 'pointer', accentColor: '#49b3b3' }}
               />
             </div>
           );
@@ -823,7 +823,7 @@ export default function RouteSanityPage() {
     {
       field: 'group', headerName: 'Level',
       cellStyle: p => ({
-        color:      p.value === 'Symbol' ? '#fff' : '#4ecdc4',
+        color:      p.value === 'Symbol' ? '#fff' : '#49b3b3',
         fontSize:   10,
         letterSpacing: '0.04em',
       }),
@@ -990,7 +990,7 @@ export default function RouteSanityPage() {
         backgroundColor: BG_PANEL, flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: '#4ecdc4' }}><RouteSanityIcon size={15} /></span>
+          <span style={{ color: '#49b3b3' }}><RouteSanityIcon size={15} /></span>
           <span style={{ color: '#fff', fontSize: 13, fontWeight: 600 }}>Route Sanity</span>
           <span style={{ color: '#aaa', fontSize: 9, marginLeft: 2, fontFamily: 'IBM Plex Mono, monospace' }}>
             Today
@@ -1073,7 +1073,7 @@ export default function RouteSanityPage() {
                 tooltipShowDelay={300}
                 getRowStyle={p =>
                   p.data?.lp_id === selectedLpId
-                    ? { backgroundColor: 'rgba(78,205,196,0.07)', borderLeft: '2px solid #4ecdc4' }
+                    ? { backgroundColor: 'rgba(78,205,196,0.07)', borderLeft: '2px solid #49b3b3' }
                     : undefined
                 }
               />
@@ -1089,7 +1089,7 @@ export default function RouteSanityPage() {
             backgroundColor: BORDER,
             transition: 'background-color 0.15s',
           }}
-          onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#4ecdc4')}
+          onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#49b3b3')}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = BORDER)}
         />
 
@@ -1144,7 +1144,7 @@ export default function RouteSanityPage() {
               backgroundColor: BORDER,
               transition: 'background-color 0.15s',
             }}
-            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#4ecdc4')}
+            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#49b3b3')}
             onMouseLeave={e => (e.currentTarget.style.backgroundColor = BORDER)}
           />
         )}
@@ -1171,7 +1171,7 @@ export default function RouteSanityPage() {
                     fontSize: 10,
                     color: '#fff',
                     background: isDirty ? '#1a3a2a' : 'none',
-                    border: `1px solid ${isDirty ? '#2f6a3d' : '#4ecdc4'}`,
+                    border: `1px solid ${isDirty ? '#2f6a3d' : '#49b3b3'}`,
                     borderRadius: 3,
                     padding: '2px 10px',
                     cursor: 'pointer',

@@ -247,14 +247,14 @@ const STATE_CFG: Record<LPState, { color: string; bg: string; border: string; la
   CONNECTING:    { color: '#e0d066', bg: '#2a2816', border: '#6a6530', label: 'Connecting...' },
   CONNECTED:     { color: '#66e07a', bg: '#162a1c', border: '#2f6a3d', label: 'Connected' },
   DEGRADED:      { color: '#e09a55', bg: '#2a2016', border: '#6a4a2f', label: 'Degraded' },
-  QUARANTINED:   { color: '#ff6b6b', bg: '#2c1417', border: '#7a2f36', label: 'Quarantined' },
-  SESSION_ERROR: { color: '#ff6b6b', bg: '#2c1417', border: '#7a2f36', label: 'Session Error' },
+  QUARANTINED:   { color: '#ff5c5c', bg: '#2c1417', border: '#7a2f36', label: 'Quarantined' },
+  SESSION_ERROR: { color: '#ff5c5c', bg: '#2c1417', border: '#7a2f36', label: 'Session Error' },
 };
 
 const HEALTH_CFG: Record<HealthStatus, { color: string; bg: string; border: string }> = {
   HEALTHY:   { color: '#66e07a', bg: '#162a1c', border: '#2f6a3d' },
   DEGRADED:  { color: '#e09a55', bg: '#2a2016', border: '#6a4a2f' },
-  UNHEALTHY: { color: '#ff6b6b', bg: '#2c1417', border: '#7a2f36' },
+  UNHEALTHY: { color: '#ff5c5c', bg: '#2c1417', border: '#7a2f36' },
   UNKNOWN:   { color: '#a0a0b0', bg: '#2a2a2c', border: '#484848' },
 };
 
@@ -263,7 +263,7 @@ const SESSION_CFG: Record<SessionState, string> = {
   CONNECTING: '#e0d066',
   LOGGED_ON: '#66e07a',
   RECONNECTING: '#e09a55',
-  SESSION_ERROR: '#ff6b6b',
+  SESSION_ERROR: '#ff5c5c',
 };
 
 // ============================================================
@@ -528,13 +528,13 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
         display: 'inline-flex', alignItems: 'center',
         width: 36, height: 20, borderRadius: 10, padding: 3,
         backgroundColor: checked ? '#163a3a' : '#383838',
-        border: `1.5px solid ${checked ? '#4ecdc4' : '#505050'}`,
+        border: `1.5px solid ${checked ? '#49b3b3' : '#505050'}`,
         cursor: 'pointer', flexShrink: 0, outline: 'none',
         transition: 'background-color .15s, border-color .15s',
       }}>
       <span style={{
         display: 'block', width: 12, height: 12, borderRadius: '50%',
-        backgroundColor: checked ? '#4ecdc4' : '#888',
+        backgroundColor: checked ? '#49b3b3' : '#888',
         transform: checked ? 'translateX(16px)' : 'translateX(0)',
         transition: 'transform .15s, background-color .15s',
       }} />
@@ -662,7 +662,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
         {active ? (
           <button onClick={onStop}
             className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-            style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+            style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
             <IcoStop /> Stop
           </button>
         ) : (
@@ -700,7 +700,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
             className="btn text-xs px-2 py-1"
             style={!stopped
               ? { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }
-              : { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+              : { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
             <IcoTrash />
           </button>
         </div>
@@ -921,7 +921,7 @@ function LPFormModal({ mode, lp, onClose, onSave }: {
           <button onClick={() => onSave(form)} disabled={!canSave}
             className="btn text-xs px-4 py-1.5"
             style={canSave
-              ? { backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }
+              ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
               : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
             {mode === 'add' ? 'Create LP' : 'Save Changes'}
           </button>
@@ -991,7 +991,7 @@ function CredentialsModal({ lp, onClose, onSave }: {
             disabled={!password}
             className="btn text-xs px-4 py-1.5"
             style={password
-              ? { backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }
+              ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
               : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
             Save Credentials
           </button>
@@ -1027,7 +1027,7 @@ function DeleteModal({ lp, onClose, onConfirm }: {
           <button onClick={onClose} className="btn btn-ghost text-xs border border-border px-4 py-1.5">Cancel</button>
           <button onClick={onConfirm}
             className="btn text-xs px-4 py-1.5"
-            style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+            style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
             Delete LP
           </button>
         </div>
@@ -1079,7 +1079,7 @@ function TestModal({ lp, onClose }: {
         <div className="p-5">
           {status === 'testing' && (
             <div className="flex items-center gap-3 py-6 justify-center">
-              <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#4ecdc4 transparent transparent transparent' }} />
+              <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#49b3b3 transparent transparent transparent' }} />
               <span className="text-sm text-text-secondary">Testing FIX connectivity...</span>
             </div>
           )}
@@ -1090,7 +1090,7 @@ function TestModal({ lp, onClose }: {
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-sm font-semibold"
                   style={pass
                     ? { color: '#66e07a', backgroundColor: '#162a1c', border: '1px solid #2f6a3d' }
-                    : { color: '#ff6b6b', backgroundColor: '#2c1417', border: '1px solid #7a2f36' }}>
+                    : { color: '#ff5c5c', backgroundColor: '#2c1417', border: '1px solid #7a2f36' }}>
                   {pass ? <IcoCheck /> : <IcoX size={12} />}
                   {pass ? 'PASS' : 'FAIL'}
                 </span>
@@ -1101,7 +1101,7 @@ function TestModal({ lp, onClose }: {
               <div className="p-3 rounded space-y-1" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-text-secondary">Trading Session</span>
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: result.trading_session.connected ? '#66e07a' : '#ff6b6b' }} />
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: result.trading_session.connected ? '#66e07a' : '#ff5c5c' }} />
                 </div>
                 {result.trading_session.connected ? (
                   <div className="text-xs text-text-muted">
@@ -1111,7 +1111,7 @@ function TestModal({ lp, onClose }: {
                     )}
                   </div>
                 ) : (
-                  <div className="text-xs" style={{ color: '#ff6b6b' }}>{result.trading_session.error}</div>
+                  <div className="text-xs" style={{ color: '#ff5c5c' }}>{result.trading_session.error}</div>
                 )}
               </div>
 
@@ -1120,21 +1120,21 @@ function TestModal({ lp, onClose }: {
                 <div className="p-3 rounded space-y-1" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-text-secondary">Market Data Session</span>
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: result.md_session.connected ? '#66e07a' : '#ff6b6b' }} />
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: result.md_session.connected ? '#66e07a' : '#ff5c5c' }} />
                   </div>
                   {result.md_session.connected ? (
                     <div className="text-xs text-text-muted">
                       Logon: <span className="text-text-primary font-mono">{result.md_session.logon_time_ms}ms</span>
                     </div>
                   ) : (
-                    <div className="text-xs" style={{ color: '#ff6b6b' }}>{result.md_session.error}</div>
+                    <div className="text-xs" style={{ color: '#ff5c5c' }}>{result.md_session.error}</div>
                   )}
                 </div>
               )}
             </div>
           )}
           {error && (
-            <div className="p-3 rounded text-xs" style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+            <div className="p-3 rounded text-xs" style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
               {error}
             </div>
           )}
@@ -1168,7 +1168,7 @@ function LPListView({ lps, healthMap, onAdd, onEdit, onDelete, onStart, onStop, 
       <div className="flex items-center justify-end">
         <button onClick={onAdd}
           className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
-          style={{ backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }}>
+          style={{ backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }}>
           <IcoPlus /> Add LP
         </button>
       </div>
@@ -1179,7 +1179,7 @@ function LPListView({ lps, healthMap, onAdd, onEdit, onDelete, onStart, onStop, 
           <span className="text-text-muted text-sm mb-2">No liquidity providers configured</span>
           <button onClick={onAdd}
             className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
-            style={{ backgroundColor: '#163a3a', color: '#4ecdc4', border: '1px solid #2a6a6a' }}>
+            style={{ backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }}>
             <IcoPlus /> Add your first LP
           </button>
         </div>
@@ -1282,7 +1282,7 @@ function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showTo
           {isLive ? (
             <button onClick={onStop}
               className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-              style={{ backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+              style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
               <IcoStop /> Stop
             </button>
           ) : (
@@ -1306,7 +1306,7 @@ function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showTo
             className={clsx(
               'px-4 py-2.5 text-sm font-medium transition-colors border-b-2',
               tab === t.id
-                ? 'text-[#4ecdc4] border-[#4ecdc4]'
+                ? 'text-[#49b3b3] border-[#49b3b3]'
                 : t.live && !isLive
                   ? 'text-[#555] border-transparent cursor-not-allowed'
                   : 'text-text-secondary border-transparent hover:text-text-primary'
@@ -1319,7 +1319,7 @@ function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showTo
       {/* Tab content */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#4ecdc4 transparent transparent transparent' }} />
+          <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#49b3b3 transparent transparent transparent' }} />
         </div>
       ) : (
         <>
@@ -1472,7 +1472,7 @@ function InstrumentsTab({ instruments }: { instruments: Instrument[] }) {
               <td className="px-3 py-2">
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
                   style={inst.security_type === 'FOREX'
-                    ? { color: '#4ecdc4', backgroundColor: '#163a3a', border: '1px solid #2a6a6a' }
+                    ? { color: '#49b3b3', backgroundColor: '#163a3a', border: '1px solid #2a6a6a' }
                     : { color: '#e0d066', backgroundColor: '#2a2816', border: '1px solid #6a6530' }}>
                   {inst.security_type}
                 </span>
@@ -1512,7 +1512,7 @@ function PositionsTab({ positions }: { positions: LPPosition[] }) {
               <td className="px-3 py-2 font-mono text-text-secondary">{p.position_id}</td>
               <td className="px-3 py-2 font-mono text-text-primary font-semibold">{p.symbol}</td>
               <td className="px-3 py-2">
-                <span style={{ color: p.side === 'LONG' ? '#66e07a' : '#ff6b6b' }}>{p.side}</span>
+                <span style={{ color: p.side === 'LONG' ? '#66e07a' : '#ff5c5c' }}>{p.side}</span>
               </td>
               <td className="px-3 py-2 text-right font-mono text-text-primary">{p.long_qty > 0 ? p.long_qty.toLocaleString() : '—'}</td>
               <td className="px-3 py-2 text-right font-mono text-text-primary">{p.short_qty > 0 ? p.short_qty.toLocaleString() : '—'}</td>
@@ -1552,7 +1552,7 @@ function OrdersTab({ orders }: { orders: LPOrder[] }) {
             <tr key={o.clord_id} className="border-b border-border hover:bg-[#2a2a2c]">
               <td className="px-3 py-2 font-mono text-text-secondary">{o.clord_id}</td>
               <td className="px-3 py-2 font-mono text-text-primary font-semibold">{o.symbol}</td>
-              <td className="px-3 py-2"><span style={{ color: o.side === 'BUY' ? '#66e07a' : '#ff6b6b' }}>{o.side}</span></td>
+              <td className="px-3 py-2"><span style={{ color: o.side === 'BUY' ? '#66e07a' : '#ff5c5c' }}>{o.side}</span></td>
               <td className="px-3 py-2 text-text-secondary">{o.order_type}</td>
               <td className="px-3 py-2 text-right font-mono text-text-primary">{o.quantity.toLocaleString()}</td>
               <td className="px-3 py-2 text-right font-mono text-text-primary">{o.price?.toFixed(5) || 'MKT'}</td>
@@ -1613,8 +1613,8 @@ function ConfigTab({ lp }: { lp: LPConfig }) {
 function AuditTab({ entries }: { entries: AuditEntry[] }) {
   const actionColor: Record<string, string> = {
     CREATE_CONFIG: '#66e07a',
-    UPDATE_CONFIG: '#4ecdc4',
-    DELETE_CONFIG: '#ff6b6b',
+    UPDATE_CONFIG: '#49b3b3',
+    DELETE_CONFIG: '#ff5c5c',
     SET_CREDENTIALS: '#e0d066',
     START_LP: '#66e07a',
     STOP_LP: '#e09a55',
@@ -1646,7 +1646,7 @@ function AuditTab({ entries }: { entries: AuditEntry[] }) {
                 {Object.keys(e.changes).length > 0
                   ? Object.entries(e.changes).map(([k, v]) => (
                     <span key={k} className="mr-2">
-                      {k}: {v.old !== undefined ? <span style={{ color: '#ff6b6b' }}>{String(v.old)}</span> : ''}
+                      {k}: {v.old !== undefined ? <span style={{ color: '#ff5c5c' }}>{String(v.old)}</span> : ''}
                       {v.old !== undefined && v.new !== undefined ? ' → ' : ''}
                       {v.new !== undefined ? <span style={{ color: '#66e07a' }}>{String(v.new)}</span> : ''}
                     </span>

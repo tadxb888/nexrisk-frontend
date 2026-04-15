@@ -94,7 +94,7 @@ const IcoUpload  = () => <svg viewBox="0 0 24 24" fill="currentColor" width="12"
 const IcoHistory = () => <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M12,2A10,10,0,1,0,22,12,10.011,10.011,0,0,0,12,2Zm0,18a8,8,0,1,1,8-8A8.009,8.009,0,0,1,12,20ZM13,7H11v6l4.243,4.243,1.414-1.414L13,12.586Z"/></svg>;
 
 // ── Shared input class (BBook style) ──────────────────────────
-const iCls = 'bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#4ecdc4]';
+const iCls = 'bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#666] focus:outline-none focus:border-[#49b3b3]';
 
 // ── Modals ────────────────────────────────────────────────────
 function AutoMapReview({ rows: init, nodes, lps, defaultNodeId, defaultLpId, onCommit, onClose }: {
@@ -152,7 +152,7 @@ function AutoMapReview({ rows: init, nodes, lps, defaultNodeId, defaultLpId, onC
                       onChange={e => setRows(p => p.map((x, j) => j === i ? { ...x, lp_symbol: e.target.value } : x))} />
                   </td>
                   <td className="px-4 py-1.5 text-center font-mono text-[10px]"
-                    style={{ color: { exact: '#66e07a', derived: '#4ecdc4', fallback: '#e0a020' }[r.confidence] }}>
+                    style={{ color: { exact: '#66e07a', derived: '#49b3b3', fallback: '#e0a020' }[r.confidence] }}>
                     {{ exact: 'Exact', derived: 'Derived', fallback: 'Fallback' }[r.confidence]}
                   </td>
                 </tr>
@@ -160,7 +160,7 @@ function AutoMapReview({ rows: init, nodes, lps, defaultNodeId, defaultLpId, onC
             </tbody>
           </table>
         </div>
-        {err && <p className="px-5 py-2 text-xs text-[#ff6b6b] border-t border-[#404040]">{err}</p>}
+        {err && <p className="px-5 py-2 text-xs text-[#ff5c5c] border-t border-[#404040]">{err}</p>}
         <div className="flex items-center justify-between px-5 py-3 border-t border-[#404040]">
           <span className="text-xs text-[#ccc] font-mono">{rows.length} mappings</span>
           <div className="flex gap-2">
@@ -272,7 +272,7 @@ function BulkModal({ onUpload, onClose, mt5Syms, nodeName, lpName, mappings }: {
             <div className="flex items-center justify-between p-3 rounded border border-[#404040]" style={{ backgroundColor: '#1e1e20' }}>
               <span className="text-xs text-white">Pre-filled with <span className="text-white">{mt5Syms.length}</span> MT5 symbols from <span className="text-white">{nodeName || 'node'}</span></span>
               <button onClick={downloadTemplate} className="text-xs px-2.5 py-1 rounded flex items-center gap-1"
-                style={{ backgroundColor: '#1a1e20', color: '#4ecdc4', border: '1px solid #2a4040' }}>
+                style={{ backgroundColor: '#1a1e20', color: '#49b3b3', border: '1px solid #2a4040' }}>
                 <IcoUpload />Download
               </button>
             </div>
@@ -290,7 +290,7 @@ function BulkModal({ onUpload, onClose, mt5Syms, nodeName, lpName, mappings }: {
                     {filename ? <span className="text-white">{filename} — {rows.length} rows</span> : 'Click to select CSV'}
                   </p>
                 </div>
-                {err && <p className="text-xs text-[#ff6b6b] mt-2 flex items-center gap-1"><IcoWarn />{err}</p>}
+                {err && <p className="text-xs text-[#ff5c5c] mt-2 flex items-center gap-1"><IcoWarn />{err}</p>}
               </>
             ) : (
               <div className="p-3 rounded text-xs border"
@@ -361,7 +361,7 @@ function ImportLogModal({ onClose }: { onClose: () => void }) {
                         <td className="px-4 py-2 font-mono text-white">{h.row_count}</td>
                         <td className="px-4 py-2 font-mono" style={{ color: h.inserted > 0 ? '#66e07a' : '#555' }}>{h.inserted}</td>
                         <td className="px-4 py-2 font-mono text-white">{h.updated}</td>
-                        <td className="px-4 py-2 font-mono" style={{ color: h.errors > 0 ? '#ff6b6b' : '#555' }}>{h.errors}</td>
+                        <td className="px-4 py-2 font-mono" style={{ color: h.errors > 0 ? '#ff5c5c' : '#555' }}>{h.errors}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -397,7 +397,7 @@ function DeleteConfirm({ m, onConfirm, onClose }: { m: LPMapping; onConfirm: () 
             className="text-xs px-3 py-1.5 rounded flex items-center gap-1.5"
             style={busy
               ? { backgroundColor: '#2a2a2c', color: '#555', border: '1px solid #383838' }
-              : { backgroundColor: '#2c1417', color: '#ff6b6b', border: '1px solid #7a2f36' }}>
+              : { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
             <IcoTrash />{busy ? 'Removing…' : 'Remove'}
           </button>
         </div>
@@ -823,7 +823,7 @@ export function SymbolMappingPage() {
         fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#fff',
         whiteSpace: 'nowrap', overflow: 'hidden',
         textAlign: opts.right ? 'right' : opts.center ? 'center' : 'left',
-        backgroundColor: isSticky ? (opts.bg ?? STICKY_BG) : (opts.bg ?? '#313032'),
+        backgroundColor: isSticky ? (opts.bg ?? STICKY_BG) : (opts.bg ?? '#232326'),
         borderBottom: '1px solid #3a3a3c',
         width: opts.w, minWidth: opts.w,
         position: isSticky ? 'sticky' : undefined,
@@ -867,7 +867,7 @@ export function SymbolMappingPage() {
 
   // ── Render ─────────────────────────────────────────────────
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
       {/* Page Header */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between flex-shrink-0">
@@ -891,7 +891,7 @@ export function SymbolMappingPage() {
       {unmappedPending.length > 0 && (
         <div className="px-4 py-2 border-b border-[#c08820] flex items-center justify-between text-xs flex-shrink-0" style={{ backgroundColor: '#2a2010' }}>
           <span style={{ color: '#e0a020' }}>⚠ {unmappedPending.length} symbol{unmappedPending.length !== 1 ? 's' : ''} with open positions have no LP mapping: <span className="font-mono">{unmappedPending.map(u => u.mt5_symbol).join(', ')}</span></span>
-          <button onClick={() => setAutoMapRows(buildAutoMapRows())} className="ml-4 text-xs px-2.5 py-1 rounded" style={{ backgroundColor: '#1a1e20', color: '#4ecdc4', border: '1px solid #2a4040' }}>Review &amp; Map →</button>
+          <button onClick={() => setAutoMapRows(buildAutoMapRows())} className="ml-4 text-xs px-2.5 py-1 rounded" style={{ backgroundColor: '#1a1e20', color: '#49b3b3', border: '1px solid #2a4040' }}>Review &amp; Map →</button>
         </div>
       )}
 
@@ -924,8 +924,8 @@ export function SymbolMappingPage() {
             : { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d', cursor: 'pointer' }}>
           <IcoPlus />{addBusy ? 'Saving…' : isAlreadyMapped ? 'Update' : 'Add'}
         </button>
-        {addErr && <span className="text-xs text-[#ff6b6b] font-mono flex items-center gap-1"><IcoWarn />{addErr}</span>}
-        {statusMsg && <span className="text-xs font-mono ml-auto" style={{ color: statusMsg.ok ? '#66e07a' : '#ff6b6b' }}>{statusMsg.text}</span>}
+        {addErr && <span className="text-xs text-[#ff5c5c] font-mono flex items-center gap-1"><IcoWarn />{addErr}</span>}
+        {statusMsg && <span className="text-xs font-mono ml-auto" style={{ color: statusMsg.ok ? '#66e07a' : '#ff5c5c' }}>{statusMsg.text}</span>}
       </div>
 
       {/* Toolbar */}
@@ -933,17 +933,17 @@ export function SymbolMappingPage() {
         <span className="text-[10px] text-[#ccc] uppercase tracking-wider font-medium">Configured Mappings</span>
         <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter symbols…" className={iCls} style={{ width: 200 }} />
         {search && <button onClick={() => setSearch('')} className="text-[10px] text-white hover:text-white">✕ Clear</button>}
-        <span className="text-[10px] text-[#4ecdc4] font-mono">{filtered.length} / {mappings.length}</span>
-        {rowErr && <span className="text-xs text-[#ff6b6b] font-mono flex items-center gap-1 ml-2"><IcoWarn />{rowErr}</span>}
+        <span className="text-[10px] text-[#49b3b3] font-mono">{filtered.length} / {mappings.length}</span>
+        {rowErr && <span className="text-xs text-[#ff5c5c] font-mono flex items-center gap-1 ml-2"><IcoWarn />{rowErr}</span>}
         <div className="flex-1" />
         <button onClick={() => refetch()} className="text-[10px] text-white hover:text-white">↻ Refresh</button>
       </div>
 
       {/* TABLE */}
-      <div className="flex-1 overflow-auto" style={{ backgroundColor: '#313032' }}>
+      <div className="flex-1 overflow-auto" style={{ backgroundColor: '#232326' }}>
         {mapsErr ? (
           <div className="flex flex-col items-center justify-center h-full gap-3">
-            <p className="text-xs text-[#ff6b6b] font-mono">⚠ Failed to load mappings</p>
+            <p className="text-xs text-[#ff5c5c] font-mono">⚠ Failed to load mappings</p>
             <button onClick={() => refetch()} className="text-xs text-white hover:text-white px-3 py-1.5 border border-[#404040] rounded">Retry</button>
           </div>
         ) : loadingMaps ? (
@@ -1043,7 +1043,7 @@ export function SymbolMappingPage() {
                             {inp('lp_std_lot', true)}
                             {lpInstr?.contract_multiplier != null && (
                               <button title="Restore from LP" onClick={() => setEditForm(f => f ? { ...f, lp_std_lot: String(lpInstr.contract_multiplier!) } : f)}
-                                style={{ flexShrink: 0, backgroundColor: '#1a1e20', border: '1px solid #2a4040', borderRadius: 3, color: '#4ecdc4', cursor: 'pointer', fontSize: 10, padding: '1px 4px' }}>↺</button>
+                                style={{ flexShrink: 0, backgroundColor: '#1a1e20', border: '1px solid #2a4040', borderRadius: 3, color: '#49b3b3', cursor: 'pointer', fontSize: 10, padding: '1px 4px' }}>↺</button>
                             )}
                           </div>
                         : (() => { const v = m.lp_std_lot ?? lpInstr?.contract_multiplier; return v != null ? <span style={{ color: '#fff' }}>{v.toLocaleString()}</span> : <span style={{ color: '#555', fontSize: 10 }}>NA</span>; })(),
@@ -1057,7 +1057,7 @@ export function SymbolMappingPage() {
                             {inp('min_size', true)}
                             {lpInstr?.min_trade_vol != null && (
                               <button title="Restore from LP" onClick={() => setEditForm(f => f ? { ...f, min_size: String(lpInstr.min_trade_vol!) } : f)}
-                                style={{ flexShrink: 0, backgroundColor: '#1a1e20', border: '1px solid #2a4040', borderRadius: 3, color: '#4ecdc4', cursor: 'pointer', fontSize: 10, padding: '1px 4px' }}>↺</button>
+                                style={{ flexShrink: 0, backgroundColor: '#1a1e20', border: '1px solid #2a4040', borderRadius: 3, color: '#49b3b3', cursor: 'pointer', fontSize: 10, padding: '1px 4px' }}>↺</button>
                             )}
                           </div>
                         : (() => { const v = m.min_size ?? lpInstr?.min_trade_vol; return v != null ? <span style={{ color: '#fff' }}>{v}</span> : <span style={{ color: '#666' }}>—</span>; })(),
@@ -1065,7 +1065,7 @@ export function SymbolMappingPage() {
                     )}
 
                     {/* Actions — sticky right */}
-                    <td style={{ position: 'sticky', right: 0, zIndex: 2, height: ROW_H, padding: '0 8px', whiteSpace: 'nowrap', backgroundColor: isEd ? '#1e1e28' : '#313032', borderBottom: '1px solid #3a3a3c', borderLeft: '1px solid #303038' }}>
+                    <td style={{ position: 'sticky', right: 0, zIndex: 2, height: ROW_H, padding: '0 8px', whiteSpace: 'nowrap', backgroundColor: isEd ? '#1e1e28' : '#232326', borderBottom: '1px solid #3a3a3c', borderLeft: '1px solid #303038' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         {isEd ? (
                           <>
@@ -1074,12 +1074,12 @@ export function SymbolMappingPage() {
                           </>
                         ) : (
                           <>
-                            <button onClick={() => fetchSnapQuote(m)} disabled={sq?.mt5 === 'loading' || sq?.lp === 'loading'} style={btnS({ backgroundColor: '#1e2020', color: '#4ecdc4', borderColor: '#2a3838', opacity: (sq?.mt5 === 'loading' || sq?.lp === 'loading') ? 0.4 : 1 })}>
+                            <button onClick={() => fetchSnapQuote(m)} disabled={sq?.mt5 === 'loading' || sq?.lp === 'loading'} style={btnS({ backgroundColor: '#1e2020', color: '#49b3b3', borderColor: '#2a3838', opacity: (sq?.mt5 === 'loading' || sq?.lp === 'loading') ? 0.4 : 1 })}>
                               <svg viewBox="0 0 24 24" fill="currentColor" width="9" height="9"><path d="M22,11h-3.28A6.993,6.993,0,0,0,13,5.28V2a1,1,0,0,0-2,0V5.28A6.993,6.993,0,0,0,5.28,11H2a1,1,0,0,0,0,2H5.28A6.993,6.993,0,0,0,11,18.72V22a1,1,0,0,0,2,0V18.72A6.993,6.993,0,0,0,18.72,13H22a1,1,0,0,0,0-2Z"/></svg>
                               {(sq?.mt5 === 'loading' || sq?.lp === 'loading') ? '…' : 'Quote'}
                             </button>
                             <button onClick={() => { setRowErr(null); startEdit(m); }} style={btnS({ backgroundColor: '#2a2a2c', color: '#fff', borderColor: '#404040' })}><IcoEdit />Edit</button>
-                            <button onClick={() => setDeleteTarget(m)} style={btnS({ backgroundColor: '#2c1417', color: '#ff6b6b', borderColor: '#5a2530' })}><IcoTrash /></button>
+                            <button onClick={() => setDeleteTarget(m)} style={btnS({ backgroundColor: '#2c1417', color: '#ff5c5c', borderColor: '#5a2530' })}><IcoTrash /></button>
                           </>
                         )}
                       </div>

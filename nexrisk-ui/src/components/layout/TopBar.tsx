@@ -43,7 +43,7 @@ interface SparklineProps {
   height?: number;
 }
 
-function Sparkline({ data, color = '#4ecdc4', width = 50, height = 20 }: SparklineProps) {
+function Sparkline({ data, color = '#49b3b3', width = 50, height = 20 }: SparklineProps) {
   if (!data.length) return null;
   
   const min = Math.min(...data);
@@ -80,7 +80,7 @@ interface KPICardProps {
   sparkColor?: string;
 }
 
-function KPICard({ label, value, change, changePositive, sparkData, sparkColor = '#4ecdc4' }: KPICardProps) {
+function KPICard({ label, value, change, changePositive, sparkData, sparkColor = '#49b3b3' }: KPICardProps) {
   return (
     <div className="flex items-center gap-3">
       <div className="flex flex-col">
@@ -88,7 +88,7 @@ function KPICard({ label, value, change, changePositive, sparkData, sparkColor =
         <div className="flex items-baseline gap-1.5">
           <span className="text-sm font-semibold text-white">{value}</span>
           {change && (
-            <span className={`text-[10px] ${changePositive ? 'text-[#66e07a]' : 'text-[#ff6b6b]'}`}>
+            <span className={`text-[10px] ${changePositive ? 'text-[#66e07a]' : 'text-[#ff5c5c]'}`}>
               {changePositive ? '▲' : '▼'}{change}
             </span>
           )}
@@ -137,7 +137,7 @@ export function TopBar() {
   const currentMonth = new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   return (
-    <header className="h-12 bg-[#313032] border-b border-[#808080] flex items-center justify-between px-4 shrink-0">
+    <header className="h-12 bg-[#232326] border-b border-[#808080] flex items-center justify-between px-4 shrink-0">
       {/* Left Section - Logo & Brand */}
       <div className="flex items-center gap-3 shrink-0">
         <NexRiskLogo />
@@ -155,7 +155,7 @@ export function TopBar() {
           change="4%"
           changePositive={true}
           sparkData={mockSparkData.realizedPL}
-          sparkColor="#4ecdc4"
+          sparkColor="#49b3b3"
         />
         <KPICard
           label="Floating P/L"
@@ -163,7 +163,7 @@ export function TopBar() {
           change="33%"
           changePositive={true}
           sparkData={mockSparkData.floatingPL}
-          sparkColor="#4ecdc4"
+          sparkColor="#49b3b3"
         />
         <KPICard
           label="Net P/L"
@@ -179,7 +179,7 @@ export function TopBar() {
           change="7%"
           changePositive={true}
           sparkData={mockSparkData.revenueExpense}
-          sparkColor="#4ecdc4"
+          sparkColor="#49b3b3"
         />
         <KPICard
           label="Total Volume"

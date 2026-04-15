@@ -64,7 +64,7 @@ export function ChangePasswordPage() {
               <input id="cp-email" type="email" value={email}
                 onChange={e => setEmail(e.target.value)}
                 onFocus={() => setEmailFocused(true)} onBlur={() => setEmailFocused(false)}
-                style={{ ...A.input, borderColor: emailFocused ? '#4ecdc4' : '#2e2c32' }}
+                style={{ ...A.input, borderColor: emailFocused ? '#49b3b3' : '#2e2c32' }}
                 placeholder="you@example.com" autoComplete="email" autoFocus disabled={success} />
             </div>
           )}
@@ -74,7 +74,7 @@ export function ChangePasswordPage() {
             <input id="cp-current" type="password" value={currentPassword}
               onChange={e => setCurrentPw(e.target.value)}
               onFocus={() => setCurrFocused(true)} onBlur={() => setCurrFocused(false)}
-              style={{ ...A.input, borderColor: currFocused ? '#4ecdc4' : '#2e2c32' }}
+              style={{ ...A.input, borderColor: currFocused ? '#49b3b3' : '#2e2c32' }}
               placeholder="Your current password" autoComplete="current-password"
               autoFocus={!!emailFromState} disabled={success} />
           </div>
@@ -84,7 +84,7 @@ export function ChangePasswordPage() {
             <input id="cp-new" type="password" value={newPassword}
               onChange={e => setNewPassword(e.target.value)}
               onFocus={() => setNewFocused(true)} onBlur={() => setNewFocused(false)}
-              style={{ ...A.input, borderColor: newFocused ? '#4ecdc4' : '#2e2c32' }}
+              style={{ ...A.input, borderColor: newFocused ? '#49b3b3' : '#2e2c32' }}
               placeholder="At least 10 characters" autoComplete="new-password" disabled={success} />
             {newPassword.length > 0 && newPassword.length < 10 && (
               <p style={A.hintError}>
@@ -100,8 +100,8 @@ export function ChangePasswordPage() {
               onFocus={() => setCfFocused(true)} onBlur={() => setCfFocused(false)}
               style={{
                 ...A.input,
-                borderColor: cfFocused ? '#4ecdc4'
-                  : confirmPassword && confirmPassword !== newPassword ? '#ff6b6b'
+                borderColor: cfFocused ? '#49b3b3'
+                  : confirmPassword && confirmPassword !== newPassword ? '#ff5c5c'
                   : '#2e2c32',
               }}
               placeholder="Re-enter new password" autoComplete="new-password" disabled={success} />

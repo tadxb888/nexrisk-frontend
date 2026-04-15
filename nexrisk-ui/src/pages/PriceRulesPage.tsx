@@ -40,7 +40,7 @@ async function bff<T>(path: string, init: RequestInit = {}): Promise<T> {
 // Colour palette
 // ─────────────────────────────────────────────────────────────
 const C = {
-  page:         '#313032',
+  page:         '#232326',
   panel:        '#252429',
   card:         '#2e2d32',
   cardHover:    '#353339',
@@ -56,7 +56,7 @@ const C = {
   green:        '#5dd87f',
   amber:        '#e8a020',
   red:          '#f06060',
-  teal:         '#4ecdc4',
+  teal:         '#49b3b3',
   blue:         '#7b9cf7',
   orange:       '#f09820',
   purple:       '#c084fc',
@@ -1982,7 +1982,7 @@ function SpreadRulesTab({ feeds }: { feeds: FeedConfig[] }) {
 
   // AG Grid theme matching app
   const srGridTheme = useMemo(() => themeQuartz.withParams({
-    backgroundColor:       '#313032',
+    backgroundColor:       '#232326',
     browserColorScheme:    'dark',
     chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.07, onto: 'backgroundColor' },
     fontFamily:            { googleFont: 'IBM Plex Mono' },
@@ -2212,7 +2212,7 @@ function ConfirmModal({ title, message, confirmLabel, onConfirm, onCancel }: {
 // ─────────────────────────────────────────────────────────────
 
 const gsGridTheme = themeQuartz.withParams({
-  backgroundColor:       '#313032',
+  backgroundColor:       '#232326',
   browserColorScheme:    'dark',
   chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.07, onto: 'backgroundColor' },
   fontFamily:            { googleFont: 'IBM Plex Mono' },

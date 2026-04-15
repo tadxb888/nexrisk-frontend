@@ -13,7 +13,7 @@ import { clsx } from 'clsx';
 
 // ── Grid Theme (identical to BBook reference) ─────────────────
 const gridTheme = themeQuartz.withParams({
-  backgroundColor: '#313032',
+  backgroundColor: '#232326',
   browserColorScheme: 'dark',
   chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.11, onto: 'backgroundColor' },
   fontFamily: { googleFont: 'IBM Plex Mono' },
@@ -95,31 +95,31 @@ interface AppliedFilters {
 const SEVERITY_STYLE: Record<string, { color: string; fontWeight?: string }> = {
   INFO:     { color: '#66e07a' },
   WARN:     { color: '#e0a020', fontWeight: '600' },
-  CRITICAL: { color: '#ff6b6b', fontWeight: '700' },
+  CRITICAL: { color: '#ff5c5c', fontWeight: '700' },
 };
 
 const ACTION_TYPE_COLOR: Record<string, string> = {
   CREATE:          '#66e07a',
-  UPDATE:          '#4ecdc4',
-  DELETE:          '#ff6b6b',
+  UPDATE:          '#49b3b3',
+  DELETE:          '#ff5c5c',
   ENABLE:          '#66e07a',
   DISABLE:         '#808080',
-  LOGIN:           '#4ecdc4',
+  LOGIN:           '#49b3b3',
   LOGOUT:          '#808080',
-  LOGIN_FAILED:    '#ff6b6b',
+  LOGIN_FAILED:    '#ff5c5c',
   PASSWORD_CHANGE: '#e0a020',
   TOTP_ENROLLED:   '#e0a020',
-  INVITE_ISSUED:   '#4ecdc4',
+  INVITE_ISSUED:   '#49b3b3',
   ROLE_CHANGE:     '#e0a020',
   CONNECT:         '#66e07a',
-  DISCONNECT:      '#ff6b6b',
-  QUARANTINE:      '#ff6b6b',
+  DISCONNECT:      '#ff5c5c',
+  QUARANTINE:      '#ff5c5c',
   RESUME:          '#66e07a',
   CRED_UPDATE:     '#e0a020',
-  RELOAD:          '#4ecdc4',
-  BUY:             '#4ecdc4',
+  RELOAD:          '#49b3b3',
+  BUY:             '#49b3b3',
   SELL:            '#e0a020',
-  CANCEL:          '#ff6b6b',
+  CANCEL:          '#ff5c5c',
   SERVICE_START:   '#808080',
 };
 
@@ -207,7 +207,7 @@ function StateDiff({ entry }: { entry: AuditLogEntry }) {
           {Object.entries(previous_state).map(([k, v]) => (
             <tr key={k} className="border-b border-[#353335]">
               <td className="text-[#999] py-[2px] pr-4 whitespace-nowrap align-top">{k}</td>
-              <td className="text-[#ff6b6b] py-[2px] break-all line-through">{JSON.stringify(v)}</td>
+              <td className="text-[#ff5c5c] py-[2px] break-all line-through">{JSON.stringify(v)}</td>
             </tr>
           ))}
         </tbody>
@@ -244,7 +244,7 @@ function StateDiff({ entry }: { entry: AuditLogEntry }) {
                 <td className={clsx('py-[2px] pr-5 whitespace-nowrap align-top', isChanged ? 'text-[#e0a020]' : 'text-[#555]')}>
                   {k}
                 </td>
-                <td className={clsx('py-[2px] pr-5 break-all align-top', isChanged ? 'text-[#ff6b6b]' : 'text-[#555]')}>
+                <td className={clsx('py-[2px] pr-5 break-all align-top', isChanged ? 'text-[#ff5c5c]' : 'text-[#555]')}>
                   {JSON.stringify(previous_state[k])}
                 </td>
                 <td className={clsx('py-[2px] break-all align-top', isChanged ? 'text-[#66e07a]' : 'text-[#555]')}>
@@ -597,12 +597,12 @@ export function AuditLogPage() {
   }, []);
 
   // ── Select Input Shared Classes ────────────────────────────
-  const selectCls = 'bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4]';
+  const selectCls = 'bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]';
   const inputCls  = `${selectCls} placeholder-[#555]`;
 
   // ── Render ─────────────────────────────────────────────────
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
       {/* ── Page Header ──────────────────────────────────────── */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between flex-shrink-0">
@@ -633,14 +633,14 @@ export function AuditLogPage() {
             <button
               onClick={() => setOffset(Math.max(0, offset - LIMIT))}
               disabled={offset === 0 || loading}
-              className="px-2 py-1 bg-[#232225] border border-[#505050] rounded text-[11px] text-white disabled:opacity-30 hover:border-[#4ecdc4] transition-colors"
+              className="px-2 py-1 bg-[#232225] border border-[#505050] rounded text-[11px] text-white disabled:opacity-30 hover:border-[#49b3b3] transition-colors"
             >
               ← Prev
             </button>
             <button
               onClick={() => setOffset(offset + LIMIT)}
               disabled={offset + LIMIT >= total || loading}
-              className="px-2 py-1 bg-[#232225] border border-[#505050] rounded text-[11px] text-white disabled:opacity-30 hover:border-[#4ecdc4] transition-colors"
+              className="px-2 py-1 bg-[#232225] border border-[#505050] rounded text-[11px] text-white disabled:opacity-30 hover:border-[#49b3b3] transition-colors"
             >
               Next →
             </button>
@@ -658,7 +658,7 @@ export function AuditLogPage() {
 
       {/* ── Error Banner ─────────────────────────────────────── */}
       {error && (
-        <div className="px-4 py-2 bg-[#3a1f1f] border-b border-[#ff6b6b] text-xs text-[#ff6b6b] flex items-center justify-between flex-shrink-0">
+        <div className="px-4 py-2 bg-[#3a1f1f] border-b border-[#ff5c5c] text-xs text-[#ff5c5c] flex items-center justify-between flex-shrink-0">
           <span>{error}</span>
           <button onClick={() => fetchLogs()} className="ml-4 underline hover:no-underline">Retry</button>
         </div>
@@ -760,7 +760,7 @@ export function AuditLogPage() {
         <button
           onClick={handleSearch}
           disabled={loading}
-          className="px-3 py-1 bg-[#2e3c3e] border border-[#4ecdc4] rounded text-xs text-[#4ecdc4] hover:bg-[#3a4c4e] transition-colors disabled:opacity-50"
+          className="px-3 py-1 bg-[#2e3c3e] border border-[#49b3b3] rounded text-xs text-[#49b3b3] hover:bg-[#3a4c4e] transition-colors disabled:opacity-50"
         >
           Search
         </button>
@@ -775,7 +775,7 @@ export function AuditLogPage() {
         )}
 
         {hasFilters && total > 0 && (
-          <span className="text-[10px] text-[#4ecdc4] font-mono ml-auto">
+          <span className="text-[10px] text-[#49b3b3] font-mono ml-auto">
             {total.toLocaleString()} result{total !== 1 ? 's' : ''} matching filters
           </span>
         )}

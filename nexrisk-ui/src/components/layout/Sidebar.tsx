@@ -222,7 +222,7 @@ export function Sidebar() {
         'h-full flex flex-col border-r border-[#808080] transition-all duration-300 shrink-0',
         collapsed ? 'w-14' : 'w-48'
       )}
-      style={{ backgroundColor: '#313032' }}
+      style={{ backgroundColor: '#232326' }}
     >
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2">
@@ -251,7 +251,7 @@ export function Sidebar() {
                       'flex items-center gap-2 rounded transition-colors relative',
                       collapsed ? 'justify-center p-2' : 'px-2 py-1.5',
                       isActive 
-                        ? 'text-[#4ecdc4]' 
+                        ? 'text-[#49b3b3]' 
                         : 'text-[#999] hover:text-white hover:bg-[#3a3a3c]'
                     )}
                   >
@@ -269,7 +269,7 @@ export function Sidebar() {
                     {isActive && (
                       <div 
                         className={clsx(
-                          'absolute bottom-0 h-0.5 bg-[#4ecdc4]',
+                          'absolute bottom-0 h-0.5 bg-[#49b3b3]',
                           collapsed ? 'left-2 right-2' : 'left-0 right-0'
                         )} 
                       />
@@ -296,7 +296,7 @@ export function Sidebar() {
               'flex items-center gap-2 rounded transition-colors relative',
               collapsed ? 'justify-center p-2' : 'px-2 py-1.5',
               location.pathname === '/users'
-                ? 'text-[#4ecdc4]'
+                ? 'text-[#49b3b3]'
                 : 'text-[#999] hover:text-white hover:bg-[#3a3a3c]'
             )}
           >
@@ -307,7 +307,7 @@ export function Sidebar() {
             {location.pathname === '/users' && (
               <div
                 className={clsx(
-                  'absolute bottom-0 h-0.5 bg-[#4ecdc4]',
+                  'absolute bottom-0 h-0.5 bg-[#49b3b3]',
                   collapsed ? 'left-2 right-2' : 'left-0 right-0'
                 )}
               />
@@ -323,7 +323,7 @@ export function Sidebar() {
           onClick={() => void logout()}
           title="Sign out"
           className={clsx(
-            'flex items-center gap-2 rounded transition-colors text-[#999] hover:text-[#ff6b6b] hover:bg-[#3a2020]',
+            'flex items-center gap-2 rounded transition-colors text-[#999] hover:text-[#ff5c5c] hover:bg-[#3a2020]',
             collapsed ? 'justify-center p-2' : 'px-2 py-1.5'
           )}
         >

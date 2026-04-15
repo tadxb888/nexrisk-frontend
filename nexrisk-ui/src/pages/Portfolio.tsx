@@ -18,7 +18,7 @@ import {
 // THEME BASE CONFIG
 // ======================
 const getGridTheme = (zoomLevel: number) => themeQuartz.withParams({
-  backgroundColor: "#313032",
+  backgroundColor: "#232326",
   browserColorScheme: "dark",
   chromeBackgroundColor: { ref: "foregroundColor", mix: 0.11, onto: "backgroundColor" },
   fontFamily: { googleFont: "IBM Plex Mono" },
@@ -210,7 +210,7 @@ function currencyFormatter(params: ValueFormatterParams): string {
 function getPnlColor(value: number | null): string {
   if (value == null) return '#999';
   if (value > 0) return '#66e07a';
-  if (value < 0) return '#ff6b6b';
+  if (value < 0) return '#ff5c5c';
   return '#999';
 }
 
@@ -295,18 +295,18 @@ function YTDRealizedPnLChart({
   return (
     <div 
       className="border-t border-[#808080] flex flex-col" 
-      style={{ backgroundColor: '#313032', height: collapsed ? 44 : height }}
+      style={{ backgroundColor: '#232326', height: collapsed ? 44 : height }}
     >
       {/* Resize Handle */}
       {!collapsed && (
         <div
-          className="h-[6px] cursor-ns-resize flex items-center justify-center group hover:bg-[#4ecdc4]/20 transition-colors"
+          className="h-[6px] cursor-ns-resize flex items-center justify-center group hover:bg-[#49b3b3]/20 transition-colors"
           onMouseDown={handleMouseDown}
           style={{ backgroundColor: isResizing ? 'rgba(78, 205, 196, 0.2)' : 'transparent' }}
         >
           <div 
             className="w-12 h-[3px] rounded-full transition-colors"
-            style={{ backgroundColor: isResizing ? '#4ecdc4' : '#606060' }}
+            style={{ backgroundColor: isResizing ? '#49b3b3' : '#606060' }}
           />
         </div>
       )}
@@ -322,13 +322,13 @@ function YTDRealizedPnLChart({
             From: {new Date(ytdData[0]?.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} — To: {new Date(ytdData[ytdData.length - 1]?.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
           </span>
         </div>
-        <span className="text-[#4ecdc4]">{collapsed ? '▶' : '▼'}</span>
+        <span className="text-[#49b3b3]">{collapsed ? '▶' : '▼'}</span>
       </div>
       
       {/* Chart */}
       {!collapsed && (
         <div className="flex-1 px-4 pb-4 min-h-0">
-          <div className="h-full rounded-lg p-3" style={{ backgroundColor: '#313032' }}>
+          <div className="h-full rounded-lg p-3" style={{ backgroundColor: '#232326' }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart 
                 data={ytdData} 
@@ -394,7 +394,7 @@ function YTDRealizedPnLChart({
                   }}
                   labelStyle={{ color: '#fff', fontWeight: 500 }}
                   formatter={(value: number) => [
-                    <span style={{ color: value >= 0 ? '#66e07a' : '#ff6b6b' }}>
+                    <span style={{ color: value >= 0 ? '#66e07a' : '#ff5c5c' }}>
                       {value >= 0 ? '+' : ''}{formatYAxisTick(value)}
                     </span>,
                     'Realized P&L'
@@ -502,7 +502,7 @@ export function PortfolioPage() {
               style={{ fontWeight: 500 }}
             >
               <span style={{ 
-                color: '#4ecdc4', 
+                color: '#49b3b3', 
                 transition: 'transform 0.2s',
                 transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
                 display: 'inline-block'
@@ -582,7 +582,7 @@ export function PortfolioPage() {
   }, []);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
       {/* Page Header */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between">
         <div>
@@ -594,7 +594,7 @@ export function PortfolioPage() {
           <select
             value={timePeriod}
             onChange={(e) => setTimePeriod(e.target.value as 'today' | 'week' | 'month')}
-            className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#4ecdc4]"
+            className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#49b3b3]"
           >
             <option value="today">Today</option>
             <option value="week">This Week</option>
@@ -614,7 +614,7 @@ export function PortfolioPage() {
               className="w-20 h-1 bg-[#808080] rounded-full appearance-none cursor-pointer"
               style={{
                 WebkitAppearance: 'none',
-                background: `linear-gradient(to right, #4ecdc4 0%, #4ecdc4 ${(zoom - 100)}%, #808080 ${(zoom - 100)}%, #808080 100%)`
+                background: `linear-gradient(to right, #49b3b3 0%, #49b3b3 ${(zoom - 100)}%, #808080 ${(zoom - 100)}%, #808080 100%)`
               }}
             />
           </div>

@@ -37,7 +37,7 @@ import { clsx } from 'clsx';
 // THEME
 // =============================================================================
 const gridTheme = themeQuartz.withParams({
-  backgroundColor: '#313032',
+  backgroundColor: '#232326',
   browserColorScheme: 'dark',
   chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.11, onto: 'backgroundColor' },
   fontFamily: { googleFont: 'IBM Plex Mono' },
@@ -1419,7 +1419,7 @@ export function CBookPage() {
         map.set(pos.type, {
           unrealized: pnl,
           count: 1,
-          color: TYPE_COLORS[pos.type] ?? '#4ecdc4',
+          color: TYPE_COLORS[pos.type] ?? '#49b3b3',
         });
       }
     }
@@ -1630,7 +1630,7 @@ export function CBookPage() {
     {
       field: 'type', headerName: 'Execution Type', filter: 'agSetColumnFilter', width: 130, pinned: 'left',
       cellRenderer: (p: { value: CBookOrderType }) => (
-        <span style={{ color: TYPE_COLORS[p.value] ?? '#4ecdc4', fontWeight: 500 }}>{p.value}</span>
+        <span style={{ color: TYPE_COLORS[p.value] ?? '#49b3b3', fontWeight: 500 }}>{p.value}</span>
       ),
     },
     { field: 'date',       headerName: 'Date',        filter: 'agDateColumnFilter',  width: 110, pinned: 'left', valueFormatter: fmtDate, sort: 'desc' },
@@ -1641,7 +1641,7 @@ export function CBookPage() {
     {
       field: 'side', headerName: 'Side', filter: 'agSetColumnFilter', width: 80,
       cellRenderer: (p: { value: string }) =>
-        <span style={{ color: p.value === 'BUY' ? '#4ecdc4' : p.value === 'SELL' ? '#e0a020' : '#888', fontWeight: 600 }}>{p.value}</span>,
+        <span style={{ color: p.value === 'BUY' ? '#49b3b3' : p.value === 'SELL' ? '#e0a020' : '#888', fontWeight: 600 }}>{p.value}</span>,
     },
     { field: 'displayQty',   headerName: 'Volume',      filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value != null ? Number(p.value).toLocaleString() : '—' },
     { field: 'fillPrice',   headerName: 'Fill Price',  filter: 'agNumberColumnFilter', width: 120, valueFormatter: fmtPrice },
@@ -1667,7 +1667,7 @@ export function CBookPage() {
       },
       cellRenderer: (p: { value: number | null }) => {
         if (p.value == null) return <span style={{ color: '#555' }}>—</span>;
-        const color = p.value >= 0 ? '#4ecdc4' : '#ff6b6b';
+        const color = p.value >= 0 ? '#49b3b3' : '#ff5c5c';
         return <span style={{ color, fontWeight: 600 }}>{p.value >= 0 ? '+' : ''}{p.value.toFixed(2)}</span>;
       },
     },
@@ -1679,7 +1679,7 @@ export function CBookPage() {
       cellRenderer: (p: { data?: CBookOrder }) => {
         if (!p.data) return null;
         return p.data._isOpen
-          ? <span style={{ color: '#4ecdc4', fontSize: '10px' }}>● OPEN</span>
+          ? <span style={{ color: '#49b3b3', fontSize: '10px' }}>● OPEN</span>
           : <span style={{ color: '#888', fontSize: '10px' }}>○ FILLED</span>;
       },
     },
@@ -1744,16 +1744,16 @@ export function CBookPage() {
   // DOM DISPLAY HELPERS
   // ==========================================================================
   const lpDotColor = (st: string) =>
-    st === 'CONNECTED' ? '#4ecdc4' : st === 'DEGRADED' ? '#e0a020' : (st === 'CONNECTING' || st === 'RECONNECTING') ? '#a78bfa' : '#555';
+    st === 'CONNECTED' ? '#49b3b3' : st === 'DEGRADED' ? '#e0a020' : (st === 'CONNECTING' || st === 'RECONNECTING') ? '#a78bfa' : '#555';
 
   const bookBadge = (st: string) => ({
-    HEALTHY:      { text: 'LIVE',   color: '#4ecdc4' },
+    HEALTHY:      { text: 'LIVE',   color: '#49b3b3' },
     STALE:        { text: 'STALE',  color: '#e0a020' },
     RESYNCING:    { text: 'SYNC',   color: '#a78bfa' },
     SUBSCRIBING:  { text: 'SUB…',   color: '#666'    },
     EMPTY:        { text: 'WAIT',   color: '#666'    },
-    ERROR:        { text: 'ERR',    color: '#ff6b6b' },
-    DISCONNECTED: { text: 'DISC',   color: '#ff6b6b' },
+    ERROR:        { text: 'ERR',    color: '#ff5c5c' },
+    DISCONNECTED: { text: 'DISC',   color: '#ff5c5c' },
   }[st] ?? { text: st, color: '#555' });
 
   // Brief Section 3.3: close side.
@@ -1777,7 +1777,7 @@ export function CBookPage() {
   // RENDER
   // ==========================================================================
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
       {/* ── Row 1: C-Book title + Account metrics ───────────────────────────── */}
       <div className="px-4 py-2 border-b border-[#555] flex items-center gap-6 flex-shrink-0" style={{ backgroundColor: '#1e1e20' }}>
@@ -1813,7 +1813,7 @@ export function CBookPage() {
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Realized P/L</div>
                 {dailyStats ? (
                   <div className="font-mono font-medium"
-                       style={{ color: dailyStats.realized_pnl >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                       style={{ color: dailyStats.realized_pnl >= 0 ? '#49b3b3' : '#ff5c5c' }}>
                     {dailyStats.realized_pnl >= 0 ? '+' : ''}{fmtAcct(dailyStats.realized_pnl)}
                   </div>
                 ) : (
@@ -1826,7 +1826,7 @@ export function CBookPage() {
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Unrealized P/L</div>
                 {unrealizedPnlTotal != null ? (
                   <div className="font-mono font-medium"
-                       style={{ color: unrealizedPnlTotal >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                       style={{ color: unrealizedPnlTotal >= 0 ? '#49b3b3' : '#ff5c5c' }}>
                     {unrealizedPnlTotal >= 0 ? '+' : ''}{fmtAcct(unrealizedPnlTotal)}
                   </div>
                 ) : (
@@ -1839,7 +1839,7 @@ export function CBookPage() {
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Commission</div>
                 {dailyStats ? (
                   <div className="font-mono font-medium"
-                       style={{ color: dailyStats.commission < 0 ? '#ff6b6b' : '#888' }}>
+                       style={{ color: dailyStats.commission < 0 ? '#ff5c5c' : '#888' }}>
                     {fmtAcct(dailyStats.commission)}
                   </div>
                 ) : (
@@ -1864,7 +1864,7 @@ export function CBookPage() {
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Swap Net</div>
                 {dailyStats ? (
                   <div className="font-mono font-medium"
-                       style={{ color: dailyStats.swap_net < 0 ? '#ff6b6b' : dailyStats.swap_net > 0 ? '#4ecdc4' : '#888' }}>
+                       style={{ color: dailyStats.swap_net < 0 ? '#ff5c5c' : dailyStats.swap_net > 0 ? '#49b3b3' : '#888' }}>
                     {dailyStats.swap_net >= 0 ? '+' : ''}{fmtAcct(dailyStats.swap_net)}
                   </div>
                 ) : (
@@ -1886,7 +1886,7 @@ export function CBookPage() {
             <select
               value={gridLpId}
               onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); }}
-              className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4]"
+              className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
             >
               <option value="">— All LPs —</option>
               {allLps.map((l) => (
@@ -1902,7 +1902,7 @@ export function CBookPage() {
 
         <button
           onClick={() => setUseLocalTime(v => !v)}
-          className="flex items-center gap-1 px-2 py-0.5 rounded border border-[#555] bg-[#232225] hover:border-[#4ecdc4] text-[#aaa] hover:text-white transition-colors text-xs"
+          className="flex items-center gap-1 px-2 py-0.5 rounded border border-[#555] bg-[#232225] hover:border-[#49b3b3] text-[#aaa] hover:text-white transition-colors text-xs"
           title="Toggle local / server (UTC) time"
         >
           {useLocalTime ? 'Local Time' : 'UTC'}
@@ -1912,7 +1912,7 @@ export function CBookPage() {
         <div>
           <span className="text-[#aaa]">L/S:</span>
           <span className="ml-1 font-mono">
-            <span className="text-[#4ecdc4]">{stats.buys}</span>
+            <span className="text-[#49b3b3]">{stats.buys}</span>
             <span className="text-[#444]"> / </span>
             <span className="text-[#e0a020]">{stats.sells}</span>
           </span>
@@ -1936,7 +1936,7 @@ export function CBookPage() {
             {/* ── Summary card — sticky, never scrolls ─────────────── */}
             <div className="flex items-center gap-3 flex-shrink-0 px-4 py-2" style={{ borderRight: '1px solid #3a3a3e' }}>
               <div className="flex items-center gap-3 rounded px-3 py-1.5"
-                style={{ backgroundColor: '#252429', border: '1px solid #4ecdc444', borderLeft: '3px solid #4ecdc4' }}>
+                style={{ backgroundColor: '#252429', border: '1px solid #49b3b344', borderLeft: '3px solid #49b3b3' }}>
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">All Strategies</div>
                   <div className="text-xs font-medium font-mono text-white">{hedgeStrategyPnl.length} strat · {totalCount} pos</div>
@@ -1945,7 +1945,7 @@ export function CBookPage() {
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
                   {totalUnrealized != null ? (
-                    <div className="text-sm font-mono font-semibold" style={{ color: totalUnrealized >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                    <div className="text-sm font-mono font-semibold" style={{ color: totalUnrealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
                       {totalUnrealized >= 0 ? '+' : ''}{totalUnrealized.toFixed(2)}
                     </div>
                   ) : (
@@ -1977,7 +1977,7 @@ export function CBookPage() {
                   <div>
                     <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
                     {unrealized != null ? (
-                      <div className="text-sm font-mono font-semibold" style={{ color: unrealized >= 0 ? '#4ecdc4' : '#ff6b6b' }}>
+                      <div className="text-sm font-mono font-semibold" style={{ color: unrealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
                         {unrealized >= 0 ? '+' : ''}{unrealized.toFixed(2)}
                       </div>
                     ) : (
@@ -2027,7 +2027,7 @@ export function CBookPage() {
                 if (closeRow && p.data?.id === closeRow.id)
                   return { backgroundColor: '#231a38', borderLeft: '2px solid #a78bfa' };
                 if (p.data?._isOpen)
-                  return { borderLeft: '2px solid #4ecdc433' };
+                  return { borderLeft: '2px solid #49b3b333' };
                 return undefined;
               }}
               cellSelection={{ enableHeaderHighlight: true }}
@@ -2078,11 +2078,11 @@ export function CBookPage() {
           {lpStatus && (
             <div className="px-3 py-1 border-b border-[#333] flex items-center gap-3 text-[10px] flex-shrink-0" style={{ backgroundColor: '#191a1c' }}>
               <span className="text-white">Trading:</span>
-              <span style={{ color: lpStatus.trading_session.state === 'LOGGED_ON' ? '#4ecdc4' : '#e0a020' }}>
+              <span style={{ color: lpStatus.trading_session.state === 'LOGGED_ON' ? '#49b3b3' : '#e0a020' }}>
                 {lpStatus.trading_session.state}
               </span>
               <span className="text-white">MD:</span>
-              <span style={{ color: lpStatus.md_session.state === 'LOGGED_ON' ? '#4ecdc4' : '#e0a020' }}>
+              <span style={{ color: lpStatus.md_session.state === 'LOGGED_ON' ? '#49b3b3' : '#e0a020' }}>
                 {lpStatus.md_session.state}
               </span>
             </div>
@@ -2104,7 +2104,7 @@ export function CBookPage() {
                 }}
                 disabled={!!closeRow}
                 className={clsx(
-                  'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#4ecdc4] min-w-0',
+                  'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3] min-w-0',
                   closeRow && 'opacity-60 cursor-not-allowed'
                 )}
               >
@@ -2133,7 +2133,7 @@ export function CBookPage() {
                 disabled={!domLpId || instrLoading || !!closeRow}
                 className={clsx(
                   'flex-1 flex items-center justify-between bg-[#2a2a2c] border rounded px-2 py-1 text-xs transition-colors min-w-0',
-                  domSymbol ? 'text-white border-[#4ecdc4]' : 'text-[#666] border-[#555]',
+                  domSymbol ? 'text-white border-[#49b3b3]' : 'text-[#666] border-[#555]',
                   (!domLpId || instrLoading || !!closeRow) && 'opacity-50 cursor-not-allowed'
                 )}
               >
@@ -2158,7 +2158,7 @@ export function CBookPage() {
                   value={symbolSearch}
                   onChange={(e) => setSymbolSearch(e.target.value)}
                   placeholder="Search symbol or description…"
-                  className="w-full bg-[#1a1a1c] border border-[#4ecdc4] rounded px-2 py-1.5 text-xs text-white placeholder-[#444] focus:outline-none mb-1"
+                  className="w-full bg-[#1a1a1c] border border-[#49b3b3] rounded px-2 py-1.5 text-xs text-white placeholder-[#444] focus:outline-none mb-1"
                 />
                 <div className="border border-[#444] rounded overflow-y-auto" style={{ maxHeight: '160px', backgroundColor: '#1a1a1c' }}>
                   {filteredInstruments.length === 0 ? (
@@ -2192,7 +2192,7 @@ export function CBookPage() {
               <div className="grid grid-cols-3 text-[10px]">
                 <div>
                   <div className="text-white mb-0.5">Best Bid</div>
-                  <div className="font-mono font-bold" style={{ color: '#4ecdc4' }}>{liveBook.best_bid.toFixed(instrDecimals)}</div>
+                  <div className="font-mono font-bold" style={{ color: '#49b3b3' }}>{liveBook.best_bid.toFixed(instrDecimals)}</div>
                 </div>
                 <div className="text-center">
                   <div className="text-white mb-0.5">Spread</div>
@@ -2240,11 +2240,11 @@ export function CBookPage() {
                     return (
                       <tr key={i}>
                         <td className="text-right py-0.5 pr-1.5 relative">
-                          {b && <div className="absolute right-0 top-0 bottom-0 opacity-20 rounded-l" style={{ width: `${(b.size / maxSz) * 100}%`, backgroundColor: '#4ecdc4' }} />}
-                          <span className="relative font-mono text-[11px]" style={{ color: b ? '#4ecdc4' : '#2a2a2a' }}>{b ? fmtBookSize(b.size) : '—'}</span>
+                          {b && <div className="absolute right-0 top-0 bottom-0 opacity-20 rounded-l" style={{ width: `${(b.size / maxSz) * 100}%`, backgroundColor: '#49b3b3' }} />}
+                          <span className="relative font-mono text-[11px]" style={{ color: b ? '#49b3b3' : '#2a2a2a' }}>{b ? fmtBookSize(b.size) : '—'}</span>
                         </td>
                         <td className="text-center py-0.5">
-                          <span className="font-mono text-[11px] font-medium" style={{ color: b ? '#4ecdc4' : '#2a2a2a' }}>{b ? b.price.toFixed(instrDecimals) : '—'}</span>
+                          <span className="font-mono text-[11px] font-medium" style={{ color: b ? '#49b3b3' : '#2a2a2a' }}>{b ? b.price.toFixed(instrDecimals) : '—'}</span>
                         </td>
                         <td className="text-center py-0.5">
                           <span className="font-mono text-[11px] font-medium" style={{ color: a ? '#e0a020' : '#2a2a2a' }}>{a ? a.price.toFixed(instrDecimals) : '—'}</span>
@@ -2288,7 +2288,7 @@ export function CBookPage() {
                   onChange={(e) => { setDomOrderType(e.target.value); setLimitPrice(''); }}
                   disabled={!isConnected || submitting}
                   className={clsx(
-                    'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4]',
+                    'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]',
                     (!isConnected || submitting) && 'opacity-50 cursor-not-allowed'
                   )}
                 >
@@ -2299,7 +2299,7 @@ export function CBookPage() {
                   onChange={(e) => setDomTif(e.target.value)}
                   disabled={!isConnected || submitting}
                   className={clsx(
-                    'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4]',
+                    'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]',
                     (!isConnected || submitting) && 'opacity-50 cursor-not-allowed'
                   )}
                 >
@@ -2328,7 +2328,7 @@ export function CBookPage() {
                 disabled={!isConnected && !closeRow}
                 placeholder="0.00"
                 className={clsx(
-                  'w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4] placeholder-[#555]',
+                  'w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#49b3b3] placeholder-[#555]',
                   closeRow && 'border-[#a78bfa44]',
                   (!isConnected && !closeRow) && 'opacity-40'
                 )}
@@ -2349,7 +2349,7 @@ export function CBookPage() {
                     <input type="text" value={stopLoss}
                       onChange={(e) => setStopLoss(e.target.value.replace(/[^0-9.]/g, ''))}
                       disabled={!isConnected || submitting} placeholder="0.00000"
-                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#ff6b6b] placeholder-[#555]"
+                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#ff5c5c] placeholder-[#555]"
                     />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -2357,7 +2357,7 @@ export function CBookPage() {
                     <input type="text" value={takeProfit}
                       onChange={(e) => setTakeProfit(e.target.value.replace(/[^0-9.]/g, ''))}
                       disabled={!isConnected || submitting} placeholder="0.00000"
-                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4] placeholder-[#555]"
+                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#49b3b3] placeholder-[#555]"
                     />
                   </div>
                 </div>
@@ -2374,7 +2374,7 @@ export function CBookPage() {
                   onChange={(e) => setDomComment(e.target.value.slice(0, 50))}
                   placeholder="Add note…"
                   maxLength={50}
-                  className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4] placeholder-[#555]"
+                  className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#49b3b3] placeholder-[#555]"
                 />
                 {domComment && <div className="text-[9px] text-[#555] mt-0.5 text-right">{domComment.length}/50</div>}
               </div>
@@ -2385,7 +2385,7 @@ export function CBookPage() {
               <button onClick={() => placeOrder('BUY')} disabled={!canBuy}
                 className={clsx(
                   'flex-1 py-2.5 rounded text-xs font-bold transition-colors',
-                  canBuy ? 'bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black' : 'bg-[#1a3535] text-[#2a6060] cursor-not-allowed'
+                  canBuy ? 'bg-[#49b3b3] hover:bg-[#3dbdb5] text-black' : 'bg-[#1a3535] text-[#2a6060] cursor-not-allowed'
                 )}>
                 {submitting ? '…' : closeRow ? '← BUY (close)' : 'BUY'}
               </button>
@@ -2447,18 +2447,18 @@ export function CBookPage() {
                   >
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2 text-sm">
-                        <span className="font-bold" style={{ color: e.side === 'BUY' ? '#4ecdc4' : '#e0a020' }}>{e.side}</span>
+                        <span className="font-bold" style={{ color: e.side === 'BUY' ? '#49b3b3' : '#e0a020' }}>{e.side}</span>
                         <span className="font-mono text-white font-semibold">{e.symbol}</span>
                         <span className="text-white font-mono">{e.qty.toLocaleString()}</span>
                       </div>
                       <span className="text-xs font-bold font-mono"
-                        style={{ color: e.status === 'SENT' ? '#4ecdc4' : '#ff6b6b' }}>
+                        style={{ color: e.status === 'SENT' ? '#49b3b3' : '#ff5c5c' }}>
                         {e.status}
                       </span>
                     </div>
                     <div className="text-xs text-[#aaa] font-mono mb-0.5 truncate">{e.clord_id}</div>
                     {e.rejectReason && (
-                      <div className="text-xs text-[#ff6b6b] mb-0.5">{e.rejectReason}</div>
+                      <div className="text-xs text-[#ff5c5c] mb-0.5">{e.rejectReason}</div>
                     )}
                     <div className="text-xs text-[#777]">
                       {new Date(e.ts).toLocaleTimeString()} · {e.lpId} · {e.orderType}/{e.tif}
@@ -2475,11 +2475,11 @@ export function CBookPage() {
                 {/* Summary row */}
                 <div className="px-3 py-2.5 border-b border-[#333] flex-shrink-0" style={{ backgroundColor: '#1d1d20' }}>
                   <div className="flex items-center gap-2 text-sm mb-1">
-                    <span className="font-bold" style={{ color: selectedExec.side === 'BUY' ? '#4ecdc4' : '#e0a020' }}>{selectedExec.side}</span>
+                    <span className="font-bold" style={{ color: selectedExec.side === 'BUY' ? '#49b3b3' : '#e0a020' }}>{selectedExec.side}</span>
                     <span className="text-white font-mono font-semibold">{selectedExec.symbol}</span>
                     <span className="text-white font-mono">{selectedExec.qty.toLocaleString()}</span>
                     <span className="ml-auto text-xs font-bold font-mono"
-                      style={{ color: selectedExec.status === 'SENT' ? '#4ecdc4' : '#ff6b6b' }}>
+                      style={{ color: selectedExec.status === 'SENT' ? '#49b3b3' : '#ff5c5c' }}>
                       {selectedExec.status}
                     </span>
                   </div>
@@ -2505,7 +2505,7 @@ export function CBookPage() {
                           className="text-xs font-bold font-mono px-1.5 py-0.5 rounded"
                           style={{
                             backgroundColor: msg.direction === 'sent' ? '#0e2320' : '#17153a',
-                            color: msg.direction === 'sent' ? '#4ecdc4' : '#a78bfa',
+                            color: msg.direction === 'sent' ? '#49b3b3' : '#a78bfa',
                           }}
                         >{msg.direction === 'sent' ? 'OUT' : 'IN'}</span>
                         <span className="text-sm text-white font-semibold">{msg.msg_type_name}</span>

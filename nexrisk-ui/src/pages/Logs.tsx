@@ -95,31 +95,31 @@ interface AppliedFilters {
 const SEVERITY_STYLE: Record<string, { color: string; fontWeight?: string }> = {
   INFO:     { color: '#66e07a' },
   WARN:     { color: '#e0d066', fontWeight: '600' },
-  CRITICAL: { color: '#ff6b6b', fontWeight: '700' },
+  CRITICAL: { color: '#ff5c5c', fontWeight: '700' },
 };
 
 const ACTION_TYPE_COLOR: Record<string, string> = {
   CREATE:          '#66e07a',
   UPDATE:          '#49b3b3',
-  DELETE:          '#ff6b6b',
+  DELETE:          '#ff5c5c',
   ENABLE:          '#66e07a',
   DISABLE:         '#d2d6e2',
   LOGIN:           '#49b3b3',
   LOGOUT:          '#d2d6e2',
-  LOGIN_FAILED:    '#ff6b6b',
+  LOGIN_FAILED:    '#ff5c5c',
   PASSWORD_CHANGE: '#e0d066',
   TOTP_ENROLLED:   '#e0d066',
   INVITE_ISSUED:   '#49b3b3',
   ROLE_CHANGE:     '#e0d066',
   CONNECT:         '#66e07a',
-  DISCONNECT:      '#ff6b6b',
-  QUARANTINE:      '#ff6b6b',
+  DISCONNECT:      '#ff5c5c',
+  QUARANTINE:      '#ff5c5c',
   RESUME:          '#66e07a',
   CRED_UPDATE:     '#e0d066',
   RELOAD:          '#49b3b3',
   BUY:             '#49b3b3',
   SELL:            '#e09a55',
-  CANCEL:          '#ff6b6b',
+  CANCEL:          '#ff5c5c',
   SERVICE_START:   '#d2d6e2',
 };
 

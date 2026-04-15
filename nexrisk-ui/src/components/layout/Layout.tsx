@@ -5,11 +5,11 @@ import { BottomBar } from './BottomBar';
 
 export function Layout() {
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
       <TopBar />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-hidden h-full" style={{ backgroundColor: '#313032' }}>
+        <main className="flex-1 overflow-hidden h-full bg-background">
           <Outlet />
         </main>
       </div>

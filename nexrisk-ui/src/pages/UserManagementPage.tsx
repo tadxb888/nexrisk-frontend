@@ -3,7 +3,7 @@
 // Tailwind design tokens match tailwind.config.ts exactly.
 // text-text-primary #fff · text-text-secondary #e2e4ec
 // text-text-muted #d2d6e2 · text-accent #49b3b3
-// text-pnl-positive #66e07a · text-risk-critical #ff6b6b
+// text-pnl-positive #66e07a · text-risk-critical #ff5c5c
 // ============================================================
 
 import { useState, useEffect, useCallback } from 'react';

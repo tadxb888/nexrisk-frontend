@@ -12,7 +12,7 @@ import { clsx } from 'clsx';
 // THEME (Quartz dark)
 // ======================
 const gridTheme = themeQuartz.withParams({
-  backgroundColor: '#313032',
+  backgroundColor: '#232326',
   browserColorScheme: 'dark',
   chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.11, onto: 'backgroundColor' },
   fontFamily: { googleFont: 'IBM Plex Mono' },
@@ -144,7 +144,7 @@ const HEDGE_STATE_COLORS: Record<string, string> = {
 };
 
 const DIRECTION_COLORS: Record<string, string> = {
-  LONG:  '#4ecdc4',
+  LONG:  '#49b3b3',
   SHORT: '#e0a020',
 };
 
@@ -491,7 +491,7 @@ export function ABookPage() {
       cellStyle: (p) => {
         if (p.value === null || p.value === undefined) return {};
         const val = Number(p.value);
-        return { color: val > 0 ? '#66e07a' : val < 0 ? '#ff6b6b' : '#999' };
+        return { color: val > 0 ? '#66e07a' : val < 0 ? '#ff5c5c' : '#999' };
       },
     },
     {
@@ -504,7 +504,7 @@ export function ABookPage() {
         if (p.value === null || p.value === undefined) {
           return <span style={{ color: '#555' }}>—</span>;
         }
-        const color  = p.value > 0 ? '#66e07a' : p.value < 0 ? '#ff6b6b' : '#999';
+        const color  = p.value > 0 ? '#66e07a' : p.value < 0 ? '#ff5c5c' : '#999';
         const prefix = p.value >= 0 ? '$' : '-$';
         return <span style={{ color }}>{prefix}{Math.abs(p.value).toFixed(2)}</span>;
       },
@@ -541,7 +541,7 @@ export function ABookPage() {
       cellStyle: (p) => {
         if (p.value === undefined || p.value === null) return {};
         const val = Number(p.value);
-        return { color: val > 0 ? '#4ecdc4' : val < 0 ? '#e0a020' : '#999' };
+        return { color: val > 0 ? '#49b3b3' : val < 0 ? '#e0a020' : '#999' };
       },
     },
     {
@@ -564,7 +564,7 @@ export function ABookPage() {
       cellStyle: (p) => {
         if (p.value === undefined || p.value === null) return {};
         const val = Number(p.value);
-        return { color: val > 0 ? '#4ecdc4' : val < 0 ? '#e0a020' : '#999' };
+        return { color: val > 0 ? '#49b3b3' : val < 0 ? '#e0a020' : '#999' };
       },
     },
     {
@@ -609,7 +609,7 @@ export function ABookPage() {
       cellStyle: (p) => {
         if (p.value === undefined || p.value === null) return {};
         const val = Math.round(Number(p.value));
-        return { color: val >= 95 ? '#66e07a' : val >= 80 ? '#e0a020' : '#ff6b6b' };
+        return { color: val >= 95 ? '#66e07a' : val >= 80 ? '#e0a020' : '#ff5c5c' };
       },
     },
   ], []);
@@ -735,7 +735,7 @@ export function ABookPage() {
   // RENDER
   // ======================
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#313032' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
       {/* ── Page Header ─────────────────────────────────────── */}
       <div className="px-4 py-2 border-b border-[#808080]">
@@ -750,7 +750,7 @@ export function ABookPage() {
             <select
               value={headerLpFilter}
               onChange={(e) => setHeaderLpFilter(e.target.value)}
-              className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#4ecdc4]"
+              className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#49b3b3]"
             >
               <option value="">All LPs</option>
               {lpOptions.map(lp => <option key={lp} value={lp}>{lp}</option>)}
@@ -760,7 +760,7 @@ export function ABookPage() {
             <select
               value={datePeriod}
               onChange={(e) => setDatePeriod(e.target.value as DatePeriod)}
-              className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#4ecdc4]"
+              className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#49b3b3]"
             >
               <option value="today">Today</option>
               <option value="month">This Month</option>
@@ -770,7 +770,7 @@ export function ABookPage() {
             <select
               value={stateFilter}
               onChange={(e) => setStateFilter(e.target.value)}
-              className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#4ecdc4]"
+              className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#49b3b3]"
             >
               <option value="">All States</option>
               <option value="HEDGED">HEDGED</option>
@@ -805,7 +805,7 @@ export function ABookPage() {
             <div>
               <span className="text-[#999]">Long/Short:</span>
               <span className="ml-1 font-mono">
-                <span className="text-[#4ecdc4]">{stats.longCount}</span>
+                <span className="text-[#49b3b3]">{stats.longCount}</span>
                 <span className="text-[#999]"> / </span>
                 <span className="text-[#e0a020]">{stats.shortCount}</span>
               </span>
@@ -816,7 +816,7 @@ export function ABookPage() {
             </div>
             <div>
               <span className="text-[#999]">Revenue:</span>
-              <span className={clsx('ml-1 font-mono', stats.totalRevenue >= 0 ? 'text-[#66e07a]' : 'text-[#ff6b6b]')}>
+              <span className={clsx('ml-1 font-mono', stats.totalRevenue >= 0 ? 'text-[#66e07a]' : 'text-[#ff5c5c]')}>
                 {stats.totalRevenue >= 0 ? '' : '-'}${Math.abs(stats.totalRevenue).toFixed(2)}
               </span>
             </div>
@@ -829,7 +829,7 @@ export function ABookPage() {
 
         {/* Error banner */}
         {error && (
-          <div className="mt-2 text-xs text-[#ff6b6b] font-mono">{error}</div>
+          <div className="mt-2 text-xs text-[#ff5c5c] font-mono">{error}</div>
         )}
       </div>
 
@@ -840,24 +840,24 @@ export function ABookPage() {
             onClick={() => setActiveTab('hedge-ledger')}
             className={clsx(
               'px-4 py-2 text-sm font-medium transition-colors relative',
-              activeTab === 'hedge-ledger' ? 'text-[#4ecdc4]' : 'text-[#999] hover:text-white',
+              activeTab === 'hedge-ledger' ? 'text-[#49b3b3]' : 'text-[#999] hover:text-white',
             )}
           >
             Hedge Ledger
             {activeTab === 'hedge-ledger' && (
-              <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#4ecdc4]" />
+              <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#49b3b3]" />
             )}
           </button>
           <button
             onClick={() => setActiveTab('hedge-exposure')}
             className={clsx(
               'px-4 py-2 text-sm font-medium transition-colors relative',
-              activeTab === 'hedge-exposure' ? 'text-[#4ecdc4]' : 'text-[#999] hover:text-white',
+              activeTab === 'hedge-exposure' ? 'text-[#49b3b3]' : 'text-[#999] hover:text-white',
             )}
           >
             Hedge Exposure
             {activeTab === 'hedge-exposure' && (
-              <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#4ecdc4]" />
+              <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#49b3b3]" />
             )}
           </button>
         </div>
@@ -892,7 +892,7 @@ export function ABookPage() {
             {detailsPanelOpen && (
               <div
                 className="flex flex-col border-l border-[#808080]"
-                style={{ width: '320px', backgroundColor: '#313032' }}
+                style={{ width: '320px', backgroundColor: '#232326' }}
               >
                 {/* Panel header */}
                 <div className="px-3 py-2 border-b border-[#808080] flex items-center justify-between">
@@ -1049,7 +1049,7 @@ export function ABookPage() {
                 <span className="text-sm font-medium text-white">Market Depth</span>
                 <div className="flex items-center gap-2">
                   <div
-                    className={clsx('w-2 h-2 rounded-full', selectedExposureRow ? 'bg-[#4ecdc4]' : 'bg-[#555]')}
+                    className={clsx('w-2 h-2 rounded-full', selectedExposureRow ? 'bg-[#49b3b3]' : 'bg-[#555]')}
                     title={selectedExposureRow ? 'Connected' : 'No Selection'}
                   />
                 </div>
@@ -1065,7 +1065,7 @@ export function ABookPage() {
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-[#666]">LP:</span>
                     {selectedExposureRow
-                      ? <span className="text-xs font-medium text-[#4ecdc4]">{selectedExposureRow.lp}</span>
+                      ? <span className="text-xs font-medium text-[#49b3b3]">{selectedExposureRow.lp}</span>
                       : <span className="text-xs text-[#555] italic">Select LP</span>
                     }
                   </div>
@@ -1078,7 +1078,7 @@ export function ABookPage() {
                 <div><span className="text-[#666]">Open </span><span className="text-white font-mono">{domData?.open || '—'}</span></div>
                 <div>
                   <span className="text-[#666]">Chg </span>
-                  <span className={clsx('font-mono', domData && Number(domData.change) >= 0 ? 'text-[#4ecdc4]' : domData ? 'text-[#ff6b6b]' : 'text-[#555]')}>
+                  <span className={clsx('font-mono', domData && Number(domData.change) >= 0 ? 'text-[#49b3b3]' : domData ? 'text-[#ff5c5c]' : 'text-[#555]')}>
                     {domData ? `${Number(domData.change) >= 0 ? '+' : ''}${domData.change}` : '—'}
                   </span>
                 </div>
@@ -1109,11 +1109,11 @@ export function ABookPage() {
                             <tr key={i} className="relative">
                               <td className="text-right py-1 pr-2 relative">
                                 <div className="absolute right-0 top-0 bottom-0 opacity-40"
-                                  style={{ width: `${bidWidth}%`, backgroundColor: '#4ecdc4' }} />
-                                <span className="relative text-[#4ecdc4] font-mono">{bid.size.toFixed(2)}</span>
+                                  style={{ width: `${bidWidth}%`, backgroundColor: '#49b3b3' }} />
+                                <span className="relative text-[#49b3b3] font-mono">{bid.size.toFixed(2)}</span>
                               </td>
                               <td className="text-center py-1">
-                                <span className="text-[#4ecdc4] font-mono font-medium">{bid.price.toFixed(domData.decimals)}</span>
+                                <span className="text-[#49b3b3] font-mono font-medium">{bid.price.toFixed(domData.decimals)}</span>
                               </td>
                               <td className="text-center py-1">
                                 <span className="text-[#e0a020] font-mono font-medium">{ask.price.toFixed(domData.decimals)}</span>
@@ -1148,7 +1148,7 @@ export function ABookPage() {
                     onChange={(e) => setDomOrderType(e.target.value as 'Market' | 'Limit')}
                     disabled={!selectedExposureRow}
                     className={clsx(
-                      'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4]',
+                      'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]',
                       !selectedExposureRow && 'opacity-50 cursor-not-allowed',
                     )}
                   >
@@ -1160,7 +1160,7 @@ export function ABookPage() {
                     onChange={(e) => setDomTif(e.target.value as 'IOC' | 'FOK' | 'GTC')}
                     disabled={!selectedExposureRow}
                     className={clsx(
-                      'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#4ecdc4]',
+                      'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]',
                       !selectedExposureRow && 'opacity-50 cursor-not-allowed',
                     )}
                   >
@@ -1185,7 +1185,7 @@ export function ABookPage() {
                       }}
                       disabled={!selectedExposureRow}
                       className={clsx(
-                        'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#4ecdc4]',
+                        'flex-1 bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#49b3b3]',
                         !selectedExposureRow && 'opacity-50 cursor-not-allowed',
                       )}
                       placeholder="Quantity"
@@ -1226,7 +1226,7 @@ export function ABookPage() {
                     className={clsx(
                       'flex-1 py-2 rounded text-xs font-semibold transition-colors',
                       selectedExposureRow && selectedExposureRow.netNotional < 0
-                        ? 'bg-[#4ecdc4] hover:bg-[#3dbdb5] text-black'
+                        ? 'bg-[#49b3b3] hover:bg-[#3dbdb5] text-black'
                         : 'bg-[#3a3a3c] text-[#555] cursor-not-allowed',
                     )}
                   >
