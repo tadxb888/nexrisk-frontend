@@ -1,9 +1,8 @@
 // ============================================
-// NexRisk App
-// Main application with routing
+// taiga — Main Application
 // ============================================
 
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/stores/AuthContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -75,48 +74,58 @@ function App() {
 
             {/* ── Protected routes — session required ── */}
             <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-              {/* Main */}
-              <Route path="/" element={<CockpitPage />} />
-              <Route path="/command-center" element={<CommandCenterPage />} />
-              
-              {/* RIAN Section */}
-              <Route path="/portfolio" element={<PortfolioPage />} />
-              <Route path="/focus" element={<FocusPage />} />
-              <Route path="/b-book" element={<BBookPage />} />
-              <Route path="/a-book" element={<ABookPage />} />
-              <Route path="/c-book" element={<CBookPage />} />
-              <Route path="/net-exposure" element={<NetExposurePage />} />
-              <Route path="/flow-hedging" element={<FlowHedgingPage />} />
-              <Route path="/business" element={<BusinessPage />} />
-              
-              {/* Configuration */}
-              <Route path="/charter" element={<CharterPage />} />
-              <Route path="/archetype" element={<ArchetypePage />} />
+
+              {/* ─── Overview ─────────────────────────── */}
+              <Route path="/"              element={<CockpitPage />} />
+              <Route path="/portfolio"     element={<PortfolioPage />} />
+              <Route path="/net-exposure"  element={<NetExposurePage />} />
+
+              {/* ─── Flow ─────────────────────────────── */}
+              <Route path="/flow"          element={<FocusPage />} />
+              <Route path="/archetypes"    element={<ArchetypePage />} />
+
+              {/* ─── Execution ────────────────────────── */}
+              <Route path="/b-book"              element={<BBookPage />} />
+              <Route path="/coverage-book"       element={<CBookPage />} />
+              <Route path="/hedging-strategies"  element={<HedgeRulesPage />} />
+              <Route path="/execution-report"    element={<ExecutionReportPage />} />
+
+              {/* ─── Markets ──────────────────────────── */}
               <Route path="/liquidity-providers" element={<LiquidityProvidersPage />} />
-              <Route path="/symbol-mapping"      element={<SymbolMappingPage />} />
               <Route path="/route-sanity"        element={<RouteSanityPage />} />
-              <Route path="/hedge-rules" element={<HedgeRulesPage />} />
-              <Route path="/price-rules" element={<PriceRulesPage />} />
-              
-              {/* Reports */}
-              <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/execution-report" element={<ExecutionReportPage />} />
-              <Route path="/logs" element={<LogsPage />} />
+              <Route path="/price-rules"         element={<PriceRulesPage />} />
 
-              {/* MT5 Servers */}
-              <Route path="/mt5-servers" element={<NodeManagementPage />} />
+              {/* ─── Control ──────────────────────────── */}
+              <Route path="/risk-charter"  element={<CharterPage />} />
+              <Route path="/logs"          element={<LogsPage />} />
+              <Route path="/reports"       element={<ReportsPage />} />
+              <Route path="/users"         element={<UserManagementPage />} />
 
-              {/* Admin */}
-              <Route path="/users" element={<UserManagementPage />} />
+              {/* ─── System ───────────────────────────── */}
+              <Route path="/mt5-servers"   element={<NodeManagementPage />} />
 
-              {/* Settings */}
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/settings/security" element={<SecuritySettingsPage />} />
-              <Route path="/settings/connectivity" element={<ConnectivitySettingsPage />} />
-              <Route path="/settings/symbology" element={<SymbologySettingsPage />} />
-              <Route path="/settings/audit" element={<AuditSettingsPage />} />
-              <Route path="/settings/notifications" element={<NotificationsSettingsPage />} />
-              <Route path="/settings/risk-logic" element={<RiskLogicSettingsPage />} />
+              {/* ─── Legacy routes (redirects) ────────── */}
+              <Route path="/focus"         element={<Navigate to="/flow" replace />} />
+              <Route path="/c-book"        element={<Navigate to="/coverage-book" replace />} />
+              <Route path="/charter"       element={<Navigate to="/risk-charter" replace />} />
+              <Route path="/archetype"     element={<Navigate to="/archetypes" replace />} />
+              <Route path="/hedge-rules"   element={<Navigate to="/hedging-strategies" replace />} />
+
+              {/* ─── Hidden routes (valid but not in nav) */}
+              <Route path="/a-book"        element={<ABookPage />} />
+              <Route path="/symbol-mapping" element={<SymbolMappingPage />} />
+              <Route path="/command-center" element={<CommandCenterPage />} />
+              <Route path="/flow-hedging"  element={<FlowHedgingPage />} />
+              <Route path="/business"      element={<BusinessPage />} />
+
+              {/* ─── Settings (accessible via direct URL) */}
+              <Route path="/settings"                element={<SettingsPage />} />
+              <Route path="/settings/security"       element={<SecuritySettingsPage />} />
+              <Route path="/settings/connectivity"   element={<ConnectivitySettingsPage />} />
+              <Route path="/settings/symbology"      element={<SymbologySettingsPage />} />
+              <Route path="/settings/audit"          element={<AuditSettingsPage />} />
+              <Route path="/settings/notifications"  element={<NotificationsSettingsPage />} />
+              <Route path="/settings/risk-logic"     element={<RiskLogicSettingsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
