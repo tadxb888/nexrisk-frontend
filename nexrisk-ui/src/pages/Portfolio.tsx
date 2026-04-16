@@ -1,16 +1,19 @@
 // ============================================
 // Portfolio Page
 // Tree-style rows with expandable groups
-// YTD Realized P/L Area Chart below table
+// MTD / YTD Realized P&L Area Chart below table
+// Wired to:
+//   GET /api/v1/portfolio/summary?period=
+//   GET /api/v1/portfolio/pnl-history?from=&to=
 // ============================================
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
-import type { ColDef, GridReadyEvent, ValueFormatterParams, GridOptions } from 'ag-grid-community';
+import type { ColDef, GridReadyEvent, ValueFormatterParams, GridOptions, IHeaderParams } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
-import { 
-  AreaChart, Area, XAxis, YAxis, Tooltip, 
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid
 } from 'recharts';
 
@@ -44,161 +47,41 @@ interface PortfolioRow {
   children?: PortfolioRow[];
 }
 
-// ======================
-// SAMPLE DATA
-// ======================
-const portfolioData: PortfolioRow[] = [
-  {
-    id: 'pnl',
-    metric: 'Net Profit & Loss',
-    portfolio: -492817.65,
-    aBook: -221897.64,
-    bBook: 739607.91,
-    cBook: null,
-    netTotal: 24892.62,
-    isGroup: true,
-    expanded: true,
-    children: [
-      {
-        id: 'floating',
-        metric: 'Floating Profit & Loss',
-        portfolio: -531351.62,
-        aBook: -73803.49,
-        bBook: -945646.21,
-        cBook: null,
-        netTotal: -1550801.32,
-        isChild: true,
-      },
-      {
-        id: 'realized',
-        metric: 'Realized Profit & Loss',
-        portfolio: 41249.96,
-        aBook: 150042.76,
-        bBook: 1685374.12,
-        cBook: null,
-        netTotal: 1576581.32,
-        isChild: true,
-      },
-    ],
-  },
-  {
-    id: 'rpm',
-    metric: 'Revenues Per Million',
-    portfolio: -51.52,
-    aBook: -26.30,
-    bBook: -11.35,
-    cBook: null,
-    netTotal: -89.17,
-  },
-  {
-    id: 'lots',
-    metric: 'Volumes (Lots)',
-    portfolio: 924.60,
-    aBook: 919.31,
-    bBook: 137.90,
-    cBook: null,
-    netTotal: 1981.81,
-  },
-  {
-    id: 'notional',
-    metric: 'Volumes (Notional)',
-    portfolio: 26356870.30,
-    aBook: 21367420.95,
-    bBook: 5286870.50,
-    cBook: null,
-    netTotal: 53011161.75,
-  },
-  {
-    id: 'revenue',
-    metric: 'Revenues and Expenses',
-    portfolio: -2715.99,
-    aBook: 1948.61,
-    bBook: -120.00,
-    cBook: null,
-    netTotal: -887.38,
-    isGroup: true,
-    expanded: true,
-    children: [
-      {
-        id: 'swaps',
-        metric: 'Swaps',
-        portfolio: 0.00,
-        aBook: 1933.76,
-        bBook: 0.00,
-        cBook: null,
-        netTotal: 1933.76,
-        isChild: true,
-      },
-      {
-        id: 'commissions',
-        metric: 'Commissions',
-        portfolio: -2715.99,
-        aBook: -4118.24,
-        bBook: -120.00,
-        cBook: null,
-        netTotal: 1282.25,
-        isChild: true,
-      },
-      {
-        id: 'adjustments',
-        metric: 'Adjustments',
-        portfolio: 0.00,
-        aBook: 412.34,
-        bBook: 0.00,
-        cBook: null,
-        netTotal: 412.34,
-        isChild: true,
-      },
-      {
-        id: 'rebates',
-        metric: 'Rebates',
-        portfolio: 0.00,
-        aBook: -4515.73,
-        bBook: 0.00,
-        cBook: null,
-        netTotal: -4515.73,
-        isChild: true,
-      },
-    ],
-  },
-];
-
-// ======================
-// YTD REALIZED P/L DATA (Mock - daily data for the year)
-// ======================
-function generateYTDData() {
-  const data = [];
-  let cumulative = 0;
-  const today = new Date();
-  const startDate = new Date(today.getFullYear(), 0, 1); // Jan 1 of current year
-  
-  // Generate daily data points
-  for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) {
-    // Simulate daily P/L with some volatility
-    const dailyPnL = (Math.random() - 0.45) * 50000; // Slight upward bias
-    cumulative += dailyPnL;
-    
-    // Add some dramatic swings
-    if (d.getMonth() === 0 && d.getDate() === 15) cumulative -= 80000; // Jan dip
-    if (d.getMonth() === 1 && d.getDate() === 1) cumulative += 120000; // Feb spike
-    
-    data.push({
-      date: new Date(d).toISOString().split('T')[0],
-      month: new Date(d).toLocaleDateString('en-US', { month: 'short' }),
-      value: Math.round(cumulative),
-    });
-  }
-  
-  return data;
+interface SummaryResponse {
+  period: string;
+  from: string;
+  to: string;
+  bbook_available: boolean;
+  rows: PortfolioRow[];
 }
 
-const ytdData = generateYTDData();
+interface PnlPoint {
+  date: string;
+  daily_pnl: number;
+  cumulative_pnl: number;
+  bbook: number;
+  a_book: number;
+  c_book: number;
+}
+
+interface PnlHistoryResponse {
+  from: string;
+  to: string;
+  note: string;
+  points: PnlPoint[];
+}
 
 // ======================
 // HELPERS
 // ======================
+
+/**
+ * CRITICAL: null means data unavailable → render as '—'
+ *           0.0 means real zero      → render as '$ 0.00'
+ * These are NOT the same.
+ */
 function currencyFormatter(params: ValueFormatterParams): string {
-  if (params.value == null) return '';
+  if (params.value === null || params.value === undefined) return '—';
   const val = params.value as number;
   const absVal = Math.abs(val).toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -207,8 +90,8 @@ function currencyFormatter(params: ValueFormatterParams): string {
   return val < 0 ? `-$ ${absVal}` : `$ ${absVal}`;
 }
 
-function getPnlColor(value: number | null): string {
-  if (value == null) return '#999';
+function getPnlColor(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '#606060';
   if (value > 0) return '#66e07a';
   if (value < 0) return '#ff5c5c';
   return '#999';
@@ -217,43 +100,81 @@ function getPnlColor(value: number | null): string {
 function formatYAxisTick(value: number): string {
   if (value === 0) return '$0';
   const absVal = Math.abs(value);
-  if (absVal >= 1000000) return `${value < 0 ? '-' : ''}$${(absVal / 1000000).toFixed(1)}M`;
-  if (absVal >= 1000) return `${value < 0 ? '-' : ''}$${(absVal / 1000).toFixed(0)}K`;
-  return `$${value}`;
+  if (absVal >= 1_000_000) return `${value < 0 ? '-' : ''}$${(absVal / 1_000_000).toFixed(1)}M`;
+  if (absVal >= 1_000)     return `${value < 0 ? '-' : ''}$${(absVal / 1_000).toFixed(0)}K`;
+  return `${value < 0 ? '-' : ''}$${absVal.toFixed(0)}`;
+}
+
+function today(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+function yearStart(): string {
+  return `${new Date().getFullYear()}-01-01`;
 }
 
 // ======================
-// YTD CHART COMPONENT
+// B-BOOK HEADER COMPONENT
 // ======================
-function YTDRealizedPnLChart({ 
-  collapsed, 
+function BBookHeader({ displayName, bbookAvailable }: IHeaderParams & { bbookAvailable: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span>{displayName}</span>
+      {!bbookAvailable && (
+        <span style={{
+          backgroundColor: '#450a0a',
+          color: '#fca5a5',
+          fontSize: '9px',
+          padding: '1px 5px',
+          borderRadius: '2px',
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          border: '1px solid #7f1d1d',
+          whiteSpace: 'nowrap',
+        }}>
+          MT5 DISCONNECTED
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ======================
+// CHART COMPONENT
+// ======================
+function PnlChart({
+  collapsed,
   onToggle,
   height,
-  onResize 
-}: { 
-  collapsed: boolean; 
+  onResize,
+  points,
+  note,
+  fromLabel,
+  toLabel,
+  chartPeriod,
+  onChartPeriodChange,
+  loading,
+}: {
+  collapsed: boolean;
   onToggle: () => void;
   height: number;
-  onResize: (newHeight: number) => void;
+  onResize: (h: number) => void;
+  points: PnlPoint[];
+  note: string;
+  fromLabel: string;
+  toLabel: string;
+  chartPeriod: 'mtd' | 'ytd';
+  onChartPeriodChange: (p: 'mtd' | 'ytd') => void;
+  loading: boolean;
 }) {
-  // Calculate min/max for gradient positioning
-  const values = ytdData.map(d => d.value);
-  const dataMax = Math.max(...values);
-  const dataMin = Math.min(...values);
+  // Zero-split gradient positioning
+  const values = points.map(p => p.cumulative_pnl);
+  const dataMax = values.length > 0 ? Math.max(...values) : 1;
+  const dataMin = values.length > 0 ? Math.min(...values) : 0;
   const range = dataMax - dataMin;
-  
-  // Calculate where zero falls in the gradient (0 = top, 1 = bottom)
-  const zeroPosition = range > 0 ? dataMax / range : 0.5;
-  
-  // Reference line values
-  const refLines = [
-    { value: 1000000, label: '$1M' },
-    { value: 250000, label: '$250K' },
-    { value: 50000, label: '$50K' },
-    { value: 0, label: '$0' },
-    { value: -50000, label: '-$50K' },
-    { value: -250000, label: '-$250K' },
-  ];
+  const zeroPosition = range > 0 ? Math.max(0, Math.min(1, dataMax / range)) : 0.5;
+
+  const isEmpty = points.length === 0;
 
   // Resize handling
   const [isResizing, setIsResizing] = useState(false);
@@ -270,22 +191,15 @@ function YTDRealizedPnLChart({
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      
-      // Calculate new height (dragging up = larger, dragging down = smaller)
       const deltaY = startYRef.current - e.clientY;
       const newHeight = Math.max(200, Math.min(600, startHeightRef.current + deltaY));
       onResize(newHeight);
     };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
+    const handleMouseUp = () => setIsResizing(false);
     if (isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
-
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -293,8 +207,8 @@ function YTDRealizedPnLChart({
   }, [isResizing, onResize]);
 
   return (
-    <div 
-      className="border-t border-[#808080] flex flex-col" 
+    <div
+      className="border-t border-[#808080] flex flex-col"
       style={{ backgroundColor: '#232326', height: collapsed ? 44 : height }}
     >
       {/* Resize Handle */}
@@ -302,142 +216,157 @@ function YTDRealizedPnLChart({
         <div
           className="h-[6px] cursor-ns-resize flex items-center justify-center group hover:bg-[#49b3b3]/20 transition-colors"
           onMouseDown={handleMouseDown}
-          style={{ backgroundColor: isResizing ? 'rgba(78, 205, 196, 0.2)' : 'transparent' }}
+          style={{ backgroundColor: isResizing ? 'rgba(78,205,196,0.2)' : 'transparent' }}
         >
-          <div 
+          <div
             className="w-12 h-[3px] rounded-full transition-colors"
             style={{ backgroundColor: isResizing ? '#49b3b3' : '#606060' }}
           />
         </div>
       )}
-      
+
       {/* Header */}
-      <div 
+      <div
         className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-[#3a3a3c]"
         onClick={onToggle}
       >
-        <div className="flex flex-col">
-          <span className="text-sm font-medium text-white">Portfolio Performance</span>
-          <span className="text-[10px] text-[#808080]">
-            From: {new Date(ytdData[0]?.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} — To: {new Date(ytdData[ytdData.length - 1]?.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-          </span>
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col">
+            <span className="text-sm font-medium text-white">Portfolio Performance</span>
+            <span className="text-[10px] text-[#808080]">
+              {fromLabel && toLabel
+                ? `${fromLabel} — ${toLabel}`
+                : 'Cumulative realized P&L'
+              }
+            </span>
+          </div>
+
+          {/* MTD / YTD Period Selector — stop click propagation so header toggle isn't triggered */}
+          {!collapsed && (
+            <div
+              className="flex gap-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {(['mtd', 'ytd'] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => onChartPeriodChange(p)}
+                  className="px-2 py-0.5 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: chartPeriod === p ? '#49b3b3' : '#3a3a3c',
+                    color: chartPeriod === p ? '#000' : '#ccc',
+                    border: `1px solid ${chartPeriod === p ? '#49b3b3' : '#606060'}`,
+                  }}
+                >
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <span className="text-[#49b3b3]">{collapsed ? '▶' : '▼'}</span>
       </div>
-      
-      {/* Chart */}
+
+      {/* Chart Body */}
       {!collapsed && (
-        <div className="flex-1 px-4 pb-4 min-h-0">
-          <div className="h-full rounded-lg p-3" style={{ backgroundColor: '#232326' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart 
-                data={ytdData} 
-                margin={{ top: 20, right: 30, left: 20, bottom: 10 }}
-              >
-                <defs>
-                  {/* Gradient that splits at zero: green above, red below */}
-                  <linearGradient id="splitColorGradient" x1="0" y1="0" x2="0" y2="1">
-                    {/* Green gradient for positive area */}
-                    <stop offset="0%" stopColor="#22c55e" stopOpacity={0.9} />
-                    <stop offset={`${Math.max(0, zeroPosition - 0.05) * 100}%`} stopColor="#4ade80" stopOpacity={0.6} />
-                    <stop offset={`${zeroPosition * 100}%`} stopColor="#86efac" stopOpacity={0.2} />
-                    {/* Red gradient for negative area */}
-                    <stop offset={`${zeroPosition * 100}%`} stopColor="#fca5a5" stopOpacity={0.2} />
-                    <stop offset={`${Math.min(1, zeroPosition + 0.05) * 100}%`} stopColor="#f87171" stopOpacity={0.6} />
-                    <stop offset="100%" stopColor="#dc2626" stopOpacity={0.9} />
-                  </linearGradient>
-                  {/* Stroke gradient */}
-                  <linearGradient id="strokeGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#22c55e" />
-                    <stop offset={`${zeroPosition * 100}%`} stopColor="#a3a3a3" />
-                    <stop offset="100%" stopColor="#dc2626" />
-                  </linearGradient>
-                </defs>
-                
-                <CartesianGrid 
-                  strokeDasharray="3 3" 
-                  stroke="#404040" 
-                  vertical={false}
-                />
-                
-                <XAxis 
-                  dataKey="date"
-                  tick={{ fill: '#808080', fontSize: 10 }}
-                  axisLine={{ stroke: '#404040' }}
-                  tickLine={false}
-                  tickFormatter={(value) => {
-                    const date = new Date(value);
-                    // Show only first of each month
-                    if (date.getDate() === 1) {
-                      return date.toLocaleDateString('en-US', { month: 'short' });
-                    }
-                    return '';
-                  }}
-                  interval={0}
-                />
-                
-                <YAxis 
-                  tick={{ fill: '#808080', fontSize: 10 }}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={formatYAxisTick}
-                  domain={['dataMin - 100000', 'dataMax + 100000']}
-                  width={60}
-                />
-                
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: '#1a1a1c', 
-                    border: '1px solid #404040', 
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
-                  }}
-                  labelStyle={{ color: '#fff', fontWeight: 500 }}
-                  formatter={(value: number) => [
-                    <span style={{ color: value >= 0 ? '#66e07a' : '#ff5c5c' }}>
-                      {value >= 0 ? '+' : ''}{formatYAxisTick(value)}
-                    </span>,
-                    'Realized P&L'
-                  ]}
-                  labelFormatter={(label) => new Date(label).toLocaleDateString('en-US', { 
-                    month: 'long', 
-                    day: 'numeric',
-                    year: 'numeric'
-                  })}
-                />
-                
-                {/* Reference Lines - White dashed */}
-                {refLines.map((line) => (
-                  <ReferenceLine 
-                    key={line.value}
-                    y={line.value} 
-                    stroke={line.value === 0 ? '#ffffff' : 'rgba(255,255,255,0.4)'}
-                    strokeDasharray={line.value === 0 ? "0" : "4 4"}
-                    strokeWidth={line.value === 0 ? 2 : 1}
-                  />
-                ))}
-                
-                <Area
-                  type="monotone"
-                  dataKey="value"
-                  stroke="url(#strokeGradient)"
-                  strokeWidth={2}
-                  fill="url(#splitColorGradient)"
-                  baseValue={0}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-            
-            {/* Reference Line Labels */}
-            <div className="flex justify-end gap-6 mt-2 text-[10px]">
-              <span className="text-[#22c55e]">$1M</span>
-              <span className="text-[#4ade80]">$250K</span>
-              <span className="text-[#86efac]">$50K</span>
-              <span className="text-white">$0</span>
-              <span className="text-[#fca5a5]">-$50K</span>
-              <span className="text-[#dc2626]">-$250K</span>
+        <div className="flex-1 px-4 pb-4 min-h-0 relative">
+
+          {/* Loading overlay */}
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center z-10"
+              style={{ backgroundColor: 'rgba(35,35,38,0.7)' }}>
+              <span className="text-[#49b3b3] text-xs">Loading chart data...</span>
             </div>
-          </div>
+          )}
+
+          {/* Empty state */}
+          {!loading && isEmpty ? (
+            <div className="h-full flex items-center justify-center flex-col gap-2">
+              <span className="text-[#606060] text-sm">No data available</span>
+              {note && <span className="text-[#808080] text-xs max-w-sm text-center">{note}</span>}
+            </div>
+          ) : (
+            <div className="h-full rounded-lg p-3" style={{ backgroundColor: '#232326' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={points}
+                  margin={{ top: 20, right: 30, left: 20, bottom: 10 }}
+                >
+                  <defs>
+                    <linearGradient id="splitColorGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.9} />
+                      <stop offset={`${Math.max(0, zeroPosition - 0.05) * 100}%`} stopColor="#4ade80" stopOpacity={0.6} />
+                      <stop offset={`${zeroPosition * 100}%`} stopColor="#86efac" stopOpacity={0.2} />
+                      <stop offset={`${zeroPosition * 100}%`} stopColor="#fca5a5" stopOpacity={0.2} />
+                      <stop offset={`${Math.min(1, zeroPosition + 0.05) * 100}%`} stopColor="#f87171" stopOpacity={0.6} />
+                      <stop offset="100%" stopColor="#dc2626" stopOpacity={0.9} />
+                    </linearGradient>
+                    <linearGradient id="strokeGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#22c55e" />
+                      <stop offset={`${zeroPosition * 100}%`} stopColor="#a3a3a3" />
+                      <stop offset="100%" stopColor="#dc2626" />
+                    </linearGradient>
+                  </defs>
+
+                  <CartesianGrid strokeDasharray="3 3" stroke="#404040" vertical={false} />
+
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: '#808080', fontSize: 10 }}
+                    axisLine={{ stroke: '#404040' }}
+                    tickLine={false}
+                    tickFormatter={(value) => {
+                      const d = new Date(value + 'T00:00:00');
+                      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    }}
+                    interval="preserveStartEnd"
+                  />
+
+                  <YAxis
+                    tick={{ fill: '#808080', fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={formatYAxisTick}
+                    domain={['dataMin - 50', 'dataMax + 50']}
+                    width={65}
+                  />
+
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1a1a1c',
+                      border: '1px solid #404040',
+                      borderRadius: '4px',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                    }}
+                    labelStyle={{ color: '#fff', fontWeight: 500 }}
+                    formatter={(value: number) => [
+                      <span style={{ color: value >= 0 ? '#66e07a' : '#ff5c5c' }}>
+                        {value >= 0 ? '+' : ''}{formatYAxisTick(value)}
+                      </span>,
+                      'Cumulative P&L',
+                    ]}
+                    labelFormatter={(label) =>
+                      new Date(label + 'T00:00:00').toLocaleDateString('en-US', {
+                        month: 'long', day: 'numeric', year: 'numeric',
+                      })
+                    }
+                  />
+
+                  {/* Zero reference line */}
+                  <ReferenceLine y={0} stroke="#ffffff" strokeWidth={2} />
+
+                  <Area
+                    type="monotone"
+                    dataKey="cumulative_pnl"
+                    stroke="url(#strokeGradient)"
+                    strokeWidth={2}
+                    fill="url(#splitColorGradient)"
+                    baseValue={0}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -445,50 +374,153 @@ function YTDRealizedPnLChart({
 }
 
 // ======================
-// COMPONENT
+// MAIN COMPONENT
 // ======================
 export function PortfolioPage() {
   const gridRef = useRef<AgGridReact<PortfolioRow>>(null);
+
+  // Table state
   const [timePeriod, setTimePeriod] = useState<'today' | 'week' | 'month'>('today');
+  const [rows, setRows] = useState<PortfolioRow[]>([]);
+  const [bbookAvailable, setBbookAvailable] = useState(true);
+  const [summaryFrom, setSummaryFrom] = useState('');
+  const [summaryTo, setSummaryTo] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Grid state
   const [zoom, setZoom] = useState(125);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['pnl', 'revenue']));
+
+  // Chart state
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartHeight, setChartHeight] = useState(360);
+  const [chartPeriod, setChartPeriod] = useState<'mtd' | 'ytd'>('mtd');
+  const [chartPoints, setChartPoints] = useState<PnlPoint[]>([]);
+  const [chartNote, setChartNote] = useState('');
+  const [chartFrom, setChartFrom] = useState('');
+  const [chartTo, setChartTo] = useState('');
+  const [chartLoading, setChartLoading] = useState(false);
 
-  // Dynamic theme based on zoom
+  // Dynamic theme
   const gridTheme = useMemo(() => getGridTheme(zoom), [zoom]);
 
-  // Toggle group expansion
+  // ── Fetch summary ──────────────────────────────────────────────
+  const fetchSummary = useCallback(async (period: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/v1/portfolio/summary?period=${period}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body?.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      const data: SummaryResponse = await res.json();
+      setRows(data.rows ?? []);
+      setBbookAvailable(data.bbook_available ?? true);
+      setSummaryFrom(data.from ?? '');
+      setSummaryTo(data.to ?? '');
+      setLastUpdated(new Date());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // ── Fetch pnl-history ──────────────────────────────────────────
+  const fetchPnlHistory = useCallback(async (from?: string, to?: string) => {
+    setChartLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to)   params.set('to', to);
+      const res = await fetch(`/api/v1/portfolio/pnl-history?${params}`);
+      if (!res.ok) return;
+      const data: PnlHistoryResponse = await res.json();
+      setChartPoints(data.points ?? []);
+      setChartNote(data.note ?? '');
+      setChartFrom(data.from ?? '');
+      setChartTo(data.to ?? '');
+    } catch {
+      // Chart errors are non-fatal; leave existing data in place
+    } finally {
+      setChartLoading(false);
+    }
+  }, []);
+
+  // ── Initial load + timePeriod changes ─────────────────────────
+  useEffect(() => {
+    fetchSummary(timePeriod);
+  }, [timePeriod, fetchSummary]);
+
+  // ── Auto-refresh every 30 s (floating P&L moves with market) ──
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchSummary(timePeriod);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [timePeriod, fetchSummary]);
+
+  // ── Chart period changes ───────────────────────────────────────
+  useEffect(() => {
+    if (chartPeriod === 'mtd') {
+      fetchPnlHistory(); // backend defaults to MTD
+    } else {
+      fetchPnlHistory(yearStart(), today());
+    }
+  }, [chartPeriod, fetchPnlHistory]);
+
+  // ── Group toggle ──────────────────────────────────────────────
   const toggleGroup = useCallback((id: string) => {
     setExpandedGroups(prev => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
 
-  // Build display data
+  // ── Build flat display rows from API response ─────────────────
   const displayData = useMemo(() => {
     const result: PortfolioRow[] = [];
-    for (const row of portfolioData) {
-      const isExpanded = expandedGroups.has(row.id);
-      result.push({ ...row, expanded: isExpanded });
+    for (const row of rows) {
+      const isGroup = !!(row.children && row.children.length > 0);
+      const isExpanded = isGroup && expandedGroups.has(row.id);
+      result.push({ ...row, isGroup, expanded: isExpanded });
       if (isExpanded && row.children) {
-        result.push(...row.children);
+        for (const child of row.children) {
+          result.push({ ...child, isChild: true });
+        }
       }
     }
     return result;
-  }, [expandedGroups]);
+  }, [rows, expandedGroups]);
 
-  // Column definitions
+  // ── Last-updated label ────────────────────────────────────────
+  const lastUpdatedLabel = useMemo(() => {
+    if (!lastUpdated) return '';
+    const s = Math.round((Date.now() - lastUpdated.getTime()) / 1000);
+    if (s < 5) return 'just now';
+    if (s < 60) return `${s}s ago`;
+    return `${Math.floor(s / 60)}m ago`;
+  }, [lastUpdated]);
+
+  // ── Chart date labels ─────────────────────────────────────────
+  const chartFromLabel = chartFrom
+    ? new Date(chartFrom + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : '';
+  const chartToLabel = chartTo
+    ? new Date(chartTo + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : '';
+
+  // ── Column definitions ────────────────────────────────────────
   const columnDefs = useMemo<ColDef<PortfolioRow>[]>(() => [
     {
       field: 'metric',
-      headerName: 'Portfolio',
+      headerName: 'Metric',
       minWidth: 220,
       flex: 1.5,
       cellRenderer: (params: { data: PortfolioRow; value: string }) => {
@@ -496,16 +528,16 @@ export function PortfolioPage() {
         if (row.isGroup) {
           const isExpanded = expandedGroups.has(row.id);
           return (
-            <div 
+            <div
               className="flex items-center gap-2 cursor-pointer"
               onClick={() => toggleGroup(row.id)}
               style={{ fontWeight: 500 }}
             >
-              <span style={{ 
-                color: '#49b3b3', 
+              <span style={{
+                color: '#49b3b3',
                 transition: 'transform 0.2s',
                 transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                display: 'inline-block'
+                display: 'inline-block',
               }}>
                 ▶
               </span>
@@ -514,11 +546,11 @@ export function PortfolioPage() {
           );
         }
         return (
-          <span style={{ 
-            color: row.isChild ? '#999' : '#FFF',
-            paddingLeft: row.isChild ? '20px' : '0'
+          <span style={{
+            color: row.isChild ? '#aaa' : '#FFF',
+            paddingLeft: row.isChild ? '20px' : '0',
           }}>
-            {row.isChild ? `--${params.value}` : params.value}
+            {row.isChild ? `-- ${params.value}` : params.value}
           </span>
         );
       },
@@ -535,15 +567,18 @@ export function PortfolioPage() {
     {
       field: 'bBook',
       headerName: 'B Book',
-      minWidth: 140,
+      minWidth: 160,
       flex: 1,
       type: 'rightAligned',
       valueFormatter: currencyFormatter,
       cellStyle: (params) => ({ color: getPnlColor(params.value) }),
+      // Custom header shows MT5 Disconnected badge when bbook_available is false
+      headerComponent: BBookHeader,
+      headerComponentParams: { bbookAvailable },
     },
     {
       field: 'cBook',
-      headerName: 'C Book',
+      headerName: 'Coverage Book',   // renamed from "C Book" per API brief
       minWidth: 140,
       flex: 1,
       type: 'rightAligned',
@@ -557,12 +592,12 @@ export function PortfolioPage() {
       flex: 1,
       type: 'rightAligned',
       valueFormatter: currencyFormatter,
-      cellStyle: (params) => ({ 
+      cellStyle: (params) => ({
         color: getPnlColor(params.value),
-        fontWeight: 500 
+        fontWeight: 500,
       }),
     },
-  ], [expandedGroups, toggleGroup]);
+  ], [expandedGroups, toggleGroup, bbookAvailable]);
 
   const defaultColDef = useMemo<ColDef>(() => ({
     sortable: false,
@@ -581,16 +616,41 @@ export function PortfolioPage() {
     event.api.sizeColumnsToFit();
   }, []);
 
+  // ── Render ────────────────────────────────────────────────────
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
+
       {/* Page Header */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-white">Portfolio Summary</h1>
-          <p className="text-xs text-[#999]">P&L and volume metrics across all books</p>
+          <p className="text-xs text-[#999]">P&amp;L and volume metrics across all books</p>
         </div>
-        
-        <div className="flex items-center gap-6 text-xs">
+
+        <div className="flex items-center gap-4 text-xs">
+
+          {/* Last-updated + manual refresh */}
+          <div className="flex items-center gap-2">
+            {lastUpdatedLabel && (
+              <span className="text-[#606060]">Updated {lastUpdatedLabel}</span>
+            )}
+            <button
+              onClick={() => fetchSummary(timePeriod)}
+              disabled={loading}
+              className="px-2 py-1 rounded text-xs transition-colors"
+              style={{
+                backgroundColor: loading ? '#2a292c' : '#3a3a3c',
+                color: loading ? '#606060' : '#ccc',
+                border: '1px solid #606060',
+              }}
+            >
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+
+          <div className="w-px h-4 bg-[#808080]" />
+
+          {/* Period selector */}
           <select
             value={timePeriod}
             onChange={(e) => setTimePeriod(e.target.value as 'today' | 'week' | 'month')}
@@ -600,9 +660,10 @@ export function PortfolioPage() {
             <option value="week">This Week</option>
             <option value="month">This Month</option>
           </select>
-          
+
           <div className="w-px h-4 bg-[#808080]" />
-          
+
+          {/* Zoom slider */}
           <div className="flex items-center gap-2">
             <span className="text-[#999]">{zoom}%</span>
             <input
@@ -611,15 +672,31 @@ export function PortfolioPage() {
               max="200"
               value={zoom}
               onChange={(e) => setZoom(Number(e.target.value))}
-              className="w-20 h-1 bg-[#808080] rounded-full appearance-none cursor-pointer"
+              className="w-20 h-1 rounded-full appearance-none cursor-pointer"
               style={{
                 WebkitAppearance: 'none',
-                background: `linear-gradient(to right, #49b3b3 0%, #49b3b3 ${(zoom - 100)}%, #808080 ${(zoom - 100)}%, #808080 100%)`
+                background: `linear-gradient(to right, #49b3b3 0%, #49b3b3 ${zoom - 100}%, #808080 ${zoom - 100}%, #808080 100%)`,
               }}
             />
           </div>
         </div>
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="px-4 py-2 text-xs" style={{ backgroundColor: '#450a0a', color: '#fca5a5', borderBottom: '1px solid #7f1d1d' }}>
+          Failed to load portfolio data: {error}
+        </div>
+      )}
+
+      {/* Summary date range */}
+      {summaryFrom && summaryTo && (
+        <div className="px-4 py-1 text-[11px] text-[#606060] border-b border-[#3a3a3c]">
+          Period: {new Date(summaryFrom).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
+          {' '}&mdash;{' '}
+          {new Date(summaryTo).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC
+        </div>
+      )}
 
       {/* Grid Area */}
       <div className="flex-1 flex flex-col overflow-hidden p-2">
@@ -635,16 +712,24 @@ export function PortfolioPage() {
             headerHeight={Math.round(36 * zoom / 100)}
             rowHeight={Math.round(26 * zoom / 100)}
             getRowId={(params) => params.data.id}
+            loading={loading && rows.length === 0}
           />
         </div>
       </div>
 
-      {/* YTD Realized P&L Chart */}
-      <YTDRealizedPnLChart 
+      {/* P&L Chart */}
+      <PnlChart
         collapsed={chartCollapsed}
         onToggle={() => setChartCollapsed(!chartCollapsed)}
         height={chartHeight}
         onResize={setChartHeight}
+        points={chartPoints}
+        note={chartNote}
+        fromLabel={chartFromLabel}
+        toLabel={chartToLabel}
+        chartPeriod={chartPeriod}
+        onChartPeriodChange={setChartPeriod}
+        loading={chartLoading}
       />
     </div>
   );
