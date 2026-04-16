@@ -24,25 +24,27 @@ import React, {
 } from 'react';
 
 // ══════════════════════════════════════════════════════════════
-// CONSTANTS — color tokens (matches BBookPage reference)
+// CONSTANTS — color tokens (matches BBookPage / Cockpit reference)
 // ══════════════════════════════════════════════════════════════
-const BG_PAGE    = '#232326';
-const BG_PANEL   = '#252429';
-const BG_SECTION = '#1e1d21';
-const BG_FIELD   = '#1a191e';
-const BORDER     = '#3a3a3e';
-const BORDER_MD  = '#505050';
-const BORDER_HDR = '#808080';
-const TEAL       = '#49b3b3';
-const GREEN      = '#66e07a';
-const AMBER      = '#e0a020';
-const RED        = '#ff5c5c';
-const TEXT_PRI   = '#fff';
-const TEXT_SEC   = '#ccc';
-const TEXT_MUT   = '#888';
+const BG_PAGE    = '#313032';                // Cockpit page bg
+const BG_PANEL   = '#2a292c';                // filter-bar / sub-panel bg
+const BG_SECTION = '#2a292c';                // card bg — flat, single surface
+const BG_FIELD   = '#232225';                // input bg (matches Cockpit inputs)
+const BORDER     = '#505050';                // subtle divider
+const BORDER_MD  = '#606060';                // standard border (Cockpit input border)
+const BORDER_HDR = '#808080';                // page header divider
+const TEAL       = '#4ecdc4';                // Cockpit teal
+const GREEN      = '#5db870';                // muted deep green (no bright lime)
+const AMBER      = '#e0a020';                // Cockpit amber
+const RED        = '#d46a6a';                // muted red — readable on dark bg, not fluorescent
+const TEXT_PRI   = '#ffffff';
+const TEXT_SEC   = '#cccccc';
+const TEXT_MUT   = '#999999';                // Cockpit secondary (visible, not grey-on-grey)
 // ── Right-panel specific tokens (brighter — smaller surface, denser info) ──
-const RP_LABEL   = '#f0f0f0';   // primary label text in right panel
-const RP_HINT    = '#a8a8a8';   // secondary / metadata text in right panel
+const RP_LABEL   = '#ffffff';
+const RP_HINT    = '#999999';
+// FONT_MONO is reserved for tabular/data contexts only (numbers, IDs, timestamps,
+// LP/symbol codes, status codes). UI chrome (labels, buttons, titles) uses default sans.
 const FONT_MONO  = 'IBM Plex Mono, monospace';
 
 const SS_KEY = 'nexrisk:hedging:selected';
@@ -607,9 +609,9 @@ function FormRow({ label, hint, required, children }: { label: string; hint?: st
 // ── Shared input style ────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box',
-  backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
+  backgroundColor: BG_FIELD, border: `1px solid ${BORDER_MD}`,
   borderRadius: 4, padding: '6px 10px',
-  color: TEXT_PRI, fontFamily: FONT_MONO, fontSize: 12,
+  color: TEXT_PRI, fontSize: 12,
   outline: 'none', colorScheme: 'dark',
 };
 
@@ -619,7 +621,7 @@ const selectStyle: React.CSSProperties = {
 
 const escalBtnStyle: React.CSSProperties = {
   padding: '3px 9px', borderRadius: 3, cursor: 'pointer',
-  fontSize: 10, fontFamily: FONT_MONO, background: 'none',
+  fontSize: 10, background: 'none',
   border: '1px solid', transition: 'opacity 0.1s',
 };
 
@@ -641,7 +643,7 @@ function ToggleChips<T extends string>({
         const color = colorize ? colorize(o.value) : TEAL;
         return (
           <button key={o.value} onClick={() => toggle(o.value)} style={{
-            padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: FONT_MONO, fontSize: 11,
+            padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11,
             border: `1px solid ${active ? color : BORDER}`,
             backgroundColor: active ? `${color}18` : BG_FIELD,
             color: active ? color : TEXT_SEC,
@@ -657,21 +659,32 @@ function ToggleChips<T extends string>({
 
 // ── Chip input (freeform entry → chips, used for symbols & groups) ──
 function ChipInput({
-  chips, onChange, placeholder, suggestions = [],
+  chips, onChange, placeholder, suggestions = [], validEntries,
 }: {
   chips: string[];
   onChange: (v: string[]) => void;
   placeholder?: string;
   suggestions?: string[];
+  validEntries?: string[];          // when provided + non-empty, only these are accepted
 }) {
   const [input, setInput] = useState('');
+  const [rejected, setRejected] = useState<string | null>(null);
   const inputId = useMemo(() => `chipinput-${Math.random().toString(36).slice(2)}`, []);
 
   const addChip = useCallback((val: string) => {
     const v = val.trim().toUpperCase();
-    if (v && !chips.includes(v)) onChange([...chips, v]);
+    if (!v) { setInput(''); return; }
+    // Validate against known entries when available
+    if (validEntries && validEntries.length > 0 && !validEntries.includes(v)) {
+      setRejected(v);
+      setTimeout(() => setRejected(null), 2500);
+      setInput('');
+      return;
+    }
+    if (!chips.includes(v)) onChange([...chips, v]);
+    setRejected(null);
     setInput('');
-  }, [chips, onChange]);
+  }, [chips, onChange, validEntries]);
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addChip(input); }
@@ -684,46 +697,55 @@ function ChipInput({
     const v = e.target.value;
     if (v.endsWith(',')) { addChip(v.slice(0, -1)); return; }
     setInput(v);
+    if (rejected) setRejected(null);
   };
 
   return (
-    <div style={{
-      backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`, borderRadius: 4,
-      padding: '5px 8px', minHeight: 36, display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center',
-    }}>
-      {chips.map(c => (
-        <span key={c} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          padding: '1px 7px', borderRadius: 3,
-          backgroundColor: `${TEAL}14`, border: `1px solid ${TEAL}44`,
-          fontFamily: FONT_MONO, fontSize: 11, color: TEAL,
-        }}>
-          {c}
-          <button onClick={() => onChange(chips.filter(x => x !== c))} style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: TEXT_MUT, fontSize: 13, padding: 0, lineHeight: 1, display: 'flex',
-          }}>×</button>
-        </span>
-      ))}
-      {suggestions.length > 0 && (
-        <datalist id={inputId}>
-          {suggestions.filter(s => !chips.includes(s)).map(s => (
-            <option key={s} value={s} />
-          ))}
-        </datalist>
+    <div>
+      <div style={{
+        backgroundColor: BG_FIELD, border: `1px solid ${rejected ? RED : BORDER}`, borderRadius: 4,
+        padding: '5px 8px', minHeight: 36, display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center',
+        transition: 'border-color 0.2s',
+      }}>
+        {chips.map(c => (
+          <span key={c} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            padding: '1px 7px', borderRadius: 3,
+            backgroundColor: `${TEAL}14`, border: `1px solid ${TEAL}44`,
+            fontFamily: FONT_MONO, fontSize: 11, color: TEAL,
+          }}>
+            {c}
+            <button onClick={() => onChange(chips.filter(x => x !== c))} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: TEXT_MUT, fontSize: 13, padding: 0, lineHeight: 1, display: 'flex',
+            }}>×</button>
+          </span>
+        ))}
+        {suggestions.length > 0 && (
+          <datalist id={inputId}>
+            {suggestions.filter(s => !chips.includes(s)).map(s => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
+        )}
+        <input
+          value={input}
+          onChange={handleChange}
+          onKeyDown={handleKey}
+          onBlur={() => { if (input.trim()) addChip(input); }}
+          list={suggestions.length > 0 ? inputId : undefined}
+          placeholder={chips.length === 0 ? placeholder : undefined}
+          style={{
+            background: 'none', border: 'none', outline: 'none', flexGrow: 1, minWidth: 100,
+            fontFamily: FONT_MONO, fontSize: 12, color: TEXT_PRI,
+          }}
+        />
+      </div>
+      {rejected && (
+        <div style={{ marginTop: 4, fontSize: 10, color: RED, fontFamily: FONT_MONO }}>
+          "{rejected}" is not a known MT5 symbol
+        </div>
       )}
-      <input
-        value={input}
-        onChange={handleChange}
-        onKeyDown={handleKey}
-        onBlur={() => { if (input.trim()) addChip(input); }}
-        list={suggestions.length > 0 ? inputId : undefined}
-        placeholder={chips.length === 0 ? placeholder : undefined}
-        style={{
-          background: 'none', border: 'none', outline: 'none', flexGrow: 1, minWidth: 100,
-          fontFamily: FONT_MONO, fontSize: 12, color: TEXT_PRI,
-        }}
-      />
     </div>
   );
 }
@@ -737,7 +759,7 @@ function DayPicker({ value, onChange }: { value: number; onChange: (v: number) =
         return (
           <button key={d.value} title={d.title} onClick={() => onChange(active ? value & ~d.value : value | d.value)} style={{
             width: 28, height: 28, borderRadius: 4, cursor: 'pointer',
-            fontFamily: FONT_MONO, fontSize: 11, fontWeight: 600,
+            fontSize: 11, fontWeight: 600,
             border: `1px solid ${active ? TEAL : BORDER}`,
             backgroundColor: active ? `${TEAL}18` : BG_FIELD,
             color: active ? TEAL : TEXT_MUT,
@@ -859,7 +881,7 @@ function EmptyState({ msg, sub }: { msg: string; sub?: string }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
       <span style={{ color: TEXT_MUT, fontSize: 13 }}>{msg}</span>
-      {sub && <span style={{ color: TEXT_MUT, fontSize: 11, fontFamily: FONT_MONO }}>{sub}</span>}
+      {sub && <span style={{ color: TEXT_MUT, fontSize: 11 }}>{sub}</span>}
     </div>
   );
 }
@@ -870,7 +892,7 @@ function InfoBanner({ msg }: { msg: string }) {
     <div style={{
       padding: '8px 12px', borderRadius: 4, marginBottom: 12,
       backgroundColor: '#101828', border: '1px solid #1e3a5f',
-      fontSize: 11, color: '#7bafd4', fontFamily: FONT_MONO, lineHeight: 1.5,
+      fontSize: 11, color: '#7bafd4', lineHeight: 1.5,
     }}>
       ℹ {msg}
     </div>
@@ -883,7 +905,7 @@ function WarnBanner({ msg }: { msg: string }) {
     <div style={{
       padding: '8px 12px', borderRadius: 4, marginBottom: 12,
       backgroundColor: '#201400', border: `1px solid ${AMBER}44`,
-      fontSize: 11, color: AMBER, fontFamily: FONT_MONO, lineHeight: 1.5,
+      fontSize: 11, color: AMBER, lineHeight: 1.5,
     }}>
       ⚠ {msg}
     </div>
@@ -951,7 +973,7 @@ export function HedgeRulesPage() {
   const [isSanityDirty, setIsSanityDirty] = useState(false);
 
   // ── UI state ────────────────────────────────────────────────
-  const [statusFilter, setStatusFilter] = useState<'ALL' | RuleStatus>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | RuleStatus>('ACTIVE');
   const [rightTab,     setRightTab]     = useState<'lp_health' | 'route_sanity' | 'escalations'>('lp_health');
   const [loading,      setLoading]      = useState(false);
   const [saving,       setSaving]       = useState(false);
@@ -972,6 +994,7 @@ export function HedgeRulesPage() {
   const [calImportance,    setCalImportance]    = useState<number[]>([2, 3]);
   const [calPickerOpen,    setCalPickerOpen]    = useState(false);
   const [selectedCalEvent, setSelectedCalEvent] = useState<CalendarEvent | null>(null);
+  const [mt5Symbols,       setMt5Symbols]       = useState<string[]>([]);
 
   const mountedRef = useRef(true);
 
@@ -1036,6 +1059,16 @@ export function HedgeRulesPage() {
       const arr: Mt5Node[] = json.nodes ?? json.data?.nodes ?? json.data ?? json ?? [];
       setMt5Nodes(Array.isArray(arr) ? arr : []);
     } catch { /* silent */ }
+  }, []);
+
+  const loadMt5Symbols = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/symbol-mappings/mt5-symbols');
+      if (!res.ok || !mountedRef.current) return;
+      const json = await res.json();
+      const syms: { symbol: string }[] = json.symbols ?? [];
+      setMt5Symbols(syms.map(s => s.symbol.toUpperCase()));
+    } catch { /* silent — freeform entry still works if this fails */ }
   }, []);
 
   const loadBBookGroups = useCallback(async (nodeId: string) => {
@@ -1118,10 +1151,11 @@ export function HedgeRulesPage() {
     mountedRef.current = true;
     loadLpOptions();
     loadMt5Nodes();
+    loadMt5Symbols();
     const saved = sessionStorage.getItem(SS_KEY);
     if (saved) setSelectedId(parseInt(saved, 10));
     return () => { mountedRef.current = false; };
-  }, [loadLpOptions, loadMt5Nodes]);
+  }, [loadLpOptions, loadMt5Nodes, loadMt5Symbols]);
 
   // 30s rules poll
   useEffect(() => {
@@ -1407,6 +1441,46 @@ export function HedgeRulesPage() {
     selectedId !== null ? escalations.filter(e => e.rule_id === selectedId) : [],
   [escalations, selectedId]);
 
+  // ── Completeness checklist — drives the "what's left to complete" banner
+  //    at the top of the middle panel. Each item reports done/total for a
+  //    logical section; done items turn green, missing ones stay amber.
+  const completeness = useMemo(() => {
+    const d = draftRule;
+    const needsNewsEvent  = d.activation_type === 'NEWS_EVENT';
+    const needsSchedule   = d.activation_type === 'SCHEDULE';
+    const needsPnlTrigger = d.activation_type === 'PNL_TRIGGER';
+    const needsGuard      = d.condition_type !== 'NONE';
+    const hasEnabledNode  = mt5Nodes.some(n => n.is_enabled);
+
+    const items: { key: string; label: string; done: boolean; required: boolean }[] = [
+      { key: 'name',      label: 'Strategy name',      done: d.name.trim().length > 0,                      required: true },
+      { key: 'source',    label: 'MT5 server',         done: hasEnabledNode,                                 required: true },
+      { key: 'scope',     label: 'Scope (groups/logins/cohorts)', done: d.groups.length > 0 || d.login_ids.trim().length > 0 || d.trader_classifications.length > 0, required: false },
+      { key: 'symbols',   label: 'Symbols',            done: d.symbols.length > 0,                          required: false },
+      { key: 'volume',    label: 'Hedge volume %',     done: parseFloat(d.hedge_volume_pct) > 0,            required: true },
+      { key: 'lp',        label: 'Primary LP',         done: d.hedging_lp_id.length > 0,                    required: true },
+      { key: 'activation',label: `Activation (${d.activation_type.replace('_', ' ')})`,
+        done: d.activation_type === 'ALWAYS' || d.activation_type === 'MANUAL'
+              || (needsSchedule   && d.schedule_days > 0 && d.schedule_time_from !== '' && d.schedule_time_to !== '')
+              || (needsNewsEvent  && d.te_calendar_id.length > 0)
+              || (needsPnlTrigger && d.activation_value.length > 0),
+        required: true },
+      ...(needsGuard ? [{ key: 'guard', label: 'Guard threshold', done: d.condition_value.length > 0, required: true }] : []),
+    ];
+    const requiredItems = items.filter(i => i.required);
+    const requiredDone  = requiredItems.filter(i => i.done).length;
+    const optionalDone  = items.filter(i => !i.required && i.done).length;
+    const allRequiredDone = requiredDone === requiredItems.length;
+    return {
+      items,
+      requiredDone,
+      requiredTotal: requiredItems.length,
+      optionalDone,
+      optionalTotal: items.filter(i => !i.required).length,
+      allRequiredDone,
+    };
+  }, [draftRule, mt5Nodes]);
+
   // ══════════════════════════════════════════════════════════
   // RENDER
   // ══════════════════════════════════════════════════════════
@@ -1420,7 +1494,7 @@ export function HedgeRulesPage() {
       }}>
         <div>
           <h1 style={{ fontSize: 16, fontWeight: 600, color: TEXT_PRI, margin: 0 }}>Hedging Strategies</h1>
-          <p style={{ fontSize: 11, color: TEXT_SEC, margin: '2px 0 0', fontFamily: FONT_MONO }}>
+          <p style={{ fontSize: 11, color: TEXT_SEC, margin: '2px 0 0' }}>
             Define and control exposure routing from executed client trades
           </p>
         </div>
@@ -1444,7 +1518,7 @@ export function HedgeRulesPage() {
           </div>
           {toast && (
             <span style={{
-              padding: '3px 10px', borderRadius: 4, fontSize: 11, fontFamily: FONT_MONO,
+              padding: '3px 10px', borderRadius: 4, fontSize: 11,
               backgroundColor: '#0f2018', color: GREEN, border: `1px solid ${GREEN}44`,
             }}>
               ✓ {toast}
@@ -1455,7 +1529,7 @@ export function HedgeRulesPage() {
             disabled={isCreating}
             style={{
               padding: '5px 14px', borderRadius: 4, cursor: isCreating ? 'default' : 'pointer',
-              fontSize: 12, fontWeight: 600, fontFamily: FONT_MONO,
+              fontSize: 12, fontWeight: 600,
               backgroundColor: isCreating ? '#0d2020' : `${TEAL}22`,
               border: `1px solid ${isCreating ? TEAL + '33' : TEAL}`,
               color: isCreating ? TEAL + '88' : TEAL,
@@ -1494,15 +1568,15 @@ export function HedgeRulesPage() {
             display: 'flex', borderBottom: `1px solid ${BORDER}`,
             backgroundColor: '#2a292c', flexShrink: 0,
           }}>
-            {(['ALL', 'ACTIVE', 'PAUSED', 'STOPPED'] as const).map(f => {
+            {(['ACTIVE', 'PAUSED', 'STOPPED', 'ALL'] as const).map(f => {
               const isActive = statusFilter === f;
               return (
                 <button key={f} onClick={() => setStatusFilter(f)} style={{
                   flex: 1, padding: '7px 4px', border: 'none', cursor: 'pointer',
-                  fontFamily: FONT_MONO, fontSize: 10, letterSpacing: '0.04em',
+                  fontSize: 11, letterSpacing: '0.04em', fontWeight: 500,
                   backgroundColor: 'transparent',
                   borderBottom: isActive ? `2px solid ${TEAL}` : '2px solid transparent',
-                  color: isActive ? TEAL : TEXT_MUT,
+                  color: isActive ? TEAL : TEXT_SEC,
                   transition: 'color 0.1s',
                 }}>
                   {f}
@@ -1534,10 +1608,10 @@ export function HedgeRulesPage() {
         </div>
 
         {/* ════════════════════════════════════════════════════
-            MIDDLE PANEL — Definition form (480px)
+            MIDDLE PANEL — Hedge Strategy Settings (widened — primary workspace)
         ════════════════════════════════════════════════════ */}
         <div style={{
-          width: 720, flexShrink: 0,
+          width: 860, flexShrink: 0,
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
           borderRight: `1px solid ${BORDER_MD}`,
         }}>
@@ -1548,7 +1622,7 @@ export function HedgeRulesPage() {
                 ⇌
               </div>
               <span style={{ color: TEXT_MUT, fontSize: 13 }}>Select a strategy to view or edit</span>
-              <span style={{ color: TEXT_MUT, fontSize: 11, fontFamily: FONT_MONO }}>or click + New Strategy to define one</span>
+              <span style={{ color: TEXT_MUT, fontSize: 11 }}>or click + New Strategy to define one</span>
             </div>
           ) : (
             <>
@@ -1584,7 +1658,7 @@ export function HedgeRulesPage() {
                   {(isDirtyAny || isCreating) && (
                     <button onClick={handleCancel} style={{
                       padding: '5px 12px', borderRadius: 4, cursor: 'pointer',
-                      fontSize: 12, fontFamily: FONT_MONO,
+                      fontSize: 12,
                       background: 'none', border: `1px solid ${BORDER_MD}`, color: TEXT_SEC,
                     }}>
                       Cancel
@@ -1593,7 +1667,7 @@ export function HedgeRulesPage() {
                   {/* Save */}
                   <button onClick={handleSave} disabled={saving} style={{
                     padding: '5px 16px', borderRadius: 4, cursor: saving ? 'default' : 'pointer',
-                    fontSize: 12, fontWeight: 600, fontFamily: FONT_MONO,
+                    fontSize: 12, fontWeight: 600,
                     backgroundColor: isDirtyAny || isCreating ? `${TEAL}22` : 'transparent',
                     border: `1px solid ${isDirtyAny || isCreating ? TEAL : BORDER}`,
                     color: isDirtyAny || isCreating ? TEAL : TEXT_MUT,
@@ -1608,11 +1682,54 @@ export function HedgeRulesPage() {
               {saveError && (
                 <div style={{
                   padding: '6px 16px', borderBottom: `1px solid #5a2020`,
-                  backgroundColor: '#1c1010', fontSize: 11, color: '#ff8888', fontFamily: FONT_MONO, flexShrink: 0,
+                  backgroundColor: '#1c1010', fontSize: 11, color: '#ff8888', flexShrink: 0,
                 }}>
                   ⚠ {saveError}
                 </div>
               )}
+
+              {/* ── Completeness progress ──────────────────────── */}
+              <div style={{
+                padding: '10px 16px', borderBottom: `1px solid ${BORDER}`,
+                backgroundColor: completeness.allRequiredDone ? '#0f2018' : '#201400',
+                border: `1px solid ${completeness.allRequiredDone ? GREEN : AMBER}44`,
+                flexShrink: 0,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ 
+                    fontSize: 12, 
+                    color: completeness.allRequiredDone ? GREEN : AMBER, 
+                    fontWeight: 600,
+                  }}>
+                    {completeness.allRequiredDone ? '✓ Strategy complete' : 'Setup progress'}
+                  </span>
+                  <span style={{ fontSize: 11, color: TEXT_SEC }}>
+                    <span style={{ color: completeness.allRequiredDone ? GREEN : AMBER, fontFamily: FONT_MONO }}>
+                      {completeness.requiredDone}/{completeness.requiredTotal}
+                    </span> required
+                    {completeness.optionalTotal > 0 && (
+                      <span>
+                        {' · '}
+                        <span style={{ color: completeness.optionalDone > 0 ? GREEN : TEXT_MUT, fontFamily: FONT_MONO }}>
+                          {completeness.optionalDone}/{completeness.optionalTotal}
+                        </span> optional
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {completeness.items.map(item => (
+                    <span key={item.key} style={{
+                      padding: '2px 6px', borderRadius: 3, fontSize: 10,
+                      backgroundColor: item.done ? `${GREEN}14` : (item.required ? `${AMBER}14` : `${TEXT_MUT}14`),
+                      border: `1px solid ${item.done ? GREEN : (item.required ? AMBER : TEXT_MUT)}44`,
+                      color: item.done ? GREEN : (item.required ? AMBER : TEXT_MUT),
+                    }}>
+                      {item.done ? '✓' : (item.required ? '○' : '◦')} {item.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
 
               {/* ── Scrollable form ────────────────────────────── */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
@@ -1696,7 +1813,7 @@ export function HedgeRulesPage() {
                       </div>
                     ) : (
                       <div style={{ padding: '7px 12px', borderRadius: 4, backgroundColor: BG_FIELD, border: `1px solid ${BORDER}` }}>
-                        <span style={{ fontSize: 12, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                        <span style={{ fontSize: 12, color: TEXT_MUT }}>
                           No enabled MT5 node — configure one in MT5 Servers
                         </span>
                       </div>
@@ -1711,7 +1828,7 @@ export function HedgeRulesPage() {
                           const active = draftRule.groups.includes(g);
                           return (
                             <button key={g} onClick={() => setRule({ groups: active ? draftRule.groups.filter(x => x !== g) : [...draftRule.groups, g] })} style={{
-                              padding: '2px 9px', borderRadius: 3, cursor: 'pointer', fontFamily: FONT_MONO, fontSize: 11,
+                              padding: '2px 9px', borderRadius: 3, cursor: 'pointer', fontSize: 11,
                               border: `1px solid ${active ? TEAL : BORDER}`,
                               backgroundColor: active ? `${TEAL}14` : BG_FIELD,
                               color: active ? TEAL : TEXT_SEC,
@@ -1723,13 +1840,13 @@ export function HedgeRulesPage() {
                       </div>
                     ) : (
                       <div style={{ padding: '6px 10px', borderRadius: 4, border: `1px solid ${BORDER}`, backgroundColor: BG_FIELD }}>
-                        <span style={{ fontSize: 11, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                        <span style={{ fontSize: 11, color: TEXT_MUT }}>
                           {masterNode ? 'No B-Book groups assigned on this server' : 'Loading…'}
                         </span>
                       </div>
                     )}
                     {draftRule.groups.length === 0 && bBookGroups.length > 0 && (
-                      <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                      <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT }}>
                         None selected — strategy applies to all B-Book groups
                       </div>
                     )}
@@ -1748,7 +1865,7 @@ export function HedgeRulesPage() {
                   {/* Cohort targeting separator */}
                   <div style={{ margin: '14px 0 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
-                    <span style={{ fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO, letterSpacing: '0.06em' }}>COHORT TARGETING</span>
+                    <span style={{ fontSize: 10, color: TEXT_MUT, letterSpacing: '0.06em' }}>COHORT TARGETING</span>
                     <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
                   </div>
 
@@ -1766,14 +1883,14 @@ export function HedgeRulesPage() {
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {RISK_COHORTS.map(rc => (
                         <span key={rc.value} title="Risk cohort targeting — pending API" style={{
-                          padding: '3px 10px', borderRadius: 3, fontFamily: FONT_MONO, fontSize: 11,
+                          padding: '3px 10px', borderRadius: 3, fontSize: 11,
                           border: `1px solid ${BORDER}`, color: TEXT_MUT, opacity: 0.5, cursor: 'not-allowed',
                         }}>
                           {rc.label}
                         </span>
                       ))}
                     </div>
-                    <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                    <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT }}>
                       Coming soon — requires risk level endpoint
                     </div>
                   </FormRow>
@@ -1798,9 +1915,11 @@ export function HedgeRulesPage() {
                       chips={draftRule.symbols}
                       onChange={v => setRule({ symbols: v })}
                       placeholder="Type a symbol name and press Enter…"
+                      suggestions={mt5Symbols}
+                      validEntries={mt5Symbols}
                     />
                     {draftRule.symbols.length === 0 && (
-                      <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO }}>
+                      <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT }}>
                         No symbols selected — strategy applies to all instruments
                       </div>
                     )}
@@ -1811,7 +1930,7 @@ export function HedgeRulesPage() {
                       {(['LONG', 'BOTH', 'SHORT'] as Direction[]).map(d => (
                         <button key={d} onClick={() => setRule({ direction: d })} style={{
                           flex: 1, padding: '6px 0', borderRadius: 4, cursor: 'pointer',
-                          fontFamily: FONT_MONO, fontSize: 12, fontWeight: draftRule.direction === d ? 600 : 400,
+                          fontSize: 12, fontWeight: draftRule.direction === d ? 600 : 400,
                           border: `1px solid ${draftRule.direction === d ? TEAL : BORDER}`,
                           backgroundColor: draftRule.direction === d ? `${TEAL}18` : BG_FIELD,
                           color: draftRule.direction === d ? TEAL : TEXT_SEC,
@@ -1870,7 +1989,7 @@ export function HedgeRulesPage() {
                   {/* Guard clause */}
                   <div style={{ margin: '14px 0 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
-                    <span style={{ fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO, letterSpacing: '0.06em' }}>GUARD CLAUSE</span>
+                    <span style={{ fontSize: 10, color: TEXT_MUT, letterSpacing: '0.06em' }}>GUARD CLAUSE</span>
                     <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
                   </div>
 
@@ -1923,7 +2042,7 @@ export function HedgeRulesPage() {
                             }}
                             style={{
                               padding: '5px 12px', borderRadius: 4, cursor: 'pointer',
-                              fontFamily: FONT_MONO, fontSize: 11,
+                              fontSize: 11,
                               border: `1px solid ${isActive ? TEAL : BORDER}`,
                               backgroundColor: isActive ? `${TEAL}18` : BG_FIELD,
                               color: isActive ? TEAL : TEXT_SEC,
@@ -2008,7 +2127,7 @@ export function HedgeRulesPage() {
                           onClick={handleOpenCalPicker}
                           style={{
                             padding: '8px 14px', borderRadius: 4, cursor: 'pointer',
-                            fontFamily: FONT_MONO, fontSize: 11, textAlign: 'left',
+                            fontSize: 11, textAlign: 'left',
                             border: `1px solid ${draftRule.te_calendar_id ? AMBER : BORDER}`,
                             backgroundColor: BG_FIELD, color: TEXT_SEC,
                             display: 'flex', alignItems: 'center', gap: 8,
@@ -2062,7 +2181,7 @@ export function HedgeRulesPage() {
                                 );
                               })}
                             </div>
-                            {calLoading && <span style={{ fontSize: 10, color: TEXT_MUT, fontFamily: FONT_MONO }}>Loading…</span>}
+                            {calLoading && <span style={{ fontSize: 10, color: TEXT_MUT }}>Loading…</span>}
                             <button
                               onClick={() => setCalPickerOpen(false)}
                               style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: TEXT_MUT, fontSize: 16, lineHeight: 1 }}
@@ -2079,7 +2198,7 @@ export function HedgeRulesPage() {
                               );
                               if (filtered.length === 0) {
                                 return (
-                                  <div style={{ padding: '16px 12px', textAlign: 'center', color: TEXT_MUT, fontSize: 11, fontFamily: FONT_MONO }}>
+                                  <div style={{ padding: '16px 12px', textAlign: 'center', color: TEXT_MUT, fontSize: 11 }}>
                                     {calLoading ? 'Loading events…' : 'No events match current filters'}
                                   </div>
                                 );
@@ -2153,7 +2272,7 @@ export function HedgeRulesPage() {
                       )}
 
                       {!draftRule.te_calendar_id && (
-                        <div style={{ fontSize: 10, color: AMBER, fontFamily: FONT_MONO }}>
+                        <div style={{ fontSize: 10, color: AMBER }}>
                           ⚠ An economic event must be selected before saving.
                         </div>
                       )}
@@ -2186,7 +2305,7 @@ export function HedgeRulesPage() {
                   {/* MANUAL note */}
                   {draftRule.activation_type === 'MANUAL' && (
                     <div style={{ padding: '8px 12px', borderRadius: 4, backgroundColor: '#0f1c20', border: `1px solid ${BORDER}` }}>
-                      <span style={{ fontSize: 11, color: TEXT_SEC, fontFamily: FONT_MONO }}>
+                      <span style={{ fontSize: 11, color: TEXT_SEC }}>
                         Manual activation — this strategy will only become ACTIVE via explicit manager action in the UI.
                       </span>
                     </div>
@@ -2195,7 +2314,7 @@ export function HedgeRulesPage() {
                   {/* ALWAYS note */}
                   {draftRule.activation_type === 'ALWAYS' && (
                     <div style={{ padding: '8px 12px', borderRadius: 4, backgroundColor: '#0f1c20', border: `1px solid ${BORDER}` }}>
-                      <span style={{ fontSize: 11, color: TEXT_SEC, fontFamily: FONT_MONO }}>
+                      <span style={{ fontSize: 11, color: TEXT_SEC }}>
                         Always active — fires on every matching position while strategy status is ACTIVE.
                       </span>
                     </div>
@@ -2230,10 +2349,10 @@ export function HedgeRulesPage() {
             ] as { key: typeof rightTab; label: string; badge?: number }[]).map(t => (
               <button key={t.key} onClick={() => setRightTab(t.key)} style={{
                 flex: 1, padding: '7px 4px', border: 'none', cursor: 'pointer',
-                fontFamily: FONT_MONO, fontSize: 10, letterSpacing: '0.04em',
+                fontSize: 11, letterSpacing: '0.04em', fontWeight: 500,
                 backgroundColor: 'transparent',
                 borderBottom: rightTab === t.key ? `2px solid ${TEAL}` : '2px solid transparent',
-                color: rightTab === t.key ? TEAL : TEXT_PRI,
+                color: rightTab === t.key ? TEAL : TEXT_SEC,
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
               }}>
                 {t.label}
@@ -2280,7 +2399,7 @@ export function HedgeRulesPage() {
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       padding: '6px 0', borderBottom: `1px solid ${BORDER}`,
                     }}>
-                      <span style={{ fontSize: 13, color: RP_LABEL, fontFamily: FONT_MONO }}>{label}</span>
+                      <span style={{ fontSize: 13, color: RP_LABEL }}>{label}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         {threshold !== null && (
                           <span style={{ fontSize: 12, color: RP_HINT, fontFamily: FONT_MONO }}>
@@ -2316,7 +2435,7 @@ export function HedgeRulesPage() {
                         backgroundColor: '#1a191e',
                       }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 11, color: RP_HINT, fontFamily: FONT_MONO, letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>{label}</span>
+                          <span style={{ fontSize: 11, color: RP_HINT, letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>{label}</span>
                           <span style={{ fontSize: 14, color: TEXT_PRI, fontFamily: FONT_MONO, fontWeight: 600 }}>{lp}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2347,7 +2466,7 @@ export function HedgeRulesPage() {
                           <div style={{
                             marginTop: 8, padding: '6px 8px', borderRadius: 3,
                             backgroundColor: '#101828', border: '1px solid #1e3a5f',
-                            fontSize: 11, color: '#7bafd4', fontFamily: FONT_MONO, lineHeight: 1.5,
+                            fontSize: 11, color: '#7bafd4', lineHeight: 1.5,
                           }}>
                             ℹ Metrics populate once RouteSanityChecker has collected FIX session data.
                             Connectivity is live — metric sampling begins on first hedge dispatch.
@@ -2364,7 +2483,7 @@ export function HedgeRulesPage() {
                     {draftSanity.breach_action === 'FALLBACK_LP' && draftSanity.fallback_lp_id && (
                       <LpCard lp={draftSanity.fallback_lp_id} label="Fallback LP" health={fallbackLp} />
                     )}
-                    <div style={{ fontSize: 11, color: RP_HINT, fontFamily: FONT_MONO, marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: RP_HINT, marginTop: 4 }}>
                       Thresholds shown from Route Sanity config · Polled every 5s
                     </div>
                   </>
@@ -2383,13 +2502,13 @@ export function HedgeRulesPage() {
                       backgroundColor: '#101828', border: '1px solid #1e3a5f',
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     }}>
-                      <span style={{ fontSize: 11, color: '#7bafd4', fontFamily: FONT_MONO }}>
+                      <span style={{ fontSize: 11, color: '#7bafd4' }}>
                         ℹ Inheriting global default for LP <strong>{draftSanity.lp_id || selectedRule?.hedging_lp_id}</strong>.
                         No per-rule override defined.
                       </span>
                       <button onClick={() => setSanityOverrideEnabled(true)} style={{
                         padding: '3px 10px', borderRadius: 3, cursor: 'pointer',
-                        fontSize: 11, fontFamily: FONT_MONO, backgroundColor: '#1e3a5f',
+                        fontSize: 11, backgroundColor: '#1e3a5f',
                         border: '1px solid #2a5080', color: '#a5c8f0', whiteSpace: 'nowrap' as const,
                       }}>
                         Override
@@ -2402,7 +2521,7 @@ export function HedgeRulesPage() {
                     <div style={{
                       padding: '6px 10px', borderRadius: 4, marginBottom: 10,
                       backgroundColor: '#1c1010', border: `1px solid #5a2020`,
-                      fontSize: 11, color: '#ff8888', fontFamily: FONT_MONO,
+                      fontSize: 11, color: '#ff8888',
                     }}>
                       ⚠ {sanityError}
                     </div>
@@ -2445,7 +2564,7 @@ export function HedgeRulesPage() {
                         {(['PAUSE_RULE', 'STOP_RULE', 'FALLBACK_LP'] as BreachAction[]).map(a => (
                           <button key={a} onClick={() => setSanity({ breach_action: a })} style={{
                             flex: 1, padding: '6px 4px', borderRadius: 4, cursor: 'pointer',
-                            fontFamily: FONT_MONO, fontSize: 10,
+                            fontSize: 10,
                             border: `1px solid ${draftSanity.breach_action === a ? AMBER : BORDER}`,
                             backgroundColor: draftSanity.breach_action === a ? `${AMBER}14` : BG_FIELD,
                             color: draftSanity.breach_action === a ? AMBER : TEXT_SEC,
@@ -2518,7 +2637,7 @@ export function HedgeRulesPage() {
                     {/* Final fallback */}
                     <div style={{ margin: '12px 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
-                      <span style={{ fontSize: 9, color: TEXT_MUT, fontFamily: FONT_MONO, letterSpacing: '0.05em' }}>FINAL FALLBACK — ALL LPs EXHAUSTED</span>
+                      <span style={{ fontSize: 9, color: TEXT_MUT, letterSpacing: '0.05em' }}>FINAL FALLBACK — ALL LPs EXHAUSTED</span>
                       <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
@@ -2528,7 +2647,7 @@ export function HedgeRulesPage() {
                           border: `1px solid ${draftSanity.final_fallback_action === k ? v.color : BORDER}`,
                           backgroundColor: draftSanity.final_fallback_action === k ? `${v.color}12` : BG_FIELD,
                         }}>
-                          <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 2 }}>
+                          <div style={{ fontSize: 10, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 2 }}>
                             {v.label}
                           </div>
                           <div style={{ fontSize: 9, color: TEXT_MUT, lineHeight: 1.4 }}>{v.desc}</div>
@@ -2542,7 +2661,7 @@ export function HedgeRulesPage() {
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4, borderTop: `1px solid ${BORDER}` }}>
                       {!sanityIsGlobal && (
                         <button onClick={handleRevertSanity} style={{
-                          fontSize: 11, fontFamily: FONT_MONO, background: 'none',
+                          fontSize: 11, background: 'none',
                           border: `1px solid ${BORDER}`, color: TEXT_MUT, borderRadius: 3,
                           padding: '4px 10px', cursor: 'pointer',
                         }}>
@@ -2550,7 +2669,7 @@ export function HedgeRulesPage() {
                         </button>
                       )}
                       <button onClick={handleSanitySave} disabled={sanitySaving || !isSanityDirty} style={{
-                        fontSize: 11, fontFamily: FONT_MONO, fontWeight: 600, borderRadius: 3,
+                        fontSize: 11, fontWeight: 600, borderRadius: 3,
                         padding: '4px 14px', cursor: isSanityDirty ? 'pointer' : 'default',
                         backgroundColor: isSanityDirty ? `${TEAL}22` : 'transparent',
                         border: `1px solid ${isSanityDirty ? TEAL : BORDER}`,
@@ -2571,13 +2690,13 @@ export function HedgeRulesPage() {
                 <>
                   {ruleEscalations.length === 0 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, paddingTop: 40 }}>
-                      <span style={{ color: RP_LABEL, fontSize: 14, fontFamily: FONT_MONO }}>No escalated positions</span>
-                      <span style={{ color: RP_HINT, fontSize: 12, fontFamily: FONT_MONO }}>All hedge orders for this strategy resolved normally</span>
+                      <span style={{ color: RP_LABEL, fontSize: 14 }}>No escalated positions</span>
+                      <span style={{ color: RP_HINT, fontSize: 12 }}>All hedge orders for this strategy resolved normally</span>
                       {totalEscalations > 0 && (
                         <span style={{
                           marginTop: 8, padding: '5px 12px', borderRadius: 4,
                           backgroundColor: '#200808', border: `1px solid ${RED}44`,
-                          fontSize: 12, color: RED, fontFamily: FONT_MONO,
+                          fontSize: 12, color: RED,
                         }}>
                           ⚠ {totalEscalations} escalation{totalEscalations > 1 ? 's' : ''} exist across other strategies
                         </span>
@@ -2633,7 +2752,7 @@ export function HedgeRulesPage() {
 
                             {/* Reason */}
                             {e.escalation_reason && (
-                              <div style={{ fontSize: 12, fontFamily: FONT_MONO, color: RP_HINT, marginBottom: 8, lineHeight: 1.5 }}>
+                              <div style={{ fontSize: 12, color: RP_HINT, marginBottom: 8, lineHeight: 1.5 }}>
                                 {e.escalation_reason}
                                 {e.rejection_code && <span style={{ color: RED }}> (code: {e.rejection_code})</span>}
                               </div>
@@ -2666,7 +2785,7 @@ export function HedgeRulesPage() {
                           </div>
                         );
                       })}
-                      <div style={{ fontSize: 12, color: RP_HINT, fontFamily: FONT_MONO, paddingTop: 4 }}>
+                      <div style={{ fontSize: 12, color: RP_HINT, paddingTop: 4 }}>
                         Showing escalations for this strategy only · Polled every 10s
                       </div>
                     </div>
@@ -2689,7 +2808,7 @@ function ActionBtn({ label, color, onClick }: { label: string; color: string; on
   return (
     <button onClick={onClick} style={{
       padding: '4px 10px', borderRadius: 3, cursor: 'pointer',
-      fontSize: 11, fontFamily: FONT_MONO,
+      fontSize: 11, fontWeight: 500,
       background: 'none', border: `1px solid ${color}55`, color,
       transition: 'background 0.1s',
     }}>

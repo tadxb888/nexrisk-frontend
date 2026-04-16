@@ -32,3 +32,4 @@ export {
   RiskLogicSettingsPage,
 } from './SettingsSubPages';
 export { UserManagementPage } from './UserManagementPage';
+export { ReportsPage } from './ReportsPage';

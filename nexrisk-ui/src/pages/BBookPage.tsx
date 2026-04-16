@@ -12,12 +12,11 @@ import { mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAP
 // THEME (Quartz dark)
 // ======================
 const gridTheme = themeQuartz.withParams({
-  backgroundColor: "#232326",
-  browserColorScheme: "dark",
-  chromeBackgroundColor: { ref: "foregroundColor", mix: 0.11, onto: "backgroundColor" },
-  fontFamily: { googleFont: "IBM Plex Mono" },
-  fontSize: 12,
-  foregroundColor: "#FFF",
+  backgroundColor: '#232326',
+  browserColorScheme: 'dark',
+  chromeBackgroundColor: { ref: 'foregroundColor', mix: 0.11, onto: 'backgroundColor' },
+  fontSize: 14,
+  foregroundColor: '#FFF',
   headerFontSize: 14,
 });
 

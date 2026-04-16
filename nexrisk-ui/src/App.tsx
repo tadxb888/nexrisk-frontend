@@ -45,6 +45,8 @@ import {
   RouteSanityPage,
   // Admin
   UserManagementPage,
+  // Reports
+  ReportsPage,
 } from '@/pages';
 
 // Create React Query client
@@ -97,6 +99,7 @@ function App() {
               <Route path="/price-rules" element={<PriceRulesPage />} />
               
               {/* Reports */}
+              <Route path="/reports" element={<ReportsPage />} />
               <Route path="/execution-report" element={<ExecutionReportPage />} />
               <Route path="/logs" element={<LogsPage />} />
 

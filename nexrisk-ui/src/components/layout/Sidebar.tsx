@@ -122,6 +122,13 @@ const ArchetypeIcon = () => (
   </svg>
 );
 
+// Placeholder icon for the Reports hub — to be replaced when nav is revisited
+const ReportsPageIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+    <path d="M19,0H5C2.243,0,0,2.243,0,5v14c0,2.757,2.243,5,5,5h14c2.757,0,5-2.243,5-5V5c0-2.757-2.243-5-5-5Zm3,7H13V2h6c1.654,0,3,1.346,3,3v2Zm-11-5v5H2V5c0-1.654,1.346-3,3-3h6Zm-9,7h9v4H2v-4Zm0,6h9v3H5c-1.654,0-3-1.346-3-3Zm11,3v-3h9v3Zm9-5h-9v-4h9v4Z"/>
+  </svg>
+);
+
 const UserManagementIcon = () => (
   <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
     <path d="M9,12A6,6,0,1,0,3,6,6.006,6.006,0,0,0,9,12ZM9,2A4,4,0,1,1,5,6,4,4,0,0,1,9,2Z"/>
@@ -192,8 +199,9 @@ const navSections: NavSection[] = [
   {
     title: 'Reports',
     items: [
+      { path: '/reports',          label: 'Reports',          icon: <ReportsPageIcon /> },
       { path: '/execution-report', label: 'Execution Report', icon: <ExecutionReportIcon /> },
-      { path: '/logs', label: 'Logs', icon: <LogsIcon /> },
+      { path: '/logs',             label: 'Logs',             icon: <LogsIcon /> },
     ],
   },
   {
