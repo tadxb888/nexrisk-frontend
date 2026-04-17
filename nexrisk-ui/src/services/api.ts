@@ -12,6 +12,7 @@ async function fetchAPI<T>(
   const url = `${API_BASE}${endpoint}`;
   
   const response = await fetch(url, {
+    cache: 'no-store',
     ...options,
     credentials: 'include',   // send nexrisk_session cookie on every request
     headers: {

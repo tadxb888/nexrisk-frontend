@@ -716,7 +716,7 @@ export function SymbolMappingPage() {
       });
       return n;
     });
-  }, [lpId]);
+  }, [lpId, nodeId]);
 
   async function handleDelete() {
     if (!deleteTarget) return;

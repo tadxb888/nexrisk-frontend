@@ -132,11 +132,11 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const RISK_STYLE: Record<RiskLevel, { bg: string; text: string; border: string; bar: string; label: string }> = {
-  VERY_LOW: { bg: '#0d1a10', text: '#7aab85', border: '#1f3d28', bar: '#2a5435', label: 'Very Low' },
-  LOW:      { bg: '#101d12', text: '#7aab85', border: '#26472e', bar: '#306040', label: 'Low' },
-  MEDIUM:   { bg: '#1a1a00', text: '#b0a84a', border: '#4a4820', bar: '#6a6530', label: 'Medium' },
-  HIGH:     { bg: '#1c1508', text: '#b88a5cff', border: '#5a3d20', bar: '#7a5228', label: 'High' },
-  CRITICAL: { bg: '#1c0d0f', text: '#f1c6caff', border: '#5a2028', bar: '#d81c2bff', label: 'Critical' },
+  VERY_LOW: { bg: '#162a1c', text: '#66e07a', border: '#2f6a3d', bar: '#2f6a3d', label: 'Very Low' },
+  LOW:      { bg: '#162a1c', text: '#66e07a', border: '#2f6a3d', bar: '#2f6a3d', label: 'Low' },
+  MEDIUM:   { bg: '#2a2816', text: '#e0d066', border: '#6a6530', bar: '#6a6530', label: 'Medium' },
+  HIGH:     { bg: '#2a2016', text: '#e09a55', border: '#6a4a2f', bar: '#6a4a2f', label: 'High' },
+  CRITICAL: { bg: '#2c1417', text: '#ff5c5c', border: '#7a2f36', bar: '#7a2f36', label: 'Critical' },
 };
 
 // ─── Factory Default Mock Data ────────────────────────────────
@@ -217,11 +217,11 @@ function ActionBadge({ code, actionDefs }: { code: ActionCode; actionDefs?: Acti
   const mod    = ['WIDEN_SPREAD', 'MIN_HOLDING_TIME', 'RESTRICT_VOLUME', 'DISABLE_REBATES'];
   const abook  = ['A_BOOK_REVIEW', 'A_BOOK_PARTIAL', 'A_BOOK_FULL'];
 
-  const color = safe.includes(code)  ? { bg: '#0d1a10', text: '#7aab85', border: '#1f3d28' }
-    : watch.includes(code)  ? { bg: '#1a1a00', text: '#b0a84a', border: '#4a4820' }
-    : mod.includes(code)    ? { bg: '#1c1508', text: '#b07840', border: '#5a3d20' }
-    : abook.includes(code)  ? { bg: '#1c0d0f', text: '#b05050', border: '#5a2028' }
-    : { bg: '#1b1c22', text: '#a0a4b8', border: '#44454f' };
+  const color = safe.includes(code)  ? { bg: '#162a1c', text: '#66e07a', border: '#2f6a3d' }
+    : watch.includes(code)  ? { bg: '#2a2816', text: '#e0d066', border: '#6a6530' }
+    : mod.includes(code)    ? { bg: '#2a2016', text: '#e09a55', border: '#6a4a2f' }
+    : abook.includes(code)  ? { bg: '#2c1417', text: '#ff5c5c', border: '#7a2f36' }
+    : { bg: '#1a1a1d', text: '#d2d6e2', border: '#44454f' };
 
   return (
     <span className="px-1.5 py-0.5 rounded text-xs font-mono font-medium"
@@ -244,12 +244,12 @@ function BandCell({ band, actionDefs, modifiedRuleIds, onClick }: {
       className="group flex flex-col text-left rounded transition-all duration-150 hover:ring-1 hover:ring-accent"
       style={{
         background: s.bg,
-        border: `1px solid ${modified ? '#7a6020' : s.border}`,
+        border: `1px solid ${modified ? '#6a6530' : s.border}`,
         minWidth: 0, flex: 1, position: 'relative', padding: 0, overflow: 'hidden',
       }}>
       <div style={{ height: 2, background: s.bar, width: '100%' }} />
       {modified && (
-        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full" style={{ background: '#8a7030' }}
+        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full" style={{ background: '#e0d066' }}
           title={`Modified by ${band.updated_by}`} />
       )}
       <div className="flex flex-col gap-0 px-2 py-1 flex-1">
@@ -260,7 +260,7 @@ function BandCell({ band, actionDefs, modifiedRuleIds, onClick }: {
           {getActionLabel(band.action_code, actionDefs)}
         </span>
         {hint && <span className="text-xs font-mono" style={{ color: s.text, opacity: 0.65 }}>{hint}</span>}
-        <span className="font-mono mt-auto" style={{ color: '#c8cad4', fontSize: 9 }}>
+        <span className="font-mono mt-auto" style={{ color: '#d2d6e2', fontSize: 9 }}>
           PF {pfLabel(band)}
         </span>
       </div>
@@ -324,13 +324,13 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
   const isFactory = !isCustomRule;
 
   return (
-    <div className="flex flex-col h-full" style={{ background: '#14151a', borderLeft: '1px solid #44454f' }}>
+    <div className="flex flex-col h-full" style={{ background: '#1a1a1d', borderLeft: '1px solid #44454f' }}>
       <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #44454f' }}>
         <div>
           <div className="text-sm font-semibold text-white">
             {isFactory ? 'Edit Factory Rule' : 'Edit Custom Rule'} #{band.rule_id}
           </div>
-          <div className="text-xs mt-0.5" style={{ color: '#a0a4b8' }}>
+          <div className="text-xs mt-0.5" style={{ color: '#d2d6e2' }}>
             {getBehaviorMeta(behaviorType).label} · PF {pfLabel(band)}
           </div>
         </div>
@@ -345,32 +345,32 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
 
         {/* API error banners — shown when save or reset fails */}
         {saveError && (
-          <div className="rounded p-3 text-xs" style={{ background: '#1c0d0f', border: '1px solid #5a2028', color: '#b05050' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#2c1417', border: '1px solid #5a2028', color: '#ff5c5c' }}>
             <div className="font-semibold mb-0.5">Save failed</div>
             <div>{saveError}</div>
           </div>
         )}
         {resetError && (
-          <div className="rounded p-3 text-xs" style={{ background: '#1c0d0f', border: '1px solid #5a2028', color: '#b05050' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#2c1417', border: '1px solid #5a2028', color: '#ff5c5c' }}>
             <div className="font-semibold mb-0.5">Reset failed</div>
             <div>{resetError}</div>
           </div>
         )}
 
         {band.is_factory_default === false ? (
-          <div className="rounded p-3 text-xs" style={{ background: '#1a1a00', border: '1px solid #4a4820', color: '#b0a84a' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#2a2816', border: '1px solid #4a4820', color: '#e0d066' }}>
             <div className="font-semibold mb-1">Previously customised</div>
             <div>By <span className="font-mono">{band.updated_by}</span> · {formatDate(band.updated_at ?? '')}</div>
           </div>
         ) : (
-          <div className="rounded p-3 text-xs" style={{ background: '#101820', border: '1px solid #2b3e57', color: '#5b86b8' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#18202a', border: '1px solid #2b3e57', color: '#5b86b8' }}>
             <div className="font-semibold mb-0.5">Factory Default</div>
             <div>This rule ships with NexRisk. Changes are tracked and can be individually reset via the API.</div>
           </div>
         )}
 
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider mb-2 block" style={{ color: '#a0a4b8' }}>
+          <label className="text-xs font-semibold uppercase tracking-wider mb-2 block" style={{ color: '#d2d6e2' }}>
             Risk Level
           </label>
           <div className="flex gap-2 flex-wrap">
@@ -380,8 +380,8 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
                 <button key={lvl} onClick={() => setRiskLevel(lvl)}
                   className="px-3 py-1.5 rounded text-xs font-semibold transition-all"
                   style={{
-                    background: riskLevel === lvl ? rs.bg : '#1b1c22',
-                    color:      riskLevel === lvl ? rs.text : '#a0a4b8',
+                    background: riskLevel === lvl ? rs.bg : '#1a1a1d',
+                    color:      riskLevel === lvl ? rs.text : '#d2d6e2',
                     border: `1px solid ${riskLevel === lvl ? rs.bar : '#44454f'}`,
                     boxShadow:  riskLevel === lvl ? `0 0 8px ${rs.bar}60` : 'none',
                   }}>
@@ -393,7 +393,7 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
         </div>
 
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider mb-2 block" style={{ color: '#a0a4b8' }}>Action</label>
+          <label className="text-xs font-semibold uppercase tracking-wider mb-2 block" style={{ color: '#d2d6e2' }}>Action</label>
           <select value={actionCode} onChange={e => setActionCode(e.target.value as ActionCode)} className="select w-full">
             {actionDefs
               ? actionDefs.map(d => <option key={d.code} value={d.code}>{ACTION_LABELS[d.code as ActionCode] ?? d.code} — {d.description}</option>)
@@ -401,8 +401,8 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
             }
           </select>
           {selectedDef && (
-            <p className="text-xs mt-1.5" style={{ color: '#666' }}>
-              {selectedDef.requires_approval && <span style={{ color: '#8a7030' }}>⚠ Requires approval · </span>}
+            <p className="text-xs mt-1.5" style={{ color: '#999' }}>
+              {selectedDef.requires_approval && <span style={{ color: '#e0d066' }}>⚠ Requires approval · </span>}
               {selectedDef.auto_executable ? 'Auto-executable' : 'Manual execution required'}
             </p>
           )}
@@ -411,49 +411,49 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
         {/* Schema-driven params — uses ranges from API */}
         {actionCode === 'WIDEN_SPREAD' && (
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#a0a4b8' }}>
+            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#d2d6e2' }}>
               Spread Multiplier
             </label>
             <input type="number" min={schema.multiplier?.min ?? 1.01} max={schema.multiplier?.max ?? 10}
               step="0.1" value={multiplier} onChange={e => setMultiplier(e.target.value)} className="input w-full" />
-            <p className="text-xs mt-1" style={{ color: '#666' }}>
+            <p className="text-xs mt-1" style={{ color: '#999' }}>
               Range: {schema.multiplier?.min ?? 1.01} – {schema.multiplier?.max ?? 10}
             </p>
           </div>
         )}
         {actionCode === 'A_BOOK_PARTIAL' && (
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#a0a4b8' }}>
+            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#d2d6e2' }}>
               Hedge Percentage (%)
             </label>
             <input type="number" min={schema.hedge_pct?.min ?? 1} max={schema.hedge_pct?.max ?? 99}
               step="1" value={hedgePct} onChange={e => setHedgePct(e.target.value)} className="input w-full" />
-            <p className="text-xs mt-1" style={{ color: '#666' }}>Portion of exposure sent to LP. Range: 1 – 99%</p>
+            <p className="text-xs mt-1" style={{ color: '#999' }}>Portion of exposure sent to LP. Range: 1 – 99%</p>
           </div>
         )}
         {actionCode === 'MIN_HOLDING_TIME' && (
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#a0a4b8' }}>
+            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#d2d6e2' }}>
               Minimum Holding Time (seconds)
             </label>
             <input type="number" min={schema.min_seconds?.min ?? 5} max={schema.min_seconds?.max ?? 3600}
               step="5" value={minSecs} onChange={e => setMinSecs(e.target.value)} className="input w-full" />
-            <p className="text-xs mt-1" style={{ color: '#666' }}>Range: 5 – 3,600 seconds</p>
+            <p className="text-xs mt-1" style={{ color: '#999' }}>Range: 5 – 3,600 seconds</p>
           </div>
         )}
         {actionCode === 'RESTRICT_VOLUME' && (
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#a0a4b8' }}>
+            <label className="text-xs font-semibold uppercase tracking-wider mb-1.5 block" style={{ color: '#d2d6e2' }}>
               Maximum Volume (lots)
             </label>
             <input type="number" min={schema.max_lots?.min ?? 0.01} max={schema.max_lots?.max ?? 100}
               step="0.01" value={maxLots} onChange={e => setMaxLots(e.target.value)} className="input w-full" />
-            <p className="text-xs mt-1" style={{ color: '#666' }}>Range: 0.01 – 100.0 lots</p>
+            <p className="text-xs mt-1" style={{ color: '#999' }}>Range: 0.01 – 100.0 lots</p>
           </div>
         )}
 
-        <div className="rounded p-3" style={{ background: '#0f1015', border: '1px solid #2a2b33' }}>
-          <div className="text-xs font-semibold mb-2" style={{ color: '#a0a4b8' }}>Preview</div>
+        <div className="rounded p-3" style={{ background: '#1a1a1d', border: '1px solid #2a2b33' }}>
+          <div className="text-xs font-semibold mb-2" style={{ color: '#d2d6e2' }}>Preview</div>
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xs text-text-secondary">From:</span>
             <ActionBadge code={band.action_code} actionDefs={actionDefs} />
@@ -466,18 +466,18 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
 
         <div>
           <label className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2 block"
-            style={{ color: '#a0a4b8' }}>
+            style={{ color: '#d2d6e2' }}>
             Reason for Change
-            <span className="text-xs font-normal normal-case" style={{ color: '#b05050' }}>Required for audit</span>
+            <span className="text-xs font-normal normal-case" style={{ color: '#ff5c5c' }}>Required for audit</span>
           </label>
           <textarea rows={3} value={reason}
             onChange={e => { setReason(e.target.value); setReasonError(false); }}
             placeholder="Describe why this rule is being changed…"
             className="input w-full resize-none"
-            style={{ borderColor: reasonError ? '#8a3030' : undefined }}
+            style={{ borderColor: reasonError ? '#7a2f36' : undefined }}
           />
           {reasonError && (
-            <p className="text-xs mt-1" style={{ color: '#b05050' }}>A reason is mandatory for audit compliance.</p>
+            <p className="text-xs mt-1" style={{ color: '#ff5c5c' }}>A reason is mandatory for audit compliance.</p>
           )}
         </div>
       </div>
@@ -490,7 +490,7 @@ function EditRulePanel({ band, behaviorType, actionDefs, isCustomRule, onClose, 
               onClick={() => onResetRule(band.rule_id)}
               disabled={isSaving || isResetting}
               className="btn text-sm flex items-center gap-1.5"
-              style={{ background: '#1a1a00', color: '#b0a84a', border: '1px solid #4a4820' }}
+              style={{ background: '#2a2816', color: '#e0d066', border: '1px solid #4a4820' }}
               title="Revert this rule to its original factory shipped values"
             >
               {isResetting && <span className="w-3 h-3 border border-current/30 border-t-current rounded-full animate-spin" />}
@@ -572,14 +572,14 @@ function RuleLookupPanel({
         {/* Filters */}
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Behavior</label>
+            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#d2d6e2' }}>Behavior</label>
             <select value={filterBehavior} onChange={e => setFilterBehavior(e.target.value as BehaviorType | '')} className="select w-full text-xs">
               <option value="">Select...</option>
               {getBehaviors(pfBands).map(b => <option key={b} value={b}>{getBehaviorMeta(b).label}</option>)}
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Risk Level</label>
+            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#d2d6e2' }}>Risk Level</label>
             <select value={filterRiskLevel} onChange={e => setFilterRiskLevel(e.target.value as RiskLevel | '')} className="select w-full text-xs">
               <option value="">Select...</option>
               {(['VERY_LOW','LOW','MEDIUM','HIGH','CRITICAL'] as RiskLevel[]).map(l =>
@@ -588,14 +588,14 @@ function RuleLookupPanel({
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Action</label>
+            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#d2d6e2' }}>Action</label>
             <select value={filterAction} onChange={e => setFilterAction(e.target.value as ActionCode | '')} className="select w-full text-xs">
               <option value="">Select...</option>
               {allActionCodes.map(c => <option key={c} value={c}>{ACTION_LABELS[c] ?? c}</option>)}
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#a0a4b8' }}>Profit Factor</label>
+            <label className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: '#d2d6e2' }}>Profit Factor</label>
             <input
               type="number" min="0" step="0.01" value={filterPF}
               onChange={e => setFilterPF(e.target.value)}
@@ -634,16 +634,16 @@ function RuleLookupPanel({
               <button key={band.rule_id}
                 onClick={() => onCellClick(behavior, band)}
                 className="text-left rounded transition-all hover:ring-1 hover:ring-accent"
-                style={{ background: s.bg, border: `1px solid ${modified ? '#7a6020' : s.border}`, position: 'relative', overflow: 'hidden' }}>
+                style={{ background: s.bg, border: `1px solid ${modified ? '#6a6530' : s.border}`, position: 'relative', overflow: 'hidden' }}>
                 <div style={{ height: 2, background: s.bar, width: '100%' }} />
-                {modified && <span className="absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full" style={{ background: '#8a7030' }} />}
+                {modified && <span className="absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full" style={{ background: '#e0d066' }} />}
                 <div className="p-3 flex items-start justify-between gap-3">
                   <div className="flex flex-col gap-0.5 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-xs uppercase tracking-wider font-semibold" style={{ color: s.text, opacity: 0.7 }}>
                         {s.label}
                       </span>
-                      {modified && <span className="text-xs" style={{ color: '#8a7030' }}>Modified</span>}
+                      {modified && <span className="text-xs" style={{ color: '#e0d066' }}>Modified</span>}
                     </div>
                     <span className="text-sm font-semibold" style={{ color: s.text }}>
                       {getActionLabel(band.action_code, actionDefs)}
@@ -692,13 +692,13 @@ function ConfirmModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.7)' }}>
       <div className="rounded-lg flex flex-col w-full max-w-md mx-4"
-        style={{ background: '#1b1c22', border: '1px solid #44454f', boxShadow: '0 24px 48px rgba(0,0,0,0.5)' }}>
+        style={{ background: '#1a1a1d', border: '1px solid #44454f', boxShadow: '0 24px 48px rgba(0,0,0,0.5)' }}>
 
         <div className="px-5 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid #44454f' }}>
           {danger && (
             <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
-              style={{ background: '#1f0c0e', border: '1px solid #7a2f36' }}>
-              <svg width="14" height="14" fill="none" stroke="#b05050" strokeWidth="2" viewBox="0 0 24 24">
+              style={{ background: '#2c1417', border: '1px solid #7a2f36' }}>
+              <svg width="14" height="14" fill="none" stroke="#ff5c5c" strokeWidth="2" viewBox="0 0 24 24">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                 <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
@@ -710,11 +710,11 @@ function ConfirmModal({
         <div className="px-5 py-4 flex flex-col gap-4">
           <p className="text-sm text-text-secondary leading-relaxed">{body}</p>
           {requireDoubleConfirm && (
-            <div className="rounded p-3" style={{ background: '#1f0c0e', border: '1px solid #7a2f36' }}>
+            <div className="rounded p-3" style={{ background: '#2c1417', border: '1px solid #7a2f36' }}>
               <label className="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)}
-                  className="mt-0.5 shrink-0" style={{ accentColor: '#b05050', width: 14, height: 14 }} />
-                <span className="text-xs leading-relaxed font-semibold" style={{ color: '#b05050' }}>
+                  className="mt-0.5 shrink-0" style={{ accentColor: '#ff5c5c', width: 14, height: 14 }} />
+                <span className="text-xs leading-relaxed font-semibold" style={{ color: '#ff5c5c' }}>
                   {doubleConfirmLabel ?? 'I understand this action cannot be undone.'}
                 </span>
               </label>
@@ -732,8 +732,8 @@ function ConfirmModal({
           <button onClick={onConfirm} disabled={isWorking || blocked}
             className="btn text-sm flex items-center gap-2"
             style={{
-              background: danger ? '#1f0c0e' : '#163a3a',
-              color:      danger ? '#b05050' : '#49b3b3',
+              background: danger ? '#2c1417' : '#163a3a',
+              color:      danger ? '#ff5c5c' : '#49b3b3',
               border:     `1px solid ${danger ? '#7a2f36' : '#2f6a3d'}`,
               opacity:    blocked ? 0.4 : 1,
             }}>
@@ -839,12 +839,12 @@ function EditLadderPanel({
   const meta = getBehaviorMeta(behavior);
 
   return (
-    <div className="flex flex-col h-full" style={{ background: '#14151a', borderLeft: '1px solid #44454f', minWidth: 480 }}>
+    <div className="flex flex-col h-full" style={{ background: '#1a1a1d', borderLeft: '1px solid #44454f', minWidth: 480 }}>
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #44454f' }}>
         <div>
           <div className="text-sm font-semibold text-white">Edit Ladder — {meta.label}</div>
-          <div className="text-xs mt-0.5" style={{ color: '#a0a4b8' }}>
+          <div className="text-xs mt-0.5" style={{ color: '#d2d6e2' }}>
             Redefine PF breakpoints, risk levels, and actions atomically
           </div>
         </div>
@@ -859,7 +859,7 @@ function EditLadderPanel({
 
         {/* Save error */}
         {saveError && (
-          <div className="rounded p-3 text-xs" style={{ background: '#1c0d0f', border: '1px solid #5a2028', color: '#b05050' }}>
+          <div className="rounded p-3 text-xs" style={{ background: '#2c1417', border: '1px solid #5a2028', color: '#ff5c5c' }}>
             <div className="font-semibold mb-0.5">Save failed</div>
             <div>{saveError}</div>
           </div>
@@ -868,7 +868,7 @@ function EditLadderPanel({
         {/* Validation errors */}
         {validationErrors.length > 0 && (
           <div className="rounded p-3 text-xs flex flex-col gap-1"
-            style={{ background: '#1f0c0e', border: '1px solid #7a2f36', color: '#b05050' }}>
+            style={{ background: '#2c1417', border: '1px solid #7a2f36', color: '#ff5c5c' }}>
             <div className="font-semibold mb-0.5">Ladder validation</div>
             {validationErrors.map((e, i) => <div key={i}>· {e}</div>)}
           </div>
@@ -878,7 +878,7 @@ function EditLadderPanel({
         <div className="flex flex-col gap-2">
           {/* Column headers */}
           <div className="grid gap-2 text-xs font-semibold uppercase tracking-wider px-1"
-            style={{ gridTemplateColumns: '90px 90px 1fr 1fr 28px', color: '#a0a4b8' }}>
+            style={{ gridTemplateColumns: '90px 90px 1fr 1fr 28px', color: '#d2d6e2' }}>
             <span>PF Min</span>
             <span>PF Max</span>
             <span>Risk Level</span>
@@ -900,7 +900,7 @@ function EditLadderPanel({
 
                 {/* PF Max — locked for last band */}
                 {isLast ? (
-                  <div className="input font-mono text-xs flex items-center" style={{ color: '#666', padding: '5px 8px' }}>∞</div>
+                  <div className="input font-mono text-xs flex items-center" style={{ color: '#999', padding: '5px 8px' }}>∞</div>
                 ) : (
                   <input type="number" min="0" step="0.1" value={row.pf_max}
                     onChange={e => {
@@ -950,7 +950,7 @@ function EditLadderPanel({
         {/* Add band */}
         <button onClick={addBand}
           className="text-xs flex items-center gap-1.5 transition-colors hover:text-white"
-          style={{ color: '#666' }}>
+          style={{ color: '#999' }}>
           <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path d="M12 5v14M5 12h14" />
           </svg>
@@ -959,7 +959,7 @@ function EditLadderPanel({
 
         {/* Preview strip */}
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#a0a4b8' }}>Preview</div>
+          <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#d2d6e2' }}>Preview</div>
           <div className="flex rounded overflow-hidden" style={{ height: 12 }}>
             {rows.map((row, i) => {
               const s = RISK_STYLE[row.risk_level];
@@ -981,18 +981,18 @@ function EditLadderPanel({
         {/* Reason */}
         <div>
           <label className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2 block"
-            style={{ color: '#a0a4b8' }}>
+            style={{ color: '#d2d6e2' }}>
             Reason for Change
-            <span className="text-xs font-normal normal-case" style={{ color: '#b05050' }}>Required for audit</span>
+            <span className="text-xs font-normal normal-case" style={{ color: '#ff5c5c' }}>Required for audit</span>
           </label>
           <textarea rows={3} value={reason}
             onChange={e => { setReason(e.target.value); setReasonError(false); }}
             placeholder="Describe why this ladder is being restructured…"
             className="input w-full resize-none"
-            style={{ borderColor: reasonError ? '#8a3030' : undefined }}
+            style={{ borderColor: reasonError ? '#7a2f36' : undefined }}
           />
           {reasonError && (
-            <p className="text-xs mt-1" style={{ color: '#b05050' }}>A reason is mandatory for audit compliance.</p>
+            <p className="text-xs mt-1" style={{ color: '#ff5c5c' }}>A reason is mandatory for audit compliance.</p>
           )}
         </div>
       </div>
@@ -1021,7 +1021,7 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-4 flex-wrap" style={{ marginBottom: 4 }}>
-        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#a0a4b8' }}>Risk Level</span>
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#d2d6e2' }}>Risk Level</span>
         {(['VERY_LOW', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as RiskLevel[]).map(lvl => {
           const s = RISK_STYLE[lvl];
           return (
@@ -1032,7 +1032,7 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
           );
         })}
         <div className="flex items-center gap-1.5 ml-4">
-          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#8a7030' }} />
+          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#e0d066' }} />
           <span className="text-xs text-text-secondary">Modified from default</span>
         </div>
       </div>
@@ -1060,7 +1060,7 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
                   <button
                     onClick={() => onResetBehavior(btype)}
                     className="text-xs flex items-center gap-1 transition-colors"
-                    style={{ color: '#8a7030' }}
+                    style={{ color: '#e0d066' }}
                     title={`Reset all ${getBehaviorMeta(btype).label} rules to factory defaults`}
                   >
                     <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -1079,7 +1079,7 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
                   ))
                 ) : (
                   <div className="flex-1 rounded flex items-center justify-center text-xs text-text-muted"
-                    style={{ background: '#1b1c22', border: '1px solid #323340' }}>
+                    style={{ background: '#1a1a1d', border: '1px solid #323340' }}>
                     No rules defined
                   </div>
                 )}
@@ -1088,7 +1088,7 @@ function MatrixTab({ pfBands, actionDefs, modifiedRuleIds, onCellClick, onResetB
           );
         })}
       </div>
-      <p className="text-xs" style={{ color: '#a0a4b8', marginTop: 4 }}>
+      <p className="text-xs" style={{ color: '#d2d6e2', marginTop: 4 }}>
         Click any cell to view or edit that rule. Changes require a reason and are written to the audit log.
       </p>
     </div>
@@ -1126,7 +1126,7 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
           {(['ALL', 'FACTORY', 'MODIFIED'] as const).map(v => (
             <button key={v} onClick={() => setFilterSource(v)}
               className="px-3 py-1.5 text-xs font-medium transition-colors"
-              style={{ background: filterSource === v ? '#163a3a' : 'transparent', color: filterSource === v ? '#49b3b3' : '#a0a4b8' }}>
+              style={{ background: filterSource === v ? '#163a3a' : 'transparent', color: filterSource === v ? '#49b3b3' : '#d2d6e2' }}>
               {v === 'ALL' ? 'All' : v === 'FACTORY' ? 'Factory Default' : 'Modified'}
             </button>
           ))}
@@ -1136,9 +1136,9 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
       <div className="rounded overflow-hidden" style={{ border: '1px solid #44454f' }}>
         <table className="w-full text-sm">
           <thead>
-            <tr style={{ background: '#14151a', borderBottom: '1px solid #44454f' }}>
+            <tr style={{ background: '#1a1a1d', borderBottom: '1px solid #44454f' }}>
               {['#', 'Behavior', 'PF Range', 'Risk Level', 'Action', 'Params', 'Source', 'Modified By'].map(h => (
-                <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: '#a0a4b8' }}>{h}</th>
+                <th key={h} className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wider" style={{ color: '#d2d6e2' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -1147,7 +1147,7 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
               const modified = modifiedRuleIds ? modifiedRuleIds.has(band.rule_id) : band.is_factory_default === false;
               return (
                 <tr key={band.rule_id} style={{
-                  background: i % 2 === 0 ? '#1b1c22' : '#181920',
+                  background: i % 2 === 0 ? '#1a1a1d' : '#181920',
                   borderBottom: '1px solid #2a2b33',
                   borderLeft: `2px solid ${modified ? '#9a7830' : 'transparent'}`,
                 }}>
@@ -1158,7 +1158,7 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
                   <td className="px-3 py-2"><ActionBadge code={band.action_code} actionDefs={actionDefs} /></td>
                   <td className="px-3 py-2 text-xs font-mono text-text-muted">{actionParamHint(band) ?? '—'}</td>
                   <td className="px-3 py-2">
-                    <span className="text-xs" style={{ color: modified ? '#8a7030' : '#5b86b8' }}>
+                    <span className="text-xs" style={{ color: modified ? '#e0d066' : '#5b86b8' }}>
                       {modified ? 'Modified' : 'Default'}
                     </span>
                   </td>
@@ -1166,7 +1166,7 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
                     {modified && band.updated_by ? (
                       <div>
                         <div className="text-xs font-mono text-white">{band.updated_by}</div>
-                        <div className="text-xs" style={{ color: '#666' }}>{formatDate(band.updated_at ?? '')}</div>
+                        <div className="text-xs" style={{ color: '#999' }}>{formatDate(band.updated_at ?? '')}</div>
                       </div>
                     ) : <span className="text-xs text-text-muted">—</span>}
                   </td>
@@ -1185,17 +1185,17 @@ function RulesTab({ pfBands, actionDefs, modifiedRuleIds }: { pfBands: Record<Be
 
 function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record<BehaviorType, PFBand[]> }) {
   const CHANGE_COLORS: Record<string, { color: string; bg: string }> = {
-    CREATE:               { color: '#7aab85', bg: '#0d1a10' },
-    UPDATE:               { color: '#b0a84a', bg: '#1a1a00' },
-    DELETE:               { color: '#b05050', bg: '#1c0d0f' },
-    RESET_SINGLE:         { color: '#5b86b8', bg: '#101820' },
-    RESET_BEHAVIOR:       { color: '#5b86b8', bg: '#101820' },
-    RESET_ALL:            { color: '#5b86b8', bg: '#101820' },
-    REPLACE_LADDER:       { color: '#b07840', bg: '#1c1508' },
-    BULK_TOGGLE:          { color: '#a0a4b8', bg: '#1b1c22' },
-    BULK_ACTION:          { color: '#b07840', bg: '#1c1508' },
-    IMPORT_MERGE:         { color: '#7aab85', bg: '#0d1a10' },
-    IMPORT_REPLACE_CUSTOM:{ color: '#b07840', bg: '#1c1508' },
+    CREATE:               { color: '#66e07a', bg: '#162a1c' },
+    UPDATE:               { color: '#e0d066', bg: '#2a2816' },
+    DELETE:               { color: '#ff5c5c', bg: '#2c1417' },
+    RESET_SINGLE:         { color: '#5b86b8', bg: '#18202a' },
+    RESET_BEHAVIOR:       { color: '#5b86b8', bg: '#18202a' },
+    RESET_ALL:            { color: '#5b86b8', bg: '#18202a' },
+    REPLACE_LADDER:       { color: '#e09a55', bg: '#2a2016' },
+    BULK_TOGGLE:          { color: '#d2d6e2', bg: '#1a1a1d' },
+    BULK_ACTION:          { color: '#e09a55', bg: '#2a2016' },
+    IMPORT_MERGE:         { color: '#66e07a', bg: '#162a1c' },
+    IMPORT_REPLACE_CUSTOM:{ color: '#e09a55', bg: '#2a2016' },
   };
 
   // Build rule_id → behavior_type map from pfBands
@@ -1255,19 +1255,19 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
 
           {/* From date */}
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#a0a4b8' }}>From</div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#d2d6e2' }}>From</div>
             <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={inputStyle} />
           </div>
 
           {/* To date */}
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#a0a4b8' }}>To</div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#d2d6e2' }}>To</div>
             <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={inputStyle} />
           </div>
 
           {/* Change type */}
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#a0a4b8' }}>Change Type</div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#d2d6e2' }}>Change Type</div>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="select w-full text-xs">
               <option value="ALL">All types</option>
               {allChangeTypes.map(t => (
@@ -1278,7 +1278,7 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
 
           {/* Behavior */}
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#a0a4b8' }}>Behavior</div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#d2d6e2' }}>Behavior</div>
             <select value={filterBeh} onChange={e => setFilterBeh(e.target.value)} className="select w-full text-xs">
               <option value="ALL">All behaviors</option>
               {allBehaviors.map(b => (
@@ -1289,7 +1289,7 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
 
           {/* Operator */}
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#a0a4b8' }}>Operator</div>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#d2d6e2' }}>Operator</div>
             <select value={filterOp} onChange={e => setFilterOp(e.target.value)} className="select w-full text-xs">
               <option value="ALL">All operators</option>
               {allOperators.map(o => (
@@ -1300,12 +1300,12 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="text-xs" style={{ color: '#a0a4b8' }}>
+          <span className="text-xs" style={{ color: '#d2d6e2' }}>
             {filtered.length} of {history.length} change{history.length !== 1 ? 's' : ''}
             {hasFilters && ' (filtered)'}
           </span>
           {hasFilters && (
-            <button onClick={clearFilters} className="text-xs hover:text-white transition-colors" style={{ color: '#666' }}>
+            <button onClick={clearFilters} className="text-xs hover:text-white transition-colors" style={{ color: '#999' }}>
               ✕ Clear filters
             </button>
           )}
@@ -1322,7 +1322,7 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
         </div>
       ) : (
         filtered.map(entry => {
-          const c        = CHANGE_COLORS[entry.change_type] ?? { color: '#d2d6e2', bg: '#1b1c22' };
+          const c        = CHANGE_COLORS[entry.change_type] ?? { color: '#d2d6e2', bg: '#1a1a1d' };
           const behavior = ruleIdToBehavior[entry.record_id];
           return (
             <div key={entry.id} className="panel" style={{ borderLeft: `3px solid ${c.color}` }}>
@@ -1333,38 +1333,38 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
                       style={{ background: c.bg, color: c.color, border: `1px solid ${c.color}50` }}>
                       {entry.change_type.replace(/_/g, ' ')}
                     </span>
-                    <span className="text-xs" style={{ color: '#a0a4b8' }}>Rule #{entry.record_id}</span>
+                    <span className="text-xs" style={{ color: '#d2d6e2' }}>Rule #{entry.record_id}</span>
                     {behavior && (
-                      <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: '#1b1c22', border: '1px solid #2a2b35', color: '#d2d6e2' }}>
+                      <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: '#1a1a1d', border: '1px solid #2a2b35', color: '#d2d6e2' }}>
                         {getBehaviorMeta(behavior).label}
                       </span>
                     )}
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-xs font-semibold text-white">{entry.changed_by}</div>
-                    <div className="text-xs mt-0.5" style={{ color: '#666' }}>{formatDateTime(entry.changed_at)}</div>
+                    <div className="text-xs mt-0.5" style={{ color: '#999' }}>{formatDateTime(entry.changed_at)}</div>
                   </div>
                 </div>
                 {(entry.old_values && Object.keys(entry.old_values).length > 0 || entry.new_values && Object.keys(entry.new_values).length > 0) && (
                   <div className="flex gap-3 mb-3 text-xs font-mono flex-wrap">
                     {entry.old_values && Object.keys(entry.old_values).length > 0 && (
-                      <div className="rounded p-2 flex-1" style={{ background: '#1c0d0f', border: '1px solid #4a1820', minWidth: 140 }}>
-                        <div className="font-semibold mb-1" style={{ color: '#b05050' }}>Before</div>
+                      <div className="rounded p-2 flex-1" style={{ background: '#2c1417', border: '1px solid #4a1820', minWidth: 140 }}>
+                        <div className="font-semibold mb-1" style={{ color: '#ff5c5c' }}>Before</div>
                         {Object.entries(entry.old_values).map(([k, v]) => (
                           <div key={k} className="flex gap-2">
                             <span style={{ color: '#888' }}>{k}:</span>
-                            <span style={{ color: '#b05050' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                            <span style={{ color: '#ff5c5c' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
                           </div>
                         ))}
                       </div>
                     )}
                     {entry.new_values && Object.keys(entry.new_values).length > 0 && (
-                      <div className="rounded p-2 flex-1" style={{ background: '#0d1a10', border: '1px solid #1a3d22', minWidth: 140 }}>
-                        <div className="font-semibold mb-1" style={{ color: '#7aab85' }}>After</div>
+                      <div className="rounded p-2 flex-1" style={{ background: '#162a1c', border: '1px solid #1a3d22', minWidth: 140 }}>
+                        <div className="font-semibold mb-1" style={{ color: '#66e07a' }}>After</div>
                         {Object.entries(entry.new_values).map(([k, v]) => (
                           <div key={k} className="flex gap-2">
                             <span style={{ color: '#888' }}>{k}:</span>
-                            <span style={{ color: '#7aab85' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                            <span style={{ color: '#66e07a' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
                           </div>
                         ))}
                       </div>
@@ -1373,7 +1373,7 @@ function AuditTab({ history, pfBands }: { history: AuditEntry[]; pfBands: Record
                 )}
                 {entry.reason && (
                   <div className="text-xs rounded p-2.5 italic"
-                    style={{ background: '#14151a', border: '1px solid #2a2b33', color: '#a0a4b8' }}>
+                    style={{ background: '#1a1a1d', border: '1px solid #2a2b33', color: '#d2d6e2' }}>
                     "{entry.reason}"
                   </div>
                 )}
@@ -1563,12 +1563,12 @@ export function CharterPage() {
                 )}
                 {diffCount > 0 ? (
                   <span className="text-xs px-2 py-0.5 rounded font-semibold"
-                    style={{ background: '#1a1a00', color: '#b0a84a', border: '1px solid #4a4820' }}>
+                    style={{ background: '#2a2816', color: '#e0d066', border: '1px solid #4a4820' }}>
                     {diffCount} change{diffCount !== 1 ? 's' : ''} from factory defaults
                   </span>
                 ) : (
                   <span className="text-xs px-2 py-0.5 rounded font-semibold"
-                    style={{ background: '#0d1a10', color: '#7aab85', border: '1px solid #1f3d28' }}>
+                    style={{ background: '#162a1c', color: '#66e07a', border: '1px solid #1f3d28' }}>
                     At factory defaults
                   </span>
                 )}
@@ -1589,7 +1589,7 @@ export function CharterPage() {
               <button
                 onClick={() => setConfirmModal({ type: 'all' })}
                 className="btn text-sm flex items-center gap-1.5"
-                style={{ background: '#1f0c0e', color: '#b05050', border: '1px solid #7a2f36' }}
+                style={{ background: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}
                 title="Restore all factory rules and delete all custom rules"
               >
                 <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -1605,14 +1605,14 @@ export function CharterPage() {
               <button key={t.id} onClick={() => setActiveTab(t.id)}
                 className="px-3 py-1.5 text-xs font-medium transition-colors"
                 style={{
-                  color:        activeTab === t.id ? '#49b3b3' : '#a0a4b8',
+                  color:        activeTab === t.id ? '#49b3b3' : '#d2d6e2',
                   borderBottom: `2px solid ${activeTab === t.id ? '#49b3b3' : 'transparent'}`,
                   background:   'transparent',
                 }}>
                 {t.label}
                 {t.badge !== undefined && (
                   <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-semibold"
-                    style={{ background: '#1a1a00', color: '#b0a84a', fontSize: 10 }}>
+                    style={{ background: '#2a2816', color: '#e0d066', fontSize: 10 }}>
                     {t.badge}
                   </span>
                 )}
@@ -1637,7 +1637,7 @@ export function CharterPage() {
                   Loading change history…
                 </div>
               : historyError
-                ? <div className="p-4 text-xs rounded" style={{ background: '#1f0c0e', color: '#b05050', border: '1px solid #7a2f36' }}>
+                ? <div className="p-4 text-xs rounded" style={{ background: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
                     {(historyError as Error).message}
                   </div>
                 : <AuditTab history={history} pfBands={pfBands} />

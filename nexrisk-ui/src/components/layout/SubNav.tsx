@@ -10,10 +10,10 @@ import { useAuth } from '@/stores/AuthContext';
 import { clsx } from 'clsx';
 import { NAV_SECTIONS, sectionForPath, loadPins, savePins } from './TopBar';
 
-// Pin icon (tiny pushpin)
+// Thumbtack pin icon
 const PinIcon = ({ filled }: { filled: boolean }) => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
-    <path d="M12 2L12 8M8 8H16L14 14H10L8 8ZM10 14L9 22M14 14L15 22" />
+  <svg width="12" height="12" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
+    <path d="M9.068,16.347l4.9,4.9.707-.707a7.977,7.977,0,0,0,2.075-7.619l-.246-1,2.086-2.086.217.217a3.085,3.085,0,0,0,3.938.4,3,3,0,0,0,.38-4.565L18.2.954a3.085,3.085,0,0,0-3.938-.4,3,3,0,0,0-.38,4.565l.293.293L12.085,7.5,11.1,7.258A7.985,7.985,0,0,0,3.464,9.33l-.707.707,4.9,4.895L.293,22.293l1.414,1.414Z" />
   </svg>
 );
 
@@ -80,7 +80,7 @@ export function SubNav() {
             <NavLink
               to={item.path}
               className={clsx(
-                'relative px-3 py-1 text-[12px] rounded transition-colors',
+                'relative flex items-center gap-1.5 px-3 py-1 text-[12px] rounded transition-colors',
                 isActive
                   ? 'font-medium'
                   : 'text-white hover:text-[#c9b87c]'
@@ -88,6 +88,26 @@ export function SubNav() {
               style={isActive ? { color: '#c9b87c', backgroundColor: 'rgba(201,184,124,0.1)' } : undefined}
             >
               {item.label}
+
+              {/* Pin toggle — inside the item box */}
+              <button
+                onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
+                className={clsx(
+                  'transition-opacity',
+                  pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-80 hover:!opacity-100'
+                )}
+                style={{
+                  color: '#fff',
+                  padding: 1,
+                  lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+                title={pinned ? 'Unpin' : 'Pin to favourites'}
+              >
+                <PinIcon filled={pinned} />
+              </button>
+
               {isActive && (
                 <div
                   className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
@@ -95,23 +115,6 @@ export function SubNav() {
                 />
               )}
             </NavLink>
-
-            {/* Pin toggle — visible on hover or if already pinned */}
-            <button
-              onClick={() => togglePin(item.path)}
-              className={clsx(
-                'transition-opacity ml-[-4px] mr-1',
-                pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-80 hover:!opacity-100'
-              )}
-              style={{
-                color: '#fff',
-                padding: 2,
-                lineHeight: 1,
-              }}
-              title={pinned ? 'Unpin' : 'Pin to favourites'}
-            >
-              <PinIcon filled={pinned} />
-            </button>
           </div>
         );
       })}

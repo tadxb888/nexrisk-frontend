@@ -38,8 +38,9 @@ export const NAV_SECTIONS: NavSection[] = [
     id: 'flow',
     label: 'Flow',
     items: [
-      { path: '/flow',        label: 'Trader Intelligence' },
-      { path: '/archetypes',  label: 'Archetypes' },
+      { path: '/flow',         label: 'Trader Intelligence' },
+      { path: '/archetypes',   label: 'Archetypes' },
+      { path: '/risk-charter', label: 'Risk Charter' },
     ],
   },
   {
@@ -57,6 +58,7 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Markets',
     items: [
       { path: '/liquidity-providers',  label: 'Liquidity Providers' },
+      { path: '/symbol-mapping',       label: 'Symbol Mapping' },
       { path: '/route-sanity',         label: 'Route Sanity' },
       { path: '/price-rules',          label: 'Price Rules Engine' },
     ],
@@ -65,7 +67,6 @@ export const NAV_SECTIONS: NavSection[] = [
     id: 'control',
     label: 'Control',
     items: [
-      { path: '/risk-charter',  label: 'Risk Charter' },
       { path: '/logs',          label: 'Logs' },
       { path: '/reports',       label: 'Reports' },
       { path: '/users',         label: 'Users', adminOnly: true },

@@ -83,6 +83,7 @@ function App() {
               {/* ─── Flow ─────────────────────────────── */}
               <Route path="/flow"          element={<FocusPage />} />
               <Route path="/archetypes"    element={<ArchetypePage />} />
+              <Route path="/risk-charter"  element={<CharterPage />} />
 
               {/* ─── Execution ────────────────────────── */}
               <Route path="/b-book"              element={<BBookPage />} />
@@ -92,11 +93,11 @@ function App() {
 
               {/* ─── Markets ──────────────────────────── */}
               <Route path="/liquidity-providers" element={<LiquidityProvidersPage />} />
+              <Route path="/symbol-mapping"      element={<SymbolMappingPage />} />
               <Route path="/route-sanity"        element={<RouteSanityPage />} />
               <Route path="/price-rules"         element={<PriceRulesPage />} />
 
               {/* ─── Control ──────────────────────────── */}
-              <Route path="/risk-charter"  element={<CharterPage />} />
               <Route path="/logs"          element={<LogsPage />} />
               <Route path="/reports"       element={<ReportsPage />} />
               <Route path="/users"         element={<UserManagementPage />} />
@@ -113,7 +114,6 @@ function App() {
 
               {/* ─── Hidden routes (valid but not in nav) */}
               <Route path="/a-book"        element={<ABookPage />} />
-              <Route path="/symbol-mapping" element={<SymbolMappingPage />} />
               <Route path="/command-center" element={<CommandCenterPage />} />
               <Route path="/flow-hedging"  element={<FlowHedgingPage />} />
               <Route path="/business"      element={<BusinessPage />} />

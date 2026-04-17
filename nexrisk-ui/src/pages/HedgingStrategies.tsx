@@ -33,10 +33,17 @@ const BG_FIELD   = '#232225';                // input bg (matches Cockpit inputs
 const BORDER     = '#505050';                // subtle divider
 const BORDER_MD  = '#606060';                // standard border (Cockpit input border)
 const BORDER_HDR = '#808080';                // page header divider
-const TEAL       = '#4ecdc4';                // Cockpit teal
-const GREEN      = '#5db870';                // muted deep green (no bright lime)
-const AMBER      = '#e0a020';                // Cockpit amber
-const RED        = '#d46a6a';                // muted red — readable on dark bg, not fluorescent
+const TEAL       = '#49b3b3';                // tailwind: accent (already muted)
+const GREEN      = '#6aaa78';                // grey-blended green — readable, not neon
+const AMBER      = '#c09060';                // grey-blended amber — warm, not bright
+const RED        = '#d07070';                // grey-blended red — visible, not fluorescent
+// ── Badge palettes (grey-blended to comply with branding: no neon, no bright) ──
+const BADGE = {
+  critical: { bg: '#313032', color: '#f79393ff', border: '#7a2f36' },
+  high:     { bg: '#2a2016', color: '#c09060', border: '#6a4a2f' },
+  low:      { bg: '#162a1c', color: '#6aaa78', border: '#2f6a3d' },
+  neutral:  { bg: '#1a1a1d', color: '#d2d6e2', border: '#44454f' },
+} as const;
 const TEXT_PRI   = '#ffffff';
 const TEXT_SEC   = '#cccccc';
 const TEXT_MUT   = '#999999';                // Cockpit secondary (visible, not grey-on-grey)
@@ -514,16 +521,16 @@ function ImpStars({ v }: { v: 1 | 2 | 3 }) {
 // ── Status pill ───────────────────────────────────────────────
 function StatusPill({ status }: { status: RuleStatus }) {
   const cfg = {
-    ACTIVE:  { color: GREEN,  bg: '#0f2018', label: 'ACTIVE'  },
-    PAUSED:  { color: AMBER,  bg: '#201600', label: 'PAUSED'  },
-    STOPPED: { color: RED,    bg: '#200c0c', label: 'STOPPED' },
+    ACTIVE:  { ...BADGE.low,      label: 'ACTIVE'  },
+    PAUSED:  { ...BADGE.high,     label: 'PAUSED'  },
+    STOPPED: { ...BADGE.critical, label: 'STOPPED' },
   }[status];
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
       padding: '1px 7px', borderRadius: 3,
-      backgroundColor: cfg.bg, border: `1px solid ${cfg.color}44`,
-      fontFamily: FONT_MONO, fontSize: 10, color: cfg.color, letterSpacing: '0.04em',
+      backgroundColor: cfg.bg, border: `1px solid ${cfg.border}`,
+      fontFamily: FONT_MONO, fontSize: 10, color: cfg.color, letterSpacing: '0.04em', fontWeight: 600,
     }}>
       <span style={{ width: 5, height: 5, borderRadius: '50%', backgroundColor: cfg.color, display: 'inline-block' }} />
       {cfg.label}
@@ -577,7 +584,7 @@ function SectionCard({ n, label, children }: { n: number; label: string; childre
         <span style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           width: 20, height: 20, borderRadius: 4,
-          backgroundColor: '#0d2020', border: `1px solid ${TEAL}44`,
+          backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
           fontFamily: FONT_MONO, fontSize: 10, color: TEAL, fontWeight: 600, flexShrink: 0,
         }}>{n}</span>
         <span style={{ fontSize: 11, fontWeight: 600, color: TEXT_PRI, letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
@@ -621,7 +628,7 @@ const selectStyle: React.CSSProperties = {
 
 const escalBtnStyle: React.CSSProperties = {
   padding: '3px 9px', borderRadius: 3, cursor: 'pointer',
-  fontSize: 10, background: 'none',
+  fontSize: 10, fontWeight: 600,
   border: '1px solid', transition: 'opacity 0.1s',
 };
 
@@ -645,7 +652,7 @@ function ToggleChips<T extends string>({
           <button key={o.value} onClick={() => toggle(o.value)} style={{
             padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11,
             border: `1px solid ${active ? color : BORDER}`,
-            backgroundColor: active ? `${color}18` : BG_FIELD,
+            backgroundColor: active ? BG_FIELD : BG_FIELD,
             color: active ? color : TEXT_SEC,
             transition: 'all 0.12s',
           }}>
@@ -711,7 +718,7 @@ function ChipInput({
           <span key={c} style={{
             display: 'inline-flex', alignItems: 'center', gap: 4,
             padding: '1px 7px', borderRadius: 3,
-            backgroundColor: `${TEAL}14`, border: `1px solid ${TEAL}44`,
+            backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
             fontFamily: FONT_MONO, fontSize: 11, color: TEAL,
           }}>
             {c}
@@ -761,7 +768,7 @@ function DayPicker({ value, onChange }: { value: number; onChange: (v: number) =
             width: 28, height: 28, borderRadius: 4, cursor: 'pointer',
             fontSize: 11, fontWeight: 600,
             border: `1px solid ${active ? TEAL : BORDER}`,
-            backgroundColor: active ? `${TEAL}18` : BG_FIELD,
+            backgroundColor: active ? BG_FIELD : BG_FIELD,
             color: active ? TEAL : TEXT_MUT,
           }}>
             {d.label}
@@ -807,8 +814,8 @@ function StrategyCard({
         {/* Priority badge */}
         <span style={{
           minWidth: 28, height: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          border: `1px solid ${TEAL}44`, borderRadius: 3, flexShrink: 0,
-          fontFamily: FONT_MONO, fontSize: 11, color: TEAL, backgroundColor: '#0d2020',
+          border: `1px solid ${BORDER}`, borderRadius: 3, flexShrink: 0,
+          fontFamily: FONT_MONO, fontSize: 11, color: TEAL, backgroundColor: BG_FIELD,
         }}>
           {rule.priority}
         </span>
@@ -825,29 +832,29 @@ function StrategyCard({
         {rule.mt5_servers.length > 0 && (
           <span style={{
             padding: '1px 6px', borderRadius: 2, fontSize: 10, fontFamily: FONT_MONO,
-            backgroundColor: '#122030', color: '#7bafd4', border: '1px solid #1e4060',
+            backgroundColor: BG_FIELD, color: TEXT_SEC, border: `1px solid ${BORDER}`,
           }}>
             {rule.mt5_servers[0]}
           </span>
         )}
         <span style={{
           padding: '1px 6px', borderRadius: 2, fontSize: 10, fontFamily: FONT_MONO,
-          backgroundColor: '#0f1e20', color: TEXT_SEC, border: `1px solid ${BORDER}`,
+          backgroundColor: BG_FIELD, color: TEXT_SEC, border: `1px solid ${BORDER}`,
         }}>
           LP: {rule.hedging_lp_id}
         </span>
         {hasConflict && (
           <span style={{
             padding: '1px 6px', borderRadius: 2, fontSize: 10, fontFamily: FONT_MONO,
-            backgroundColor: '#201400', color: AMBER, border: `1px solid ${AMBER}44`,
+            backgroundColor: BG_FIELD, color: AMBER, border: `1px solid ${BORDER}`,
           }}>
             ⚠ Overlap
           </span>
         )}
         {escalationCount > 0 && (
           <span style={{
-            padding: '1px 6px', borderRadius: 2, fontSize: 10, fontFamily: FONT_MONO,
-            backgroundColor: '#200808', color: RED, border: `1px solid ${RED}44`,
+            padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 600, fontFamily: FONT_MONO,
+            backgroundColor: BADGE.critical.bg, color: BADGE.critical.color, border: `1px solid ${BADGE.critical.border}`,
           }}>
             ⚠ {escalationCount} escalated
           </span>
@@ -870,7 +877,7 @@ function StrategyCard({
       {/* Bottom color bar — routing status */}
       <div style={{
         position: 'absolute', bottom: 0, left: 0, right: 0, height: 2,
-        backgroundColor: `${routingColor}55`,
+        backgroundColor: routingColor,
       }} />
     </div>
   );
@@ -892,7 +899,7 @@ function InfoBanner({ msg }: { msg: string }) {
     <div style={{
       padding: '8px 12px', borderRadius: 4, marginBottom: 12,
       backgroundColor: '#101828', border: '1px solid #1e3a5f',
-      fontSize: 11, color: '#7bafd4', lineHeight: 1.5,
+      fontSize: 11, color: TEXT_SEC, lineHeight: 1.5,
     }}>
       ℹ {msg}
     </div>
@@ -904,7 +911,7 @@ function WarnBanner({ msg }: { msg: string }) {
   return (
     <div style={{
       padding: '8px 12px', borderRadius: 4, marginBottom: 12,
-      backgroundColor: '#201400', border: `1px solid ${AMBER}44`,
+      backgroundColor: '#2a2016', border: `1px solid ${BORDER}`,
       fontSize: 11, color: AMBER, lineHeight: 1.5,
     }}>
       ⚠ {msg}
@@ -1193,19 +1200,24 @@ export function HedgeRulesPage() {
     }
   }, [draftRule.te_calendar_id, loadSingleCalEvent]);
 
-  // Selection change → load rule + sanity config
+  // Selection change OR rules refresh → sync draft from backend data
+  const prevSelectedIdRef = useRef<number | null>(null);
   useEffect(() => {
-    if (selectedId === null) { sessionStorage.removeItem(SS_KEY); return; }
+    if (selectedId === null) { sessionStorage.removeItem(SS_KEY); prevSelectedIdRef.current = null; return; }
     sessionStorage.setItem(SS_KEY, String(selectedId));
     const rule = rules.find(r => r.rule_id === selectedId);
-    if (rule) {
+    const isNewSelection = selectedId !== prevSelectedIdRef.current;
+    prevSelectedIdRef.current = selectedId;
+    if (rule && (isNewSelection || !isRuleDirty)) {
       setDraftRule(draftFromRule(rule));
-      setIsRuleDirty(false);
-      setIsSanityDirty(false);
-      setSaveError(null);
-      loadSanityConfig(selectedId);
+      if (isNewSelection) {
+        setIsRuleDirty(false);
+        setIsSanityDirty(false);
+        setSaveError(null);
+        loadSanityConfig(selectedId);
+      }
     }
-  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, rules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Master node — declared here so all effects below can reference it safely
   const masterNode = mt5Nodes.find(n => n.node_type === 'MASTER' && n.is_enabled)
@@ -1338,6 +1350,7 @@ export function HedgeRulesPage() {
     try {
       const res = await fetch(`/api/v1/hedge/rules/${selectedId}/${action}`, { method: 'POST' });
       if (!res.ok) { const j = await res.json(); showToast(`Error: ${j.error ?? res.status}`); return; }
+      setIsRuleDirty(false);
       await loadRules();
       showToast(`Strategy ${action}d`);
     } catch { showToast('Action failed'); }
@@ -1512,14 +1525,21 @@ export function HedgeRulesPage() {
             {totalEscalations > 0 && (
               <>
                 <span style={{ color: TEXT_MUT }}>·</span>
-                <span style={{ color: RED, fontFamily: FONT_MONO }}>⚠ {totalEscalations} escalated (all strategies)</span>
+                <span style={{
+                  padding: '2px 8px', borderRadius: 3, fontWeight: 600,
+                  backgroundColor: BADGE.critical.bg, color: BADGE.critical.color,
+                  border: `1px solid ${BADGE.critical.border}`,
+                  fontFamily: FONT_MONO,
+                }}>
+                  ⚠ {totalEscalations} escalated (all strategies)
+                </span>
               </>
             )}
           </div>
           {toast && (
             <span style={{
               padding: '3px 10px', borderRadius: 4, fontSize: 11,
-              backgroundColor: '#0f2018', color: GREEN, border: `1px solid ${GREEN}44`,
+              backgroundColor: BG_FIELD, color: GREEN, border: `1px solid ${BORDER}`,
             }}>
               ✓ {toast}
             </span>
@@ -1530,7 +1550,7 @@ export function HedgeRulesPage() {
             style={{
               padding: '5px 14px', borderRadius: 4, cursor: isCreating ? 'default' : 'pointer',
               fontSize: 12, fontWeight: 600,
-              backgroundColor: isCreating ? '#0d2020' : `${TEAL}22`,
+              backgroundColor: isCreating ? BG_FIELD : BG_FIELD,
               border: `1px solid ${isCreating ? TEAL + '33' : TEAL}`,
               color: isCreating ? TEAL + '88' : TEAL,
             }}
@@ -1543,11 +1563,11 @@ export function HedgeRulesPage() {
       {/* ── Load error banner ─────────────────────────────────── */}
       {loadError && (
         <div style={{
-          padding: '6px 16px', borderBottom: `1px solid #5a2020`,
-          backgroundColor: '#1c1010', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
+          padding: '6px 16px', borderBottom: `1px solid #7a2f36`,
+          backgroundColor: '#2c1417', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
         }}>
-          <span style={{ fontSize: 12, color: '#ff8888' }}>⚠ {loadError}</span>
-          <button onClick={loadRules} style={{ fontSize: 11, color: '#ff8888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
+          <span style={{ fontSize: 12, color: RED }}>⚠ {loadError}</span>
+          <button onClick={loadRules} style={{ fontSize: 11, color: RED, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Retry</button>
         </div>
       )}
 
@@ -1618,7 +1638,7 @@ export function HedgeRulesPage() {
 
           {!panelVisible ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-              <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: `${TEAL}10`, border: `1px solid ${TEAL}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: TEAL }}>
+              <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: BG_SECTION, border: `1px solid ${BORDER}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: TEAL }}>
                 ⇌
               </div>
               <span style={{ color: TEXT_MUT, fontSize: 13 }}>Select a strategy to view or edit</span>
@@ -1647,7 +1667,13 @@ export function HedgeRulesPage() {
                   {isEditMode && selectedRule && (
                     <>
                       {selectedRule.status !== 'ACTIVE'  && <ActionBtn label="Activate" color={GREEN} onClick={() => handleStatusAction('activate')} />}
-                      {selectedRule.status === 'ACTIVE'  && <ActionBtn label="Pause"    color={AMBER} onClick={() => handleStatusAction('pause')} />}
+                      {selectedRule.status === 'ACTIVE'  && (
+                        <button onClick={() => handleStatusAction('pause')} style={{
+                          padding: '4px 10px', borderRadius: 3, cursor: 'pointer',
+                          fontSize: 11, fontWeight: 600,
+                          backgroundColor: '#313032', border: `1px solid ${BADGE.high.border}`, color: BADGE.high.color,
+                        }}>Pause</button>
+                      )}
                       {selectedRule.status !== 'STOPPED' && <ActionBtn label="Stop"     color={RED}   onClick={() => handleStatusAction('stop')} />}
                       <span style={{ width: 1, height: 20, backgroundColor: BORDER_MD }} />
                       <ActionBtn label="Delete" color={RED} onClick={handleDelete} />
@@ -1668,7 +1694,7 @@ export function HedgeRulesPage() {
                   <button onClick={handleSave} disabled={saving} style={{
                     padding: '5px 16px', borderRadius: 4, cursor: saving ? 'default' : 'pointer',
                     fontSize: 12, fontWeight: 600,
-                    backgroundColor: isDirtyAny || isCreating ? `${TEAL}22` : 'transparent',
+                    backgroundColor: isDirtyAny || isCreating ? BG_FIELD : 'transparent',
                     border: `1px solid ${isDirtyAny || isCreating ? TEAL : BORDER}`,
                     color: isDirtyAny || isCreating ? TEAL : TEXT_MUT,
                     opacity: saving ? 0.6 : 1,
@@ -1681,8 +1707,8 @@ export function HedgeRulesPage() {
               {/* ── Save error ─────────────────────────────────── */}
               {saveError && (
                 <div style={{
-                  padding: '6px 16px', borderBottom: `1px solid #5a2020`,
-                  backgroundColor: '#1c1010', fontSize: 11, color: '#ff8888', flexShrink: 0,
+                  padding: '6px 16px', borderBottom: `1px solid #7a2f36`,
+                  backgroundColor: '#2c1417', fontSize: 11, color: RED, flexShrink: 0,
                 }}>
                   ⚠ {saveError}
                 </div>
@@ -1691,8 +1717,8 @@ export function HedgeRulesPage() {
               {/* ── Completeness progress ──────────────────────── */}
               <div style={{
                 padding: '10px 16px', borderBottom: `1px solid ${BORDER}`,
-                backgroundColor: completeness.allRequiredDone ? '#0f2018' : '#201400',
-                border: `1px solid ${completeness.allRequiredDone ? GREEN : AMBER}44`,
+                backgroundColor: BG_SECTION,
+                border: `1px solid ${BORDER}`,
                 flexShrink: 0,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -1721,8 +1747,8 @@ export function HedgeRulesPage() {
                   {completeness.items.map(item => (
                     <span key={item.key} style={{
                       padding: '2px 6px', borderRadius: 3, fontSize: 10,
-                      backgroundColor: item.done ? `${GREEN}14` : (item.required ? `${AMBER}14` : `${TEXT_MUT}14`),
-                      border: `1px solid ${item.done ? GREEN : (item.required ? AMBER : TEXT_MUT)}44`,
+                      backgroundColor: item.done ? BG_FIELD : (item.required ? BG_FIELD : BG_FIELD),
+                      border: `1px solid ${BORDER}`,
                       color: item.done ? GREEN : (item.required ? AMBER : TEXT_MUT),
                     }}>
                       {item.done ? '✓' : (item.required ? '○' : '◦')} {item.label}
@@ -1830,7 +1856,7 @@ export function HedgeRulesPage() {
                             <button key={g} onClick={() => setRule({ groups: active ? draftRule.groups.filter(x => x !== g) : [...draftRule.groups, g] })} style={{
                               padding: '2px 9px', borderRadius: 3, cursor: 'pointer', fontSize: 11,
                               border: `1px solid ${active ? TEAL : BORDER}`,
-                              backgroundColor: active ? `${TEAL}14` : BG_FIELD,
+                              backgroundColor: active ? BG_FIELD : BG_FIELD,
                               color: active ? TEAL : TEXT_SEC,
                             }}>
                               {g.split('\\').pop() ?? g}
@@ -1932,7 +1958,7 @@ export function HedgeRulesPage() {
                           flex: 1, padding: '6px 0', borderRadius: 4, cursor: 'pointer',
                           fontSize: 12, fontWeight: draftRule.direction === d ? 600 : 400,
                           border: `1px solid ${draftRule.direction === d ? TEAL : BORDER}`,
-                          backgroundColor: draftRule.direction === d ? `${TEAL}18` : BG_FIELD,
+                          backgroundColor: draftRule.direction === d ? BG_FIELD : BG_FIELD,
                           color: draftRule.direction === d ? TEAL : TEXT_SEC,
                         }}>
                           {d}
@@ -2044,7 +2070,7 @@ export function HedgeRulesPage() {
                               padding: '5px 12px', borderRadius: 4, cursor: 'pointer',
                               fontSize: 11,
                               border: `1px solid ${isActive ? TEAL : BORDER}`,
-                              backgroundColor: isActive ? `${TEAL}18` : BG_FIELD,
+                              backgroundColor: isActive ? BG_FIELD : BG_FIELD,
                               color: isActive ? TEAL : TEXT_SEC,
                             }}
                           >
@@ -2079,7 +2105,7 @@ export function HedgeRulesPage() {
                       {/* Selected event display / picker trigger */}
                       {selectedCalEvent && selectedCalEvent.calendar_id === draftRule.te_calendar_id ? (
                         <div style={{
-                          backgroundColor: '#0d2020', border: `1px solid ${TEAL}44`,
+                          backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
                           borderRadius: 5, padding: '10px 12px',
                           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10,
                         }}>
@@ -2091,9 +2117,9 @@ export function HedgeRulesPage() {
                               <ImpStars v={selectedCalEvent.importance} />
                               <span style={{
                                 fontSize: 10, fontFamily: FONT_MONO, padding: '1px 6px', borderRadius: 2,
-                                backgroundColor: selectedCalEvent.status === 'SCHEDULED' ? '#0d2020' : '#201400',
+                                backgroundColor: selectedCalEvent.status === 'SCHEDULED' ? BG_FIELD : '#2a2016',
                                 color: selectedCalEvent.status === 'SCHEDULED' ? TEAL : AMBER,
-                                border: `1px solid ${selectedCalEvent.status === 'SCHEDULED' ? TEAL : AMBER}44`,
+                                border: `1px solid ${BORDER}`,
                               }}>
                                 {selectedCalEvent.status}
                               </span>
@@ -2173,7 +2199,7 @@ export function HedgeRulesPage() {
                                     padding: '3px 8px', borderRadius: 3, cursor: 'pointer',
                                     fontFamily: FONT_MONO, fontSize: 10,
                                     border: `1px solid ${on ? starsColor : BORDER}`,
-                                    backgroundColor: on ? `${starsColor}18` : BG_FIELD,
+                                    backgroundColor: on ? BG_FIELD : BG_FIELD,
                                     color: on ? starsColor : TEXT_MUT,
                                   }}>
                                     {'★'.repeat(imp)}{'☆'.repeat(3 - imp)}
@@ -2210,7 +2236,7 @@ export function HedgeRulesPage() {
                                   style={{
                                     padding: '8px 10px', cursor: 'pointer',
                                     borderBottom: `1px solid ${BORDER}`,
-                                    backgroundColor: draftRule.te_calendar_id === evt.calendar_id ? '#0d2020' : 'transparent',
+                                    backgroundColor: draftRule.te_calendar_id === evt.calendar_id ? BG_FIELD : 'transparent',
                                     transition: 'background 0.08s',
                                   }}
                                   onMouseEnter={e => { if (draftRule.te_calendar_id !== evt.calendar_id) (e.currentTarget as HTMLDivElement).style.backgroundColor = '#1e1d22'; }}
@@ -2466,7 +2492,7 @@ export function HedgeRulesPage() {
                           <div style={{
                             marginTop: 8, padding: '6px 8px', borderRadius: 3,
                             backgroundColor: '#101828', border: '1px solid #1e3a5f',
-                            fontSize: 11, color: '#7bafd4', lineHeight: 1.5,
+                            fontSize: 11, color: TEXT_SEC, lineHeight: 1.5,
                           }}>
                             ℹ Metrics populate once RouteSanityChecker has collected FIX session data.
                             Connectivity is live — metric sampling begins on first hedge dispatch.
@@ -2502,7 +2528,7 @@ export function HedgeRulesPage() {
                       backgroundColor: '#101828', border: '1px solid #1e3a5f',
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     }}>
-                      <span style={{ fontSize: 11, color: '#7bafd4' }}>
+                      <span style={{ fontSize: 11, color: TEXT_SEC }}>
                         ℹ Inheriting global default for LP <strong>{draftSanity.lp_id || selectedRule?.hedging_lp_id}</strong>.
                         No per-rule override defined.
                       </span>
@@ -2520,8 +2546,8 @@ export function HedgeRulesPage() {
                   {sanityError && (
                     <div style={{
                       padding: '6px 10px', borderRadius: 4, marginBottom: 10,
-                      backgroundColor: '#1c1010', border: `1px solid #5a2020`,
-                      fontSize: 11, color: '#ff8888',
+                      backgroundColor: '#2c1417', border: `1px solid #7a2f36`,
+                      fontSize: 11, color: RED,
                     }}>
                       ⚠ {sanityError}
                     </div>
@@ -2566,7 +2592,7 @@ export function HedgeRulesPage() {
                             flex: 1, padding: '6px 4px', borderRadius: 4, cursor: 'pointer',
                             fontSize: 10,
                             border: `1px solid ${draftSanity.breach_action === a ? AMBER : BORDER}`,
-                            backgroundColor: draftSanity.breach_action === a ? `${AMBER}14` : BG_FIELD,
+                            backgroundColor: draftSanity.breach_action === a ? BG_FIELD : BG_FIELD,
                             color: draftSanity.breach_action === a ? AMBER : TEXT_SEC,
                           }}>
                             {a.replace(/_/g, ' ')}
@@ -2645,7 +2671,7 @@ export function HedgeRulesPage() {
                         <button key={k} onClick={() => setSanity({ final_fallback_action: k })} style={{
                           flex: 1, padding: '7px 6px', borderRadius: 4, cursor: 'pointer', textAlign: 'left' as const,
                           border: `1px solid ${draftSanity.final_fallback_action === k ? v.color : BORDER}`,
-                          backgroundColor: draftSanity.final_fallback_action === k ? `${v.color}12` : BG_FIELD,
+                          backgroundColor: draftSanity.final_fallback_action === k ? BG_FIELD : BG_FIELD,
                         }}>
                           <div style={{ fontSize: 10, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 2 }}>
                             {v.label}
@@ -2671,7 +2697,7 @@ export function HedgeRulesPage() {
                       <button onClick={handleSanitySave} disabled={sanitySaving || !isSanityDirty} style={{
                         fontSize: 11, fontWeight: 600, borderRadius: 3,
                         padding: '4px 14px', cursor: isSanityDirty ? 'pointer' : 'default',
-                        backgroundColor: isSanityDirty ? `${TEAL}22` : 'transparent',
+                        backgroundColor: isSanityDirty ? BG_FIELD : 'transparent',
                         border: `1px solid ${isSanityDirty ? TEAL : BORDER}`,
                         color: isSanityDirty ? TEAL : TEXT_MUT,
                         opacity: sanitySaving ? 0.6 : 1,
@@ -2694,9 +2720,10 @@ export function HedgeRulesPage() {
                       <span style={{ color: RP_HINT, fontSize: 12 }}>All hedge orders for this strategy resolved normally</span>
                       {totalEscalations > 0 && (
                         <span style={{
-                          marginTop: 8, padding: '5px 12px', borderRadius: 4,
-                          backgroundColor: '#200808', border: `1px solid ${RED}44`,
-                          fontSize: 12, color: RED,
+                          marginTop: 8, padding: '5px 12px', borderRadius: 4, fontWeight: 600,
+                          backgroundColor: BADGE.critical.bg, color: BADGE.critical.color,
+                          border: `1px solid ${BADGE.critical.border}`,
+                          fontSize: 12,
                         }}>
                           ⚠ {totalEscalations} escalation{totalEscalations > 1 ? 's' : ''} exist across other strategies
                         </span>
@@ -2720,9 +2747,9 @@ export function HedgeRulesPage() {
                                 <span style={{ fontFamily: FONT_MONO, fontSize: 14, color: TEXT_PRI, fontWeight: 600 }}>{e.mt5_symbol}</span>
                                 <span style={{
                                   padding: '1px 6px', borderRadius: 2, fontSize: 12, fontFamily: FONT_MONO,
-                                  backgroundColor: e.direction === 'LONG' ? '#0d2020' : '#200d10',
+                                  backgroundColor: e.direction === 'LONG' ? BG_FIELD : '#2c1417',
                                   color: e.direction === 'LONG' ? TEAL : RED,
-                                  border: `1px solid ${e.direction === 'LONG' ? TEAL : RED}44`,
+                                  border: `1px solid ${BORDER}`,
                                 }}>
                                   {e.direction}
                                 </span>
@@ -2730,7 +2757,7 @@ export function HedgeRulesPage() {
                               </div>
                               <span style={{
                                 padding: '2px 8px', borderRadius: 2, fontSize: 11, fontFamily: FONT_MONO,
-                                backgroundColor: `${stateColor}12`, color: stateColor, border: `1px solid ${stateColor}44`,
+                                backgroundColor: BG_FIELD, color: stateColor, border: `1px solid ${BORDER}`,
                                 fontWeight: 600,
                               }}>
                                 {e.hedge_state.replace(/_/g, ' ')}
@@ -2762,7 +2789,7 @@ export function HedgeRulesPage() {
                             <div style={{ display: 'flex', gap: 6 }}>
                               {e.hedge_state !== 'NORMALIZER_ERROR' && (
                                 <button disabled={busy} onClick={() => handleEscalationAction(e.record_id, 'retry', e.lp_position_id)}
-                                  style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${TEAL}55`, color: TEAL, opacity: busy ? 0.5 : 1 }}>
+                                  style={{ ...escalBtnStyle, fontSize: 12, backgroundColor: BG_FIELD, borderColor: BORDER, color: TEAL, opacity: busy ? 0.5 : 1 }}>
                                   Retry
                                 </button>
                               )}
@@ -2770,15 +2797,15 @@ export function HedgeRulesPage() {
                                 disabled={busy || !canForceClose}
                                 title={!canForceClose ? 'Disabled — lp_position_id is null (LP fill not confirmed)' : undefined}
                                 onClick={() => canForceClose && handleEscalationAction(e.record_id, 'force-close', e.lp_position_id)}
-                                style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${AMBER}55`, color: AMBER, opacity: (busy || !canForceClose) ? 0.35 : 1, cursor: !canForceClose ? 'not-allowed' : 'pointer' }}>
+                                style={{ ...escalBtnStyle, fontSize: 12, backgroundColor: BADGE.high.bg, borderColor: BADGE.high.border, color: BADGE.high.color, opacity: (busy || !canForceClose) ? 0.35 : 1, cursor: !canForceClose ? 'not-allowed' : 'pointer' }}>
                                 Force Close
                               </button>
                               <button disabled={busy} onClick={() => handleEscalationAction(e.record_id, 'bbook', e.lp_position_id)}
-                                style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${RED}55`, color: RED, opacity: busy ? 0.5 : 1 }}>
+                                style={{ ...escalBtnStyle, fontSize: 12, backgroundColor: BADGE.critical.bg, borderColor: BADGE.critical.border, color: BADGE.critical.color, opacity: busy ? 0.5 : 1 }}>
                                 B-Book
                               </button>
                               <button disabled={busy} onClick={() => handleEscalationAction(e.record_id, 'acknowledge', e.lp_position_id)}
-                                style={{ ...escalBtnStyle, fontSize: 12, borderColor: `${RP_HINT}55`, color: RP_LABEL, opacity: busy ? 0.5 : 1 }}>
+                                style={{ ...escalBtnStyle, fontSize: 12, backgroundColor: BADGE.neutral.bg, borderColor: BADGE.neutral.border, color: BADGE.neutral.color, opacity: busy ? 0.5 : 1 }}>
                                 Dismiss
                               </button>
                             </div>
@@ -2805,11 +2832,12 @@ export function HedgeRulesPage() {
 
 // ── Tiny action button ────────────────────────────────────────
 function ActionBtn({ label, color, onClick }: { label: string; color: string; onClick: () => void }) {
+  const b = color === RED ? BADGE.critical : color === AMBER ? BADGE.high : color === GREEN ? BADGE.low : BADGE.neutral;
   return (
     <button onClick={onClick} style={{
       padding: '4px 10px', borderRadius: 3, cursor: 'pointer',
-      fontSize: 11, fontWeight: 500,
-      background: 'none', border: `1px solid ${color}55`, color,
+      fontSize: 11, fontWeight: 600,
+      backgroundColor: b.bg, border: `1px solid ${b.border}`, color: b.color,
       transition: 'background 0.1s',
     }}>
       {label}
