@@ -27,6 +27,15 @@ function connectBackend() {
   });
 
   backendWs.on('open', async () => {
+    // Subscribe once on behalf of all browser clients. The shared backend
+    // connection must receive every topic that any frontend page needs,
+    // and the BFF fans out frames to all browser clients. Browser clients
+    // receive everything and filter client-side.
+    backendWs?.send(JSON.stringify({
+      type: 'subscribe',
+      topics: ['mt5.position', 'mt5.node_status', 'mt5.deal']
+    }));
+
     fastifyRef?.log.info('[MT5 WS] Backend connected — fetching snapshot');
     try {
       const nodesRes = await nexriskApi.get<{ nodes: { id: number; node_name: string; connection_status: string; is_enabled: boolean }[] }>('/api/v1/mt5/nodes');
@@ -86,6 +95,13 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     socket.on('message', (data: Buffer) => {
+      // Do not forward browser subscribe messages. The shared backend
+      // connection is already subscribed to all topics; forwarding each
+      // browser's subscribe would clobber subscriptions for everyone.
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'subscribe') return;
+      } catch { /**/ }
       if (backendWs?.readyState === WebSocket.OPEN) backendWs.send(data);
     });
 
