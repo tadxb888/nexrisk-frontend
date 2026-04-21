@@ -712,30 +712,65 @@ function PromoteModal({ standbyNode, masterNode, onClose, onConfirm }: {
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  // Two UI phases, same modal — swap in place when the user confirms.
+  //   'confirm' : show the promotion explanation + Cancel/Confirm buttons
+  //   'info'    : show the "promotion started" message + OK button
+  const [phase, setPhase] = useState<'confirm' | 'info'>('confirm');
+
+  const handleConfirm = () => {
+    // Fire the promotion, then swap the modal content to the info phase.
+    // onConfirm is fire-and-forget from the UI perspective — the actual
+    // await happens in handlePromoteConfirm and updates arrive via WS.
+    onConfirm();
+    setPhase('info');
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,.72)' }}>
       <div className="panel w-full max-w-sm mx-4" style={{ backgroundColor: '#232225' }}>
         <div className="panel-header">
-          <span className="text-sm font-semibold text-text-primary">Promote to Master</span>
+          <span className="text-sm font-semibold text-text-primary">
+            {phase === 'confirm' ? 'Promote to Master' : 'Promotion started'}
+          </span>
           <button onClick={onClose} className="btn-icon text-text-muted"><IcoX /></button>
         </div>
-        <div className="p-5 space-y-4">
-          <div className="text-sm text-text-primary space-y-2">
-            <p>
-              <strong>{standbyNode.node_name}</strong> will become the new <strong>MASTER</strong> node.
-            </p>
-            {masterNode && (
-              <p className="text-text-secondary">
-                <strong>{masterNode.node_name}</strong> will be automatically demoted to <strong>STANDBY</strong>.
+
+        {phase === 'confirm' ? (
+          <div className="p-5 space-y-4">
+            <div className="text-sm text-text-primary space-y-2">
+              <p>
+                <strong>{standbyNode.node_name}</strong> will become the new <strong>MASTER</strong> node.
               </p>
-            )}
+              {masterNode && (
+                <p className="text-text-secondary">
+                  <strong>{masterNode.node_name}</strong> will be automatically demoted to <strong>STANDBY</strong>.
+                </p>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button onClick={onClose} className="btn btn-ghost text-sm">Cancel</button>
+              <button onClick={handleConfirm} className="btn btn-primary text-sm">Confirm Promotion</button>
+            </div>
           </div>
-          <div className="flex items-center justify-end gap-3">
-            <button onClick={onClose} className="btn btn-ghost text-sm">Cancel</button>
-            <button onClick={onConfirm} className="btn btn-primary text-sm">Confirm Promotion</button>
+        ) : (
+          <div className="p-5 space-y-4">
+            <div className="text-sm text-text-primary space-y-2">
+              <p>
+                Promoting <strong>{standbyNode.node_name}</strong> to <strong>MASTER</strong>.
+              </p>
+              <p className="text-text-secondary">
+                This may take up to ~30 seconds. The page should update automatically when the promotion completes.
+              </p>
+              <p className="text-text-secondary text-xs">
+                If the page does not update, hit the browser refresh button.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button onClick={onClose} className="btn btn-primary text-sm">OK</button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -2543,12 +2578,31 @@ export function NodeManagementPage() {
       ws.onmessage = (ev: MessageEvent<string>) => {
         try {
           const envelope = JSON.parse(ev.data);
-          // Envelope shape: { topic, type: 'EVENT', data: { type, node_id, status, ... } }
-          if (envelope?.data?.type === 'NODE_STATUS_CHANGE') {
-            const { node_id, status } = envelope.data as { node_id: number; status: ConnStatus };
+          // Envelope shape: { topic, type: 'EVENT', data: { type, ... } }
+          const data = envelope?.data;
+          if (!data) return;
+          if (data.type === 'NODE_STATUS_CHANGE') {
+            const { node_id, status } = data as { node_id: number; status: ConnStatus };
             setNodes(prev => prev.map(n =>
               n.id === node_id ? { ...n, connection_status: status } : n
             ));
+            return;
+          }
+
+          if (data.type === 'NODE_TYPE_CHANGE') {
+            // Atomic promotion broadcast: one node promoted, one demoted.
+            // Apply both updates in a single setNodes call so the UI never
+            // renders an inconsistent intermediate state.
+            const { demoted, promoted } = data as {
+              demoted:  { node_id: number; new_type: MT5Node['node_type'] };
+              promoted: { node_id: number; new_type: MT5Node['node_type'] };
+            };
+            setNodes(prev => prev.map(n => {
+              if (n.id === promoted.node_id) return { ...n, node_type: promoted.new_type };
+              if (n.id === demoted.node_id)  return { ...n, node_type: demoted.new_type };
+              return n;
+            }));
+            return;
           }
         } catch { /* ignore parse errors */ }
       };
@@ -2655,16 +2709,19 @@ export function NodeManagementPage() {
 
   const handlePromoteConfirm = async () => {
     if (!promoteModal) return;
+    const nodeName = promoteModal.node_name;
+    const nodeId = promoteModal.id;
+    // The modal is NOT closed here. PromoteModal swaps its own content from
+    // the confirm view to the info view when the user clicks Confirm.
+    // The user dismisses the info view themselves via the OK button, which
+    // triggers onClose → setPromoteModal(null).
     try {
-      // Promote STANDBY → MASTER. The backend automatically demotes the existing
-      // MASTER to STANDBY — no need to send a second request.
-      await mt5Api.updateNode(promoteModal.id, { node_type: 'MASTER' });
+      await mt5Api.updateNode(nodeId, { node_type: 'MASTER' });
       await loadNodes();
-      showToast(`${promoteModal.node_name} promoted to MASTER`);
+      showToast(`${nodeName} promoted to MASTER`);
     } catch (e: unknown) {
       showToast((e as Error).message || 'Promotion failed', 'error');
     }
-    setPromoteModal(null);
   };
 
   const handleDelete = async () => {
