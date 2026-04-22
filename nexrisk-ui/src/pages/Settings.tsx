@@ -1,264 +1,685 @@
 // ============================================
 // Settings Page (Hub)
-// 6 boxes linking to different settings sections
-// Organized by risk + ownership per architecture doc
+// 9 tiles mapping to the System Administration panels in settings_api.md
+// v1 scope:
+//   - Gateway tile wired to live data via settingsApi.gateway.get()
+//   - Other 8 tiles render with static summary placeholders (replaced as
+//     their respective tickets land)
+//   - Page-level role guard: root | administrator | sysadmin | broker_dealer
+//   - Secret rotation tile hidden entirely for non-root users
+//   - Restart banner driven from GET /settings/pending-restart-raw
 // ============================================
 
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, Navigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 
-// Icons for each settings section
-const SecurityIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-    <path d="m17,8V6c0-2.757-2.243-5-5-5S7,3.243,7,6v2c-1.654,0-3,1.346-3,3v8c0,2.757,2.243,5,5,5h6c2.757,0,5-2.243,5-5v-8c0-1.654-1.346-3-3-3Zm-8-2c0-1.654,1.346-3,3-3s3,1.346,3,3v2h-6v-2Zm9,13c0,1.654-1.346,3-3,3h-6c-1.654,0-3-1.346-3-3v-8c0-.551.449-1,1-1h10c.551,0,1,.449,1,1v8Zm-5-6v4c0,.553-.448,1-1,1s-1-.447-1-1v-4c0-.553.448-1,1-1s1,.447,1,1Z"/>
+import { useAuth } from '@/stores/AuthContext';
+import {
+  settingsApi,
+  type GatewayConfig,
+  type NexriskConfig,
+  type NexdayConfig,
+  type TradingEconomicsConfig,
+  type AuthConfig,
+  type FixBridgeConfig,
+  type LogServiceDescriptor,
+  type LpProfilesResponse,
+  type EncryptionKeyPreflight,
+  type PendingRestartResponse,
+} from '@/services/api';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Access control
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SETTINGS_PAGE_ROLES = ['root', 'administrator', 'sysadmin', 'broker_dealer'] as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Icons — stroke-based, 22×22, currentColor; sized via className at call site
+// ─────────────────────────────────────────────────────────────────────────────
+
+type IconProps = { className?: string; style?: React.CSSProperties };
+const strokeProps = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+};
+
+const LpIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <circle cx="12" cy="5" r="2.5" /><circle cx="5" cy="19" r="2.5" /><circle cx="19" cy="19" r="2.5" />
+    <path d="M12 7.5V11M12 11L6.5 17M12 11l5.5 6" />
+  </svg>
+);
+const NexDayIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /><path d="M12 14v3M12 17l2-2" />
+  </svg>
+);
+const TEIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M3 20h18" /><path d="M5 17l4-6 4 3 5-8" /><path d="M15 6h3v3" />
+  </svg>
+);
+const AuthIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M12 2l8 3v6c0 5-4 9-8 11-4-2-8-6-8-11V5l8-3z" /><path d="M9 12l2 2 4-4" />
+  </svg>
+);
+const AlertingIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M6 8a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z" /><path d="M10 20a2 2 0 0 0 4 0" />
+  </svg>
+);
+const GatewayIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <circle cx="12" cy="12" r="2" />
+    <path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7" />
+    <path d="M5.5 5.5a9 9 0 0 0 0 13M18.5 5.5a9 9 0 0 1 0 13" />
+  </svg>
+);
+const FixBridgeIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M3 12h18" /><path d="M7 8l-4 4 4 4" /><path d="M17 8l4 4-4 4" />
+  </svg>
+);
+const LogsIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+    <path d="M14 3v6h6" /><path d="M8 13h8M8 17h5" />
+  </svg>
+);
+const KeyIcon = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <circle cx="7" cy="15" r="4" /><path d="M10.85 12.15L19 4M18 5l2 2M15 8l2 2" />
+  </svg>
+);
+const BellAlert = ({ className, style }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} style={style} {...strokeProps}>
+    <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+  </svg>
+);
+const RootStar = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M12 2l2.5 5 5.5 1-4 4 1 5.5-5-2.5-5 2.5 1-5.5-4-4 5.5-1z" />
+  </svg>
+);
+const ShieldSmall = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
   </svg>
 );
 
-const ConnectivityIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-    <path d="m21.5,9.5c-1.025,0-1.903.618-2.289,1.5h-3.353c-.176-.677-.515-1.286-.987-1.774.45-.734,1.144-1.867,1.747-2.853.954.132,1.94-.295,2.475-1.169.721-1.177.351-2.717-.827-3.438-1.177-.721-2.717-.351-3.438.826-.535.874-.467,1.946.084,2.736-.607.991-1.304,2.131-1.753,2.863-.37-.113-.754-.192-1.16-.192s-.79.079-1.16.192c-.449-.733-1.147-1.872-1.753-2.863.551-.79.619-1.862.084-2.736-.721-1.177-2.26-1.548-3.438-.826-1.177.721-1.547,2.26-.826,3.438.535.874,1.521,1.3,2.474,1.169.604.986,1.298,2.119,1.747,2.853-.472.488-.811,1.098-.987,1.774h-3.353c-.386-.882-1.264-1.5-2.289-1.5C1.119,9.5,0,10.619,0,12s1.119,2.5,2.5,2.5c1.025,0,1.903-.618,2.289-1.5h3.353c.176.677.515,1.286.987,1.774l-1.747,2.853c-.954-.131-1.94.295-2.475,1.169-.721,1.177-.351,2.716.826,3.438,1.177.721,2.717.351,3.438-.827.535-.874.467-1.945-.084-2.735l1.753-2.863c.369.113.753.192,1.159.192s.79-.079,1.159-.192l1.754,2.864c-.551.79-.619,1.862-.084,2.735.721,1.177,2.26,1.548,3.438.827,1.177-.721,1.548-2.26.827-3.438-.535-.874-1.521-1.3-2.475-1.169l-1.747-2.853c.472-.488.811-1.098.987-1.774h3.353c.386.882,1.264,1.5,2.289,1.5,1.381,0,2.5-1.119,2.5-2.5s-1.119-2.5-2.5-2.5Zm-11.5,2.5c0-1.103.897-2,2-2s2,.897,2,2-.897,2-2,2-2-.897-2-2Z"/>
-  </svg>
-);
+// ─────────────────────────────────────────────────────────────────────────────
+// Tile component
+// ─────────────────────────────────────────────────────────────────────────────
 
-const SymbologyIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-    <path d="M7,0C4.243,0,2,2.243,2,5v14c0,2.757,2.243,5,5,5h10c2.757,0,5-2.243,5-5V5c0-2.757-2.243-5-5-5H7Zm10,22H7c-1.654,0-3-1.346-3-3V5c0-1.654,1.346-3,3-3h10c1.654,0,3,1.346,3,3v14c0,1.654-1.346,3-3,3Zm-5-15c-2.206,0-4,1.794-4,4s1.794,4,4,4,4-1.794,4-4-1.794-4-4-4Zm0,6c-1.103,0-2-.897-2-2s.897-2,2-2,2,.897,2,2-.897,2-2,2Zm4,4h-8c-.552,0-1,.448-1,1s.448,1,1,1h8c.552,0,1-.448,1-1s-.448-1-1-1Z"/>
-  </svg>
-);
+type StatTone = 'ok' | 'warn' | 'info' | 'neutral';
+type TileStat = { label: string; value: string; tone?: StatTone };
 
-const RiskLogicIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-    <path d="m17.331,11.213c.422-.634.669-1.395.669-2.212,0-2.206-1.794-4-4-4h-2.5c-1.93,0-3.5,1.57-3.5,3.5v7c0,1.929,1.57,3.5,3.5,3.5h4.545c2.181,0,3.955-1.774,3.955-4.03,0-1.062-.41-2.06-1.155-2.808-.433-.435-.95-.756-1.514-.95Zm-7.331-2.713c0-.827.673-1.5,1.5-1.5h2.5c1.103,0,2,.897,2,2s-.897,2-2,2h-4v-2.501Zm6.045,8.501h-4.545c-.827,0-1.5-.674-1.5-1.5v-2.5h6.048c.521,0,1.011.203,1.379.573.369.371.573.867.573,1.472,0,1.078-.877,1.955-1.955,1.955ZM23,3.5v17c0,1.93-1.57,3.5-3.5,3.5H4.5c-1.93,0-3.5-1.57-3.5-3.5V3.5C1,1.57,2.57,0,4.5,0h15c1.93,0,3.5,1.57,3.5,3.5Zm-2,0c0-.827-.673-1.5-1.5-1.5H4.5c-.827,0-1.5.673-1.5,1.5v17c0,.827.673,1.5,1.5,1.5h15c.827,0,1.5-.673,1.5-1.5V3.5Z"/>
-  </svg>
-);
-
-const AuditIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-    <path d="m19,2h-1.101c-.465-1.167-1.588-2-2.899-2h-6c-1.311,0-2.434.833-2.899,2h-1.101C2.243,2,0,4.243,0,7v12c0,2.757,2.243,5,5,5h14c2.757,0,5-2.243,5-5V7c0-2.757-2.243-5-5-5Zm-10-1c0-.552.449-1,1-1h4c.551,0,1,.448,1,1v1c0,.552-.449,1-1,1h-4c-.551,0-1-.448-1-1v-1Zm13,18c0,1.654-1.346,3-3,3H5c-1.654,0-3-1.346-3-3V7c0-1.654,1.346-3,3-3h1v.172c0,1.068.574,2.062,1.5,2.596.462.267.98.402,1.5.402h5c.52,0,1.038-.135,1.5-.402.926-.534,1.5-1.528,1.5-2.596v-.172h1c1.654,0,3,1.346,3,3v12Zm-5-8h-6c-.552,0-1,.448-1,1s.448,1,1,1h6c.552,0,1-.448,1-1s-.448-1-1-1Zm-2,4h-4c-.552,0-1,.448-1,1s.448,1,1,1h4c.552,0,1-.448,1-1s-.448-1-1-1Z"/>
-  </svg>
-);
-
-const NotificationsIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-    <path d="m22.555,13.662l-1.9-6.836c-.894-3.218-3.802-5.46-7.074-5.757-.239-1.093-.799-1.069-1.059-1.069h-.045c-.26,0-.82-.024-1.059,1.069-3.271.298-6.18,2.54-7.074,5.756l-1.9,6.836c-.382,1.373.128,2.808,1.296,3.645-.003.032-.01.063-.01.095,0,1.457.787,2.792,2.054,3.485,1.269.693,2.829.698,4.103.014.512-.275.697-.905.423-1.417-.275-.512-.905-.695-1.417-.423-.695.373-1.533.372-2.225.007-.697-.369-1.128-1.087-1.128-1.874,0-.147-.031-.28-.068-.412.003-.001.007-.002.01-.003.941-.341,1.636-1.174,1.791-2.18l1.9-6.837c.646-2.323,2.748-3.946,5.114-3.946s4.469,1.624,5.114,3.948l1.9,6.835c.156,1.007.851,1.84,1.792,2.181.004.001.007.002.011.003-.037.132-.068.266-.068.413,0,.787-.43,1.505-1.123,1.871-.694.367-1.534.369-2.23-.004-.513-.272-1.143-.089-1.418.422-.274.512-.089,1.142.422,1.417,1.273.686,2.833.682,4.104-.012,1.267-.693,2.054-2.028,2.054-3.485,0-.033-.007-.064-.01-.096,1.168-.836,1.678-2.272,1.296-3.646Zm-10.555,8.338c-1.103,0-2-.897-2-2h4c0,1.103-.897,2-2,2Z"/>
-  </svg>
-);
-
-interface SettingsBoxProps {
-  title: string;
-  subtitle: string;
-  owner: string;
-  path: string;
-  icon: React.ReactNode;
-  stats?: { label: string; value: string; status?: 'ok' | 'warning' | 'critical' | 'info' }[];
-  phase?: 'mvp' | 'phase2';
+interface TileProps {
+  title:          string;
+  subtitle:       string;
+  icon:           React.ReactNode;
+  path:           string;
+  rootOnly?:      boolean;
+  ready:          boolean;
+  stats:          TileStat[];
+  pendingCount?:  number;
 }
 
-function SettingsBox({ title, subtitle, owner, path, icon, stats, phase }: SettingsBoxProps) {
+function Tile({ title, subtitle, icon, path, rootOnly, ready, stats, pendingCount }: TileProps) {
   const navigate = useNavigate();
-  const isPhase2 = phase === 'phase2';
+  const onClick  = ready ? () => navigate(path) : undefined;
 
   return (
     <button
-      onClick={() => !isPhase2 && navigate(path)}
-      disabled={isPhase2}
+      type="button"
+      onClick={onClick}
+      aria-disabled={!ready}
       className={clsx(
-        'panel p-5 text-left transition-all relative',
-        isPhase2 
-          ? 'opacity-50 cursor-not-allowed'
-          : 'hover:border-accent-muted hover:bg-surface-hover cursor-pointer',
-        'focus:outline-none focus:ring-2 focus:ring-border-focus'
+        'relative flex flex-col gap-2.5 text-left p-4 rounded',
+        'bg-surface border border-border',
+        'transition-colors duration-150',
+        ready
+          ? 'hover:border-accent-muted hover:bg-surface-hover cursor-pointer'
+          : 'cursor-default',
+        'focus:outline-none focus:ring-2 focus:ring-border-focus',
       )}
     >
-      {/* Phase 2 Badge */}
-      {isPhase2 && (
-        <div className="absolute top-3 right-3">
-          <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-active text-text-muted border border-border-muted">
-            Phase 2
-          </span>
-        </div>
-      )}
-
-      {/* Header with Icon */}
-      <div className="flex items-start gap-3 mb-3">
-        <div className="text-accent">{icon}</div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-medium text-text-primary">{title}</h3>
-          <p className="text-sm text-text-secondary">{subtitle}</p>
-        </div>
-      </div>
-
-      {/* Owner Badge */}
-      <div className="mb-4">
-        <span className={clsx(
-          'px-2 py-0.5 rounded text-[10px] font-medium',
-          owner.includes('IT') && 'bg-info-bg text-info border border-info-border',
-          owner.includes('Risk') && !owner.includes('IT') && 'bg-accent-subtle text-accent border border-accent-muted',
-          owner.includes('IT') && owner.includes('Risk') && 'bg-surface-active text-text-secondary border border-border-muted'
-        )}>
-          {owner}
+      {/* Pending-restart marker */}
+      {pendingCount && pendingCount > 0 ? (
+        <span
+          className="absolute top-3 right-3 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide"
+          style={{
+            background: '#2a2016',
+            color:      '#e09a55',
+            border:     '1px solid #6a4a2f',
+          }}
+        >
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#e09a55' }} />
+          {pendingCount} pending
         </span>
+      ) : null}
+
+      {/* Header: icon + title + subtitle */}
+      <div className="flex gap-2.5 items-start pr-16">
+        <span className="w-[22px] h-[22px] shrink-0 mt-0.5 text-accent">{icon}</span>
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-medium text-text-primary leading-tight">{title}</h3>
+          <p className="text-xs text-text-muted leading-snug mt-0.5">{subtitle}</p>
+        </div>
       </div>
 
-      {/* Status Stats */}
-      {stats && stats.length > 0 && (
-        <div className="space-y-2">
-          {stats.map((stat, i) => (
-            <div key={i} className="flex items-center justify-between text-sm">
-              <span className="text-text-muted">{stat.label}</span>
-              <span className={clsx(
-                'font-mono',
-                stat.status === 'ok' && 'text-pnl-positive',
-                stat.status === 'warning' && 'text-risk-medium',
-                stat.status === 'critical' && 'text-risk-critical',
-                stat.status === 'info' && 'text-info',
-                !stat.status && 'text-text-primary'
-              )}>
-                {stat.value}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Root-only tag, only when relevant */}
+      {rootOnly ? (
+        <span
+          className="inline-flex self-start items-center text-[10px] font-medium px-1.5 py-0.5 rounded uppercase tracking-wide"
+          style={{
+            background: '#2a1f14',
+            color:      '#c9b87c',
+            border:     '1px solid #6a4f2f',
+          }}
+        >
+          Root only
+        </span>
+      ) : null}
+
+      {/* 3-row stat grid */}
+      <div className="flex flex-col gap-1.5 border-t border-[#2a292c] pt-2.5 mt-auto">
+        {stats.map((stat, i) => (
+          <div key={i} className="flex items-baseline justify-between gap-2.5 text-xs">
+            <span className="text-text-muted shrink-0">{stat.label}</span>
+            <span
+              className={clsx(
+                'font-mono text-[11.5px] text-right truncate',
+                stat.tone === 'ok'   && 'text-pnl-positive',
+                stat.tone === 'warn' && 'text-risk-high',
+                stat.tone === 'info' && 'text-info',
+                (!stat.tone || stat.tone === 'neutral') && 'text-text-primary',
+              )}
+            >
+              {stat.value}
+            </span>
+          </div>
+        ))}
+      </div>
     </button>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Tile summary builders
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildGatewayStats(config: GatewayConfig | null): TileStat[] {
+  if (!config) {
+    return [
+      { label: 'Upstream MT5',   value: '—' },
+      { label: 'Listen',         value: '—' },
+      { label: 'Gateway login',  value: '—' },
+    ];
+  }
+  return [
+    { label: 'Upstream MT5',  value: config.mt5_server },
+    { label: 'Listen',        value: config.gateway_listen },
+    { label: 'Gateway login', value: String(config.gateway_login) },
+  ];
+}
+
+function buildNexDayStats(config: NexdayConfig | undefined): TileStat[] {
+  if (!config) {
+    return [
+      { label: 'Status',           value: '—' },
+      { label: 'Intraday poll',    value: '—' },
+      { label: 'Daily bars kept',  value: '—' },
+    ];
+  }
+  return [
+    {
+      label: 'Status',
+      value: config.enabled ? 'Enabled' : 'Disabled',
+      tone:  config.enabled ? 'ok'      : 'warn',
+    },
+    {
+      label: 'Intraday poll',
+      value: config.polling?.intraday_enabled
+        ? `every ${config.polling.intraday_interval_minutes} min`
+        : 'off',
+    },
+    {
+      label: 'Daily bars kept',
+      value: String(config.retention?.daily_bars ?? '—'),
+    },
+  ];
+}
+
+function buildTradingEconomicsStats(config: TradingEconomicsConfig | undefined): TileStat[] {
+  if (!config) {
+    return [
+      { label: 'Status',         value: '—' },
+      { label: 'Poll interval',  value: '—' },
+      { label: 'Window',         value: '—' },
+    ];
+  }
+  return [
+    {
+      label: 'Status',
+      value: config.enabled ? 'Enabled' : 'Disabled',
+      tone:  config.enabled ? 'ok'      : 'warn',
+    },
+    { label: 'Poll interval', value: `${config.poll_interval_seconds}s` },
+    {
+      label: 'Window',
+      value: `-${config.preload_days_back}d / +${config.preload_days_ahead}d`,
+    },
+  ];
+}
+
+function buildAuthStats(config: AuthConfig | undefined): TileStat[] {
+  if (!config) {
+    return [
+      { label: 'Access token',  value: '—' },
+      { label: 'Refresh token', value: '—' },
+      { label: 'Password min',  value: '—' },
+    ];
+  }
+  return [
+    { label: 'Access token',  value: formatTTL(config.access_token_ttl_seconds) },
+    { label: 'Refresh token', value: formatTTL(config.refresh_token_ttl_seconds) },
+    { label: 'Password min',  value: `${config.password_min_length} chars` },
+  ];
+}
+
+function buildFixBridgeStats(config: FixBridgeConfig | null): TileStat[] {
+  if (!config) {
+    return [
+      { label: 'Log level',         value: '—' },
+      { label: 'Raw FIX retention', value: '—' },
+      { label: 'Incident bundles',  value: '—' },
+    ];
+  }
+  const rawFix = config.audit?.raw_fix;
+  return [
+    { label: 'Log level',         value: config.log_level ?? '—' },
+    {
+      label: 'Raw FIX retention',
+      value: rawFix?.enabled
+        ? `${rawFix.retention_hours} h · ${rawFix.compression}`
+        : 'disabled',
+      tone: rawFix?.enabled ? undefined : 'warn',
+    },
+    { label: 'Incident bundles',  value: `${config.incident?.max_bundles ?? '—'} max` },
+  ];
+}
+
+/** Render a TTL in the most compact sensible unit (min / h / d). */
+function formatTTL(seconds: number): string {
+  if (seconds >= 86400 && seconds % 86400 === 0) return `${seconds / 86400} d TTL`;
+  if (seconds >= 3600  && seconds % 3600  === 0) return `${seconds / 3600} h TTL`;
+  if (seconds >= 60    && seconds % 60    === 0) return `${seconds / 60} min TTL`;
+  return `${seconds} s TTL`;
+}
+
+// Static placeholders for tiles not yet wired — replaced as each ticket ships.
+function buildLpStats(resp: LpProfilesResponse | null): TileStat[] {
+  if (!resp) {
+    return [
+      { label: 'Profiles',  value: '—' },
+      { label: 'Enabled',   value: '—' },
+      { label: 'Disabled',  value: '—' },
+    ];
+  }
+  const total    = resp.profiles.length;
+  const enabled  = resp.enabled_lps.length;
+  const disabled = Math.max(0, total - enabled);
+  return [
+    { label: 'Profiles',  value: `${total} configured` },
+    { label: 'Enabled',   value: `${enabled} active`,   tone: enabled > 0 ? 'ok' : undefined },
+    { label: 'Disabled',  value: `${disabled} inactive` },
+  ];
+}
+function buildAlertingStats(config: NexriskConfig | null): TileStat[] {
+  const alerts   = config?.alerts;
+  const telegram = config?.telegram;
+  const webhooks = config?.webhooks;
+  if (!config) {
+    return [
+      { label: 'Telegram chats', value: '—' },
+      { label: 'Webhooks',       value: '—' },
+      { label: 'Min severity',   value: '—' },
+    ];
+  }
+  const chatCount     = telegram?.chats?.length ?? 0;
+  const endpointCount = webhooks?.endpoints?.length ?? 0;
+  const enabledEndpoints = (webhooks?.endpoints ?? []).filter(e => e.enabled).length;
+  return [
+    {
+      label: 'Telegram chats',
+      value: chatCount === 0 ? 'none'
+        : (telegram?.enabled ? `${chatCount} configured` : `${chatCount} (channel off)`),
+      tone: telegram?.enabled && chatCount > 0 ? 'ok' : undefined,
+    },
+    {
+      label: 'Webhooks',
+      value: endpointCount === 0 ? 'none'
+        : (webhooks?.enabled ? `${enabledEndpoints} of ${endpointCount} active` : `${endpointCount} (channel off)`),
+      tone: webhooks?.enabled && enabledEndpoints > 0 ? 'ok' : undefined,
+    },
+    {
+      label: 'Min severity',
+      value: alerts?.enabled ? (alerts.min_severity ?? '—') : 'alerts off',
+      tone: alerts?.enabled ? undefined : 'warn',
+    },
+  ];
+}
+function buildLogsStats(services: LogServiceDescriptor[] | null): TileStat[] {
+  if (!services) {
+    return [
+      { label: 'Services',     value: '—' },
+      { label: 'Configurable', value: '—' },
+      { label: 'Browser',      value: 'Ready' },
+    ];
+  }
+  const configurable = services.filter(s => s.level_configurable).length;
+  return [
+    { label: 'Services',     value: `${services.length} indexed` },
+    { label: 'Configurable', value: `${configurable} of ${services.length}` },
+    { label: 'Browser',      value: 'Ready' },
+  ];
+}
+
+function buildRotationStats(preflight: EncryptionKeyPreflight | null): TileStat[] {
+  const encryption: TileStat =
+    preflight === null
+      ? { label: 'Encryption key', value: '—' }
+      : preflight.ok_to_proceed
+        ? { label: 'Encryption key', value: 'preflight ok', tone: 'ok' }
+        : { label: 'Encryption key', value: 'blocked',      tone: 'warn' };
+
+  return [
+    { label: 'Internal secret', value: 'Rotatable' },
+    { label: 'JWT secret',      value: 'Rotatable' },
+    encryption,
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main component
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function SettingsPage() {
-  const boxes: SettingsBoxProps[] = [
-    // MVP Phase 1
+  const { user } = useAuth();
+
+  // Role gate: redirect anyone outside the four permitted roles.
+  if (user && !(SETTINGS_PAGE_ROLES as readonly string[]).includes(user.role)) {
+    return <Navigate to="/" replace />;
+  }
+  const isRoot = user?.role === 'root';
+
+  // ── live data: gateway + nexrisk + fixbridge + lp + logs + preflight + pending ──
+  const [gateway,          setGateway]          = useState<GatewayConfig | null>(null);
+  const [nexrisk,          setNexrisk]          = useState<NexriskConfig | null>(null);
+  const [fixbridge,        setFixbridge]        = useState<FixBridgeConfig | null>(null);
+  const [lpProfiles,       setLpProfiles]       = useState<LpProfilesResponse | null>(null);
+  const [logServices,      setLogServices]      = useState<LogServiceDescriptor[] | null>(null);
+  const [encryptPreflight, setEncryptPreflight] = useState<EncryptionKeyPreflight | null>(null);
+  const [pending,          setPending]          = useState<PendingRestartResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const [g, n, f, lp, l, p, pre] = await Promise.all([
+          settingsApi.gateway.get().catch(() => null),
+          settingsApi.nexrisk.get().catch(() => null),
+          settingsApi.fixbridge.get().catch(() => null),
+          settingsApi.lp.listProfiles().catch(() => null),
+          settingsApi.logs.getServices().catch(() => null),
+          settingsApi.getPendingRestart().catch(() => null),
+          // Only probe encryption-key preflight for root users — the endpoint
+          // is root-only at the backend and would 403 for anyone else.
+          isRoot
+            ? settingsApi.rotation.encryptionKeyPreflight().catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        if (g)   setGateway(g.data);
+        if (n)   setNexrisk(n);
+        if (f)   setFixbridge(f.data);
+        if (lp)  setLpProfiles(lp);
+        if (l)   setLogServices(l.services);
+        if (p)   setPending(p);
+        if (pre) setEncryptPreflight(pre);
+      } catch {
+        // silent — tiles fall back to placeholder shape
+      }
+    }
+
+    void load();
+    const id = window.setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [isRoot]);
+
+  // Map pending fields to tile keys (matches the `section` string the backend
+  // emits on /settings/pending-restart-raw). Standalone file-backed sections
+  // — gateway, fixbridge, lp — are included here so that if the backend does
+  // surface them, the hub lights up correctly. If it doesn't, the banner will
+  // still show them via the mutation-response restart_required array when
+  // the user comes back from a sub-page that just saved.
+  const pendingByTile = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (!pending?.pending_fields) return map;
+    for (const f of pending.pending_fields) {
+      const key = pendingTileKey(f.section, f.subsection);
+      if (key) map[key] = (map[key] ?? 0) + 1;
+    }
+    return map;
+  }, [pending]);
+
+  const hasPending     = pending?.has_pending ?? false;
+  const pendingCount   = pending?.pending_fields?.length ?? 0;
+  const pendingServices = useMemo(() => {
+    const s = new Set<string>();
+    for (const f of pending?.pending_fields ?? []) {
+      const svc = serviceForSection(f.section);
+      if (svc) s.add(svc);
+    }
+    return Array.from(s);
+  }, [pending]);
+
+  // ─ tiles ─
+  const tiles: (TileProps & { key: string })[] = [
     {
-      title: 'Identity & Security',
-      subtitle: 'Users, roles, MFA, and access control',
-      owner: 'IT-owned',
-      path: '/settings/security',
-      icon: <SecurityIcon />,
-      phase: 'mvp',
-      stats: [
-        { label: 'Active Users', value: '24', status: 'ok' },
-        { label: 'MFA Enabled', value: '92%', status: 'warning' },
-        { label: 'Root Status', value: 'Disabled', status: 'ok' },
-      ],
+      key: 'lp',     title: 'LP management',       subtitle: 'Liquidity provider profiles and routing',
+      icon: <LpIcon className="w-full h-full" />, path: '/settings/lp', ready: true,
+      stats: buildLpStats(lpProfiles), pendingCount: pendingByTile.lp,
     },
     {
-      title: 'Connectivity',
-      subtitle: 'MT5 servers and LP connections',
-      owner: 'IT + Risk',
-      path: '/settings/connectivity',
-      icon: <ConnectivityIcon />,
-      phase: 'mvp',
-      stats: [
-        { label: 'MT5 Servers', value: '3 Online', status: 'ok' },
-        { label: 'LP Sessions', value: '2/2 Active', status: 'ok' },
-        { label: 'Avg Latency', value: '12ms', status: 'ok' },
-      ],
+      key: 'nexday', title: 'NexDay integration',  subtitle: 'Daily bars and intraday market data',
+      icon: <NexDayIcon className="w-full h-full" />, path: '/settings/nexday', ready: true,
+      stats: buildNexDayStats(nexrisk?.nexday), pendingCount: pendingByTile.nexday,
     },
     {
-      title: 'Market & Symbology',
-      subtitle: 'Symbol mapping, unifiers, trading conditions',
-      owner: 'Risk-owned',
-      path: '/settings/symbology',
-      icon: <SymbologyIcon />,
-      phase: 'mvp',
-      stats: [
-        { label: 'Mapped Symbols', value: '127/132', status: 'warning' },
-        { label: 'Unifier Groups', value: '18', status: 'info' },
-        { label: 'Validation', value: '5 Issues', status: 'critical' },
-      ],
+      key: 'te',     title: 'Trading Economics',   subtitle: 'Calendar feed and event stream',
+      icon: <TEIcon className="w-full h-full" />, path: '/settings/trading-economics', ready: true,
+      stats: buildTradingEconomicsStats(nexrisk?.trading_economics), pendingCount: pendingByTile.te,
     },
     {
-      title: 'Operations & Audit',
-      subtitle: 'Logs, backups, retention, compliance',
-      owner: 'IT-owned',
-      path: '/settings/audit',
-      icon: <AuditIcon />,
-      phase: 'mvp',
-      stats: [
-        { label: 'Last Backup', value: '2h ago', status: 'ok' },
-        { label: 'Log Retention', value: '90 days', status: 'info' },
-        { label: 'Change Events', value: '47 today', status: 'info' },
-      ],
+      key: 'auth',   title: 'Auth & session',      subtitle: 'Token TTLs and password policy',
+      icon: <AuthIcon className="w-full h-full" />, path: '/settings/auth', ready: true,
+      stats: buildAuthStats(nexrisk?.auth), pendingCount: pendingByTile.auth,
     },
     {
-      title: 'Notifications',
-      subtitle: 'Channels, routing rules, delivery',
-      owner: 'IT + Risk',
-      path: '/settings/notifications',
-      icon: <NotificationsIcon />,
-      phase: 'mvp',
-      stats: [
-        { label: 'Telegram', value: 'Connected', status: 'ok' },
-        { label: 'Alert Routes', value: '12 Active', status: 'info' },
-        { label: 'Delivery Rate', value: '99.2%', status: 'ok' },
-      ],
+      key: 'alerts', title: 'Alerting',            subtitle: 'Telegram, webhooks, severity routing',
+      icon: <AlertingIcon className="w-full h-full" />, path: '/settings/alerts', ready: true,
+      stats: buildAlertingStats(nexrisk), pendingCount: pendingByTile.alerts,
     },
-    // Phase 2
+    // ─── GATEWAY: the only tile wired to live data in v1 ───
     {
-      title: 'Risk Logic',
-      subtitle: 'Feature engine, pricing rules, hedging rules',
-      owner: 'Risk-owned',
-      path: '/settings/risk-logic',
-      icon: <RiskLogicIcon />,
-      phase: 'phase2',
-      stats: [
-        { label: 'Config Version', value: 'v2.4.1', status: 'info' },
-        { label: 'Pending Approvals', value: '0', status: 'ok' },
-        { label: 'Last Deploy', value: '3d ago', status: 'info' },
-      ],
+      key: 'gateway', title: 'Price feed gateway', subtitle: gatewaySubtitle(gateway),
+      icon: <GatewayIcon className="w-full h-full" />, path: '/settings/gateway', ready: true,
+      stats: buildGatewayStats(gateway), pendingCount: pendingByTile.gateway,
+    },
+    {
+      key: 'fixbridge', title: 'FIX bridge',       subtitle: 'Audit, incident bundles, backpressure',
+      icon: <FixBridgeIcon className="w-full h-full" />, path: '/settings/fixbridge', ready: true,
+      stats: buildFixBridgeStats(fixbridge), pendingCount: pendingByTile.fixbridge,
+    },
+    {
+      key: 'logs',  title: 'Log viewer',           subtitle: 'Tail, search, download across services',
+      icon: <LogsIcon className="w-full h-full" />, path: '/settings/logs', ready: true,
+      stats: buildLogsStats(logServices), pendingCount: pendingByTile.logs,
+    },
+    // ─── SECRET ROTATION: root-only, filtered below ───
+    {
+      key: 'rotation', title: 'Secret rotation',   subtitle: 'Internal, JWT, and encryption keys',
+      icon: <KeyIcon className="w-full h-full" />, path: '/settings/rotation', rootOnly: true, ready: true,
+      stats: buildRotationStats(encryptPreflight), pendingCount: pendingByTile.rotation,
     },
   ];
 
+  const visibleTiles = tiles.filter(t => !t.rootOnly || isRoot);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
+
   return (
     <div className="h-full p-6 overflow-auto">
-      {/* Page Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-text-primary">Settings</h1>
-        <p className="text-text-secondary">
-          System configuration organized by risk level and ownership
-        </p>
+      {/* Page header */}
+      <div className="flex justify-between items-end mb-4 pb-3 border-b border-border">
+        <div>
+          <h1 className="text-2xl font-medium text-text-primary tracking-tight">
+            System administration
+          </h1>
+          <p className="text-sm text-text-secondary mt-1">
+            IT office configuration — nine areas, each restart-managed
+          </p>
+        </div>
+        {user ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded font-mono"
+            style={
+              isRoot
+                ? { background: '#2a1f14', color: '#c9b87c', border: '1px solid #6a4f2f' }
+                : { background: '#163a3a', color: '#49b3b3', border: '1px solid #2f8f8f' }
+            }
+          >
+            {isRoot
+              ? <RootStar className="w-3 h-3" />
+              : <ShieldSmall className="w-3 h-3" />}
+            {user.role}
+          </span>
+        ) : null}
       </div>
 
-      {/* 6-Box Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {boxes.map((box) => (
-          <SettingsBox key={box.path} {...box} />
+      {/* Restart banner */}
+      {hasPending ? (
+        <div
+          className="rounded p-3 mb-5 flex gap-3 items-start"
+          style={{ background: '#2a2016', border: '1px solid #6a4a2f' }}
+        >
+          <BellAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: '#e09a55' } as React.CSSProperties} />
+          <div className="flex-1 text-sm">
+            <p className="font-medium m-0" style={{ color: '#e09a55' }}>
+              Restart required — {pendingCount} field{pendingCount === 1 ? '' : 's'} pending
+              {pendingServices.length > 0
+                ? ` across ${pendingServices.length} service${pendingServices.length === 1 ? '' : 's'}`
+                : ''}
+            </p>
+            <p className="text-text-secondary mt-1 mb-0 text-[13px] leading-snug">
+              Changes saved but not yet applied.
+              {pendingServices.length > 0 && (
+                <>
+                  {' '}Restart{' '}
+                  {pendingServices.map((s, i) => (
+                    <span key={s}>
+                      <span
+                        className="inline-block font-mono text-[11px] px-1.5 py-0.5 rounded mx-0.5"
+                        style={{ background: '#1a1a1d', color: '#e09a55', border: '1px solid #6a4a2f' }}
+                      >
+                        {s}
+                      </span>
+                      {i < pendingServices.length - 1 ? ' ' : ''}
+                    </span>
+                  ))}
+                  {' '}to pick them up.
+                </>
+              )}
+              {' '}Affected tiles are flagged with a <span style={{ color: '#e09a55', fontWeight: 500 }}>pending</span> marker.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 3×3 tile grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {visibleTiles.map(({ key, ...rest }) => (
+          <Tile key={key} {...rest} />
         ))}
       </div>
 
-      {/* System Health Footer */}
-      <div className="mt-8 panel p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-8">
-            <div>
-              <span className="text-sm text-text-muted">Environment</span>
-              <p className="text-lg font-mono text-accent">PRODUCTION</p>
-            </div>
-            <div>
-              <span className="text-sm text-text-muted">Config Version</span>
-              <p className="text-lg font-mono text-text-primary">v1.6.2</p>
-            </div>
-            <div>
-              <span className="text-sm text-text-muted">Pending Changes</span>
-              <p className="text-lg font-mono text-text-primary">0</p>
-            </div>
-            <div>
-              <span className="text-sm text-text-muted">System Status</span>
-              <p className="text-lg font-mono text-pnl-positive">Healthy</p>
-            </div>
-          </div>
-          <div className="text-sm text-text-muted">
-            Last sync: {new Date().toLocaleTimeString()}
-          </div>
-        </div>
-      </div>
-
-      {/* Phase Legend */}
-      <div className="mt-4 text-xs text-text-muted">
-        <span className="mr-4">● MVP Phase 1: Currently available</span>
-        <span>○ Phase 2: Requires backend support for versioning/approval workflows</span>
+      {/* Footer */}
+      <div className="mt-4 pt-3 border-t border-border flex justify-between items-center text-xs text-text-muted">
+        <span>
+          <span className="mr-1.5">Environment</span>
+          <span className="font-mono text-text-primary">{import.meta.env.MODE}</span>
+        </span>
+        <span>
+          <span className="mr-1.5">Last sync</span>
+          <span className="font-mono text-text-primary">
+            {new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+        </span>
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function gatewaySubtitle(config: GatewayConfig | null): string {
+  if (!config) return 'Upstream MT5 and downstream terminal listener';
+  return `${config.gateway_name} · Enabled`;
+}
+
+function pendingTileKey(section: string, subsection?: string): string | null {
+  // Matches the section/subsection strings documented in settings_api.md § 2.
+  // Standalone file-backed sections are included on the assumption that the
+  // backend will eventually emit them in /settings/pending-restart — if it
+  // doesn't, these just never match and the tile marker stays dark.
+  if (section === 'nexrisk') {
+    if (subsection === 'nexday')             return 'nexday';
+    if (subsection === 'trading-economics')  return 'te';
+    if (subsection === 'auth')               return 'auth';
+    if (subsection === 'alerts')             return 'alerts';
+    if (subsection === 'telegram')           return 'alerts';
+    if (subsection === 'webhooks')           return 'alerts';
+    return null;
+  }
+  if (section === 'gateway')   return 'gateway';
+  if (section === 'fixbridge') return 'fixbridge';
+  if (section === 'lp')        return 'lp';
+  if (section === 'logs')      return 'logs';
+  return null;
+}
+
+function serviceForSection(section: string): string | null {
+  if (section === 'gateway')   return 'nexrisk_gateway_service';
+  if (section === 'fixbridge') return 'fixbridge_service';
+  if (section === 'lp')        return 'fixbridge_service';
+  if (section === 'nexrisk')   return 'nexrisk_service';
+  return null;
 }
 
 export default SettingsPage;

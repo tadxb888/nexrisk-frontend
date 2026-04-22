@@ -8,7 +8,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/stores/AuthContext';
 import { clsx } from 'clsx';
-import { NAV_SECTIONS, sectionForPath, loadPins, savePins } from './TopBar';
+import { NAV_SECTIONS, sectionForPath, loadPins, savePins, canSeeItem } from './TopBar';
 
 // Thumbtack pin icon
 const PinIcon = ({ filled }: { filled: boolean }) => (
@@ -20,7 +20,6 @@ const PinIcon = ({ filled }: { filled: boolean }) => (
 export function SubNav() {
   const location = useLocation();
   const { user } = useAuth();
-  const canManageUsers = user?.role === 'root' || user?.role === 'administrator';
 
   const [pins, setPins] = useState<string[]>(loadPins);
 
@@ -44,7 +43,7 @@ export function SubNav() {
   const section = sectionForPath(location.pathname);
   if (!section) return null;
 
-  const visibleItems = section.items.filter(i => !i.adminOnly || canManageUsers);
+  const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
   if (visibleItems.length === 0) return null;
 
   return (
@@ -85,7 +84,7 @@ export function SubNav() {
                   ? 'font-medium'
                   : 'text-white hover:text-[#c9b87c]'
               )}
-              style={isActive ? { color: '#c9b87c', backgroundColor: 'rgba(201,184,124,0.1)' } : undefined}
+              style={isActive ? { color: '#c9b87c', backgroundColor: '#2a1f14' } : undefined}
             >
               {item.label}
 
@@ -93,14 +92,12 @@ export function SubNav() {
               <button
                 onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
                 className={clsx(
-                  'transition-opacity',
-                  pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-80 hover:!opacity-100'
+                  pinned ? 'inline-flex' : 'hidden group-hover:inline-flex'
                 )}
                 style={{
                   color: '#fff',
                   padding: 1,
                   lineHeight: 1,
-                  display: 'flex',
                   alignItems: 'center',
                 }}
                 title={pinned ? 'Unpin' : 'Pin to favourites'}

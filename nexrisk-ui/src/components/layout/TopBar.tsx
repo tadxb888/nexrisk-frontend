@@ -13,7 +13,12 @@ import { clsx } from 'clsx';
 export interface SubItem {
   path: string;
   label: string;
+  /** Shortcut for root+administrator only. Kept for backwards compat. */
   adminOnly?: boolean;
+  /** When set, visible only to users whose role is in this list. Takes
+   *  precedence over adminOnly when both are present. Use this for
+   *  finer-grained control (e.g. Settings: root/admin/sysadmin/broker-dealer). */
+  rolesAllowed?: string[];
 }
 
 export interface NavSection {
@@ -69,7 +74,8 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: '/logs',          label: 'Logs' },
       { path: '/reports',       label: 'Reports' },
-      { path: '/users',         label: 'Users', adminOnly: true },
+      { path: '/users',         label: 'Users',    adminOnly: true },
+      { path: '/settings',      label: 'Settings', rolesAllowed: ['root', 'administrator', 'sysadmin', 'broker_dealer'] },
     ],
   },
   {
@@ -93,6 +99,19 @@ function loadPins(): string[] {
 
 function savePins(pins: string[]) {
   localStorage.setItem(PIN_KEY, JSON.stringify(pins));
+}
+
+// ── Role-based item visibility ───────────────────────────────
+// Single source of truth for "should this user see this nav item".
+// Consulted by both TopBar's section filter and SubNav's items filter.
+export function canSeeItem(item: SubItem, role: string | undefined): boolean {
+  if (item.rolesAllowed) {
+    return !!role && item.rolesAllowed.includes(role);
+  }
+  if (item.adminOnly) {
+    return role === 'root' || role === 'administrator';
+  }
+  return true;
 }
 
 // ── Resolve which section owns a path ────────────────────────
@@ -153,8 +172,6 @@ export function TopBar() {
   const accountRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  const canManageUsers = user?.role === 'root' || user?.role === 'administrator';
-
   // Sync pins when SubNav toggles them
   useEffect(() => {
     const sync = () => setPins(loadPins());
@@ -194,7 +211,7 @@ export function TopBar() {
 
   // Section click → navigate to first sub-item
   const handleSectionClick = (section: NavSection) => {
-    const first = section.items.find(i => !i.adminOnly || canManageUsers);
+    const first = section.items.find(i => canSeeItem(i, user?.role));
     if (first) navigate(first.path);
   };
 
@@ -227,7 +244,7 @@ export function TopBar() {
                   borderRadius: 4,
                   border: `1px solid #6B9AC4`,
                   color: isActive ? '#c9b87c' : '#fff',
-                  backgroundColor: isActive ? 'rgba(201,184,124,0.08)' : 'transparent',
+                  backgroundColor: isActive ? '#2a1f14' : 'transparent',
                   transition: 'all 0.15s',
                 }}
               >
@@ -270,8 +287,8 @@ export function TopBar() {
         {/* Center — Primary nav sections */}
         <nav className="flex items-center gap-1 flex-1">
           {NAV_SECTIONS.map(section => {
-            // Hide sections whose only items are admin-only and user isn't admin
-            const visibleItems = section.items.filter(i => !i.adminOnly || canManageUsers);
+            // Hide sections whose only items the user can't see
+            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
             if (visibleItems.length === 0) return null;
 
             const isActive = activeSection?.id === section.id;
@@ -344,7 +361,7 @@ export function TopBar() {
                 {user?.username?.[0]?.toUpperCase() ?? 'U'}
               </div>
               <span style={{ fontSize: 12 }}>{user?.username ?? 'Account'}</span>
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style={{ opacity: 0.5 }}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style={{ color: '#bbb' }}>
                 <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
               </svg>
             </button>

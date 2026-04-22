@@ -1025,3 +1025,854 @@ export const usersApi = {
       `/api/v1/roles/${roleId}/permissions`
     ),
 };
+// ============================================
+// Settings API — System Administration surface
+// ============================================
+//
+// Shapes match settings_api.md exactly (snake_case). These hit the BFF's
+// raw pass-through routes (e.g. /settings/gateway, /settings/pending-restart-raw,
+// /settings/logs/services) — not the camelCase-transforming legacy routes.
+//
+// Scope of this module in v1: Gateway end-to-end, plus the cross-cutting
+// pending-restart and log-services endpoints that the hub + sub-pages need.
+// The other eight panels will extend this module in follow-up tickets.
+
+// ── shared response shapes ─────────────────────────────────────
+
+/** Emitted by standalone file-backed endpoints (LP, Gateway, FIX Bridge). */
+export interface RestartRequiredEnvelope {
+  success: boolean;
+  restart_required?: string[];
+  message?: string;
+  error?: string;
+  errors?: string[];
+  warnings?: string[];
+}
+
+/** Emitted by SettingsManager-backed endpoints (nexrisk subsections,
+ *  Telegram/webhook CRUD, classifier/detection/LLM). `pending_restart`
+ *  is true when any restart-flagged field has changed since the last
+ *  service restart — not just in the current request. */
+export interface SettingsManagerEnvelope {
+  success:          boolean;
+  warnings?:        string[];
+  pending_restart?: boolean;
+  restart_notice?:  string;
+  error?:           string;
+  errors?:          string[];
+}
+
+/** GET /api/v1/settings/pending-restart */
+export interface PendingRestartResponse {
+  has_pending: boolean;
+  pending_fields: { section: string; subsection?: string; field: string }[];
+}
+
+// ── Gateway ────────────────────────────────────────────────────
+
+/** GET /api/v1/settings/gateway — gateway_password is always masked on read. */
+export interface GatewayConfig {
+  mt5_server:       string;
+  gateway_login:    number;
+  gateway_password: string;   // masked "***" on GET
+  gateway_listen:   string;
+  gateway_name:     string;
+  timezone_minutes: number;
+  log_path:         string;
+}
+
+export interface GatewayGetResponse {
+  success: boolean;
+  data:    GatewayConfig;
+}
+
+/** Body for PUT /api/v1/settings/gateway.
+ *  gateway_password: null (or absent) means "leave unchanged" — never send
+ *  the masked "***" value back. Pass every other field you want to update. */
+export type GatewayUpdateBody = Partial<Omit<GatewayConfig, 'gateway_password'>> & {
+  gateway_password?: string | null;
+};
+
+/** GET /api/v1/settings/gateway/status — returns 501 today; check status code. */
+export interface GatewayStatus {
+  upstream_mt5?:       string;
+  downstream_clients?: number;
+  last_tick_at?:       string;
+  tick_rate_per_sec?:  number;
+}
+
+// ── FIX Bridge operational (§ 8) ──────────────────────────────
+
+export type FixBridgeLogLevel   = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+export type FixBridgeCompression = 'none' | 'zstd' | 'gzip';
+export type FixBridgeAutoExportTrigger =
+  | 'SESSION_GAP' | 'BOOK_STALE_EXTENDED' | 'MASS_REJECT' | 'SEQ_RESET_FORCED';
+
+export const FIX_BRIDGE_LOG_LEVELS:  FixBridgeLogLevel[]    = ['trace', 'debug', 'info', 'warn', 'error'];
+export const FIX_BRIDGE_COMPRESSIONS: FixBridgeCompression[] = ['none', 'zstd', 'gzip'];
+export const FIX_BRIDGE_AUTO_EXPORT_TRIGGERS: FixBridgeAutoExportTrigger[] =
+  ['SESSION_GAP', 'BOOK_STALE_EXTENDED', 'MASS_REJECT', 'SEQ_RESET_FORCED'];
+
+export interface FixBridgeAuditRawFix {
+  enabled:         boolean;
+  retention_hours: number;
+  segment_size_mb: number;
+  compression:     FixBridgeCompression;
+}
+
+export interface FixBridgeAuditNormalizedDom {
+  enabled:               boolean;
+  retention_hours:       number;
+  snapshot_interval_sec: number;
+  segment_size_mb:       number;
+}
+
+export interface FixBridgeAudit {
+  raw_fix:        FixBridgeAuditRawFix;
+  normalized_dom: FixBridgeAuditNormalizedDom;
+}
+
+export interface FixBridgeIncident {
+  bundle_path:    string;
+  max_bundles:    number;
+  auto_export_on: FixBridgeAutoExportTrigger[];
+}
+
+export interface FixBridgeBackpressure {
+  trading_outbound_max: number;
+  md_inbound_max:       number;
+  dom_publish_max:      number;
+}
+
+export interface FixBridgeConfig {
+  log_level:    FixBridgeLogLevel;
+  audit:        FixBridgeAudit;
+  incident:     FixBridgeIncident;
+  backpressure: FixBridgeBackpressure;
+}
+
+export interface FixBridgeGetResponse {
+  success: boolean;
+  data:    FixBridgeConfig;
+}
+
+/** Body for PUT /api/v1/settings/fixbridge. The backend scope-limits writes
+ *  to log_level/audit/incident/backpressure — any other top-level key is
+ *  ignored. Nested sub-objects are sent whole (no merge semantics). */
+export type FixBridgeUpdateBody = Partial<FixBridgeConfig>;
+
+/** GET /api/v1/settings/fixbridge/status — returns 501 today. Shape
+ *  deliberately loose because the real response hasn't been specified;
+ *  field names below are a hypothesis for when the backend ships. */
+export interface FixBridgeStatus {
+  sessions_connected?:    number;
+  sessions_configured?:   number;
+  last_message_at?:       string;
+  messages_per_sec_in?:   number;
+  messages_per_sec_out?:  number;
+}
+
+// ── Log services (used by Gateway Service panel) ───────────────
+
+export interface LogServiceDescriptor {
+  id:                 'nexrisk' | 'gateway' | 'fixbridge' | 'fix_messages';
+  label:              string;
+  log_dir:            string;
+  level_configurable: boolean;
+}
+
+export interface LogServicesResponse {
+  success:  boolean;
+  services: LogServiceDescriptor[];
+}
+
+// ── Alerting (§§ 3.2 alerts, 4 telegram, 5 webhooks) ────────────
+
+export type AlertSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export const ALERT_SEVERITIES: AlertSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+/** § 3.2 alerts subsection — four scalars, no secrets. */
+export interface AlertsConfig {
+  enabled:                 boolean;
+  min_severity:            AlertSeverity;
+  cooldown_seconds:        number;
+  max_per_trader_per_hour: number;
+}
+
+export type AlertsUpdateBody = Partial<AlertsConfig>;
+
+/** § 4 Telegram chat row as stored and returned. `id` is the internal
+ *  identifier (chat_<12hex>); `chat_id` is the Telegram-side numeric id. */
+export interface TelegramChat {
+  id:           string;
+  chat_id:      string;
+  label:        string;
+  alert_levels: AlertSeverity[];
+}
+
+/** § 3.2 /nexrisk/telegram core config. Inner shape beyond the documented
+ *  fields is uncertain — the spec describes the CRUD surface but not the
+ *  full bulk-PUT body. Fields below are an educated inference: `bot_token`
+ *  is masked "***" on GET per the usual secrets-on-read pattern, and the
+ *  chats array is present but typically mutated via the CRUD endpoints. */
+export interface TelegramConfig {
+  enabled?:   boolean;
+  bot_token?: string;          // masked "***" on GET
+  chats?:     TelegramChat[];
+  [key: string]: unknown;
+}
+
+/** Body for PUT /nexrisk/telegram. bot_token write-preserve: omit or
+ *  send null to leave unchanged. chats can be omitted to have the backend
+ *  leave the existing list alone — CRUD is the primary chat mutation path. */
+export type TelegramUpdateBody = {
+  enabled?:   boolean;
+  bot_token?: string | null;
+  chats?:     TelegramChat[];
+};
+
+export interface TelegramChatCreateBody {
+  chat_id:      string;
+  label:        string;
+  alert_levels: AlertSeverity[];
+}
+
+export interface TelegramChatUpdateBody {
+  chat_id?:      string;
+  label?:        string;
+  alert_levels?: AlertSeverity[];
+}
+
+export interface TelegramChatCreateResponse {
+  success:         boolean;
+  chat:            TelegramChat;
+  pending_restart: boolean;
+}
+
+/** § 4 live-probe response shapes (501 today). Shape is a hypothesis for
+ *  when the backend wires outbound HTTP — fields optional to tolerate
+ *  partial responses. */
+export interface TelegramValidateResponse {
+  ok:            boolean;
+  bot_username?: string;
+  bot_id?:       number;
+}
+export interface TelegramResolveResponse {
+  chat_id: string;
+  title:   string;
+  type:    string;                // 'channel' | 'group' | 'supergroup' | 'private'
+}
+export interface TelegramTestResponse {
+  ok:          boolean;
+  message_id?: number;
+}
+
+/** § 5 Webhook endpoint row. */
+export interface WebhookEndpoint {
+  id:           string;
+  url:          string;
+  auth_header?: string;
+  alert_levels: AlertSeverity[];
+  enabled:      boolean;
+}
+
+/** § 3.2 /nexrisk/webhooks core config. Similar loose-shape inference as
+ *  TelegramConfig — the documented fields are the CRUD surface plus an
+ *  `enabled` toggle; other fields may exist but aren't spec'd. */
+export interface WebhooksConfig {
+  enabled?:   boolean;
+  endpoints?: WebhookEndpoint[];
+  [key: string]: unknown;
+}
+
+export type WebhooksUpdateBody = {
+  enabled?:   boolean;
+  endpoints?: WebhookEndpoint[];
+};
+
+export interface WebhookEndpointCreateBody {
+  url:           string;
+  auth_header?:  string;
+  alert_levels:  AlertSeverity[];
+  enabled:       boolean;
+}
+
+export type WebhookEndpointUpdateBody = Partial<WebhookEndpointCreateBody>;
+
+export interface WebhookEndpointCreateResponse {
+  success:         boolean;
+  webhook:         WebhookEndpoint;
+  pending_restart: boolean;
+}
+
+/** § 5 test probe response — 501 today. */
+export interface WebhookTestResponse {
+  ok:           boolean;
+  status_code?: number;
+  duration_ms?: number;
+  message?:     string;
+}
+
+// ── LP Management (§ 6) ─────────────────────────────────────────
+
+/** Summary row returned by GET /lp/profiles. */
+export interface LpProfileSummary {
+  lp_id:   string;
+  lp_name: string;
+  version: string;
+  enabled: boolean;    // mirror of enabled_lps membership, for convenience
+}
+
+/** Response shape for GET /lp/profiles. enabled_lps is the authoritative
+ *  enablement list; each profile.enabled should match membership of
+ *  enabled_lps but the UI treats enabled_lps as the source of truth. */
+export interface LpProfilesResponse {
+  success:     boolean;
+  enabled_lps: string[];
+  profiles:    LpProfileSummary[];
+}
+
+/** The capability JSON's top-level shape is loose. These are the documented
+ *  keys per § 6; inner schemas vary per LP type and aren't fully specified.
+ *  The frontend treats each top-level section as an opaque object and
+ *  renders a raw-JSON editor against it. */
+export interface LpProfile {
+  lp_id?:         string;
+  lp_name?:       string;
+  version?:       string;
+  enabled?:       boolean;
+
+  /** Read-only sections — silently preserved by the backend on PUT. */
+  connection?:    Record<string, unknown>;
+  custom_fields?: Record<string, unknown>;
+  instruments?:   Record<string, unknown>;
+
+  /** Editable sections — replaced wholesale by what the client sends. */
+  trading?:       Record<string, unknown>;
+  market_data?:   Record<string, unknown>;
+  routes?:        Record<string, unknown>;
+  limits?:        Record<string, unknown>;
+  features?:      Record<string, unknown>;
+
+  /** Allow other keys to pass through unmodified. */
+  [key: string]:  unknown;
+}
+
+/** The read-only / editable split. Derived from brief § 2.7 / spec § 6. */
+export const LP_READONLY_SECTIONS = ['connection', 'custom_fields', 'instruments'] as const;
+export const LP_EDITABLE_SECTIONS = ['trading', 'market_data', 'routes', 'limits', 'features'] as const;
+export type LpReadonlySection = typeof LP_READONLY_SECTIONS[number];
+export type LpEditableSection = typeof LP_EDITABLE_SECTIONS[number];
+
+export interface LpEnabledUpdateBody {
+  enabled_lps: string[];
+}
+
+// ── Secret rotation (§ 10) — root only ──────────────────────────
+
+/** POST /auth/rotate/internal-secret response. 96-hex `new_secret`,
+ *  restarts both nexrisk_service AND the BFF (because the BFF's
+ *  X-Internal-Secret must match the backend's env var). */
+export interface RotateInternalResponse {
+  success:          boolean;
+  status:           'rotated';
+  new_secret:       string;
+  restart_required: string[];
+  message:          string;
+}
+
+/** POST /auth/rotate/jwt-secret response. 128-hex `new_secret`,
+ *  restarts nexrisk_service only. `invalidates_sessions: true` means
+ *  all access tokens die on restart; refresh tokens remain valid. */
+export interface RotateJwtResponse {
+  success:               boolean;
+  status:                'rotated';
+  new_secret:            string;
+  invalidates_sessions:  boolean;
+  restart_required:      string[];
+  message:               string;
+}
+
+/** GET /auth/rotate/encryption-key/preflight response. Read-only probe. */
+export interface EncryptionKeyPreflight {
+  success:                 boolean;
+  lp_accounts:             number;
+  users_with_totp:         number;
+  estimated_duration_sec:  number;
+  ok_to_proceed:           boolean;
+  blockers:                string[];
+}
+
+/** POST /auth/rotate/encryption-key response. Shape is a best-effort
+ *  hypothesis — endpoint returns 501 today; fields below are derived
+ *  from the internal/JWT response shape. */
+export interface RotateEncryptionResponse {
+  success:          boolean;
+  status:           'rotated';
+  new_secret:       string;
+  restart_required: string[];
+  message:          string;
+}
+
+// ── Log viewer types (§ 9) ──────────────────────────────────────
+
+export type LogServiceId = LogServiceDescriptor['id'];
+export type LogLevel     = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+export const LOG_LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error'];
+
+export interface LogFileDescriptor {
+  name:        string;
+  size_bytes:  number;
+  modified_at: string;     // ISO timestamp
+}
+
+export interface LogFilesResponse {
+  success: boolean;
+  files:   LogFileDescriptor[];
+}
+
+export interface LogLine {
+  text: string;
+}
+
+export interface LogTailResponse {
+  success:    boolean;
+  file:       string;       // which file was tailed (newest)
+  lines:      LogLine[];
+  truncated:  boolean;      // true if there were more lines than `lines` requested
+}
+
+export interface LogSearchResponse {
+  success:     boolean;
+  file:        string;
+  match_count: number;
+  lines:       LogLine[];
+  truncated:   boolean;
+}
+
+export interface LogLevelUpdateBody {
+  level: LogLevel;
+}
+
+// ── low-level helper: let 501 flow through as a distinct result ───
+//
+// The generic fetchAPI throws on any non-2xx. The 501 stubs
+// (/gateway/status, /fixbridge/status, telegram/webhook probes, encryption-key
+// rotate) are a documented "not implemented yet" state — callers need to
+// render "awaiting backend" UI, not a banner-worthy error. This helper
+// returns a discriminated union so the caller handles it explicitly.
+
+export type ApiResult<T> =
+  | { kind: 'ok';            data: T }
+  | { kind: 'not_implemented' }
+  | { kind: 'error';         status: number; message: string };
+
+async function fetchWithStub<T>(endpoint: string, init?: RequestInit): Promise<ApiResult<T>> {
+  const hasBody = init?.body !== undefined && init.body !== null;
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    cache: 'no-store',
+    credentials: 'include',
+    ...init,
+    headers: {
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (res.status === 501) return { kind: 'not_implemented' };
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    return { kind: 'error', status: res.status, message: body.error ?? body.message ?? `HTTP ${res.status}` };
+  }
+  return { kind: 'ok', data: await res.json() as T };
+}
+
+// ── Nexrisk config (§ 3) — powers NexDay / TE / Auth tiles ────
+//
+// All three subsections live inside config/nexrisk_config.json. One GET
+// fan-out fills three hub tiles. Secrets (license_id, api_key, bot_token)
+// are masked on read; write-preserve discipline is enforced at the sub-page
+// level when the respective PUT endpoints are added.
+
+export interface NexdayPolling {
+  intraday_enabled:          boolean;
+  intraday_interval_minutes: number;
+  daily_enabled:             boolean;
+  daily_time_et:             string;   // "HH:MM"
+}
+
+export interface NexdayRetention {
+  daily_bars:    number;
+  intraday_bars: number;
+}
+
+export interface NexdayHedging {
+  auto_suggest:              boolean;
+  min_position_volume:       number;
+  suggestion_expiry_minutes: number;
+}
+
+export interface NexdayConfig {
+  enabled:     boolean;
+  api_server:  string;
+  license_id:  string;        // masked on GET
+  polling:     NexdayPolling;
+  retention:   NexdayRetention;
+  hedging:     NexdayHedging;
+}
+
+/** Body for PUT /api/v1/settings/nexrisk/nexday.
+ *  license_id: null (or absent) means "leave unchanged" — never send the
+ *  masked value back. Nested sub-objects (polling, retention, hedging) are
+ *  sent as complete objects since the backend replaces the subsection. */
+export type NexdayUpdateBody =
+  Partial<Omit<NexdayConfig, 'license_id'>> & {
+    license_id?: string | null;
+  };
+
+export interface TradingEconomicsConfig {
+  enabled:               boolean;
+  api_key:               string;   // masked on GET
+  preload_days_back:     number;
+  preload_days_ahead:    number;
+  poll_interval_seconds: number;
+  ws_endpoint:           string;
+}
+
+/** Body for PUT /api/v1/settings/nexrisk/trading-economics.
+ *  api_key: null (or absent) means "leave unchanged" — never send the
+ *  masked "***" value back. Pass every other field you want to update. */
+export type TradingEconomicsUpdateBody =
+  Partial<Omit<TradingEconomicsConfig, 'api_key'>> & {
+    api_key?: string | null;
+  };
+
+export interface AuthConfig {
+  totp_issuer:                string;
+  access_token_ttl_seconds:   number;
+  refresh_token_ttl_seconds:  number;
+  invite_token_ttl_seconds:   number;
+  password_min_length:        number;
+  password_reset_ttl_seconds: number;
+}
+
+/** GET /api/v1/settings/nexrisk-raw may return either { nexrisk: {...} } or a
+ *  flat object — settingsApi.nexrisk.get() unwraps defensively so callers
+ *  always see the flat shape below. Fields are optional because the backend
+ *  can evolve subsections independently of this type. */
+export interface NexriskConfig {
+  nexday?:             NexdayConfig;
+  trading_economics?:  TradingEconomicsConfig;
+  auth?:               AuthConfig;
+  alerts?:             AlertsConfig;
+  telegram?:           TelegramConfig;
+  webhooks?:           WebhooksConfig;
+  // Other subsections (mt5, analysis, detection-system, memory, llm-system)
+  // exist on the backend but aren't typed here until their sub-pages land.
+  [key: string]: unknown;
+}
+
+// ── settingsApi surface ─────────────────────────────────────────
+
+export const settingsApi = {
+  /** Page-level pending-restart query, raw snake_case shape. */
+  getPendingRestart: () =>
+    fetchAPI<PendingRestartResponse>('/api/v1/settings/pending-restart-raw'),
+
+  gateway: {
+    get: () =>
+      fetchAPI<GatewayGetResponse>('/api/v1/settings/gateway'),
+
+    /** Caller MUST omit gateway_password (or send null) to keep existing.
+     *  Never send the masked "***" value back — it would be written as-is. */
+    update: (patch: GatewayUpdateBody) =>
+      fetchAPI<RestartRequiredEnvelope>('/api/v1/settings/gateway', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** Returns 501 today. Caller should branch on kind === 'not_implemented'. */
+    status: () =>
+      fetchWithStub<GatewayStatus>('/api/v1/settings/gateway/status'),
+  },
+
+  fixbridge: {
+    get: () =>
+      fetchAPI<FixBridgeGetResponse>('/api/v1/settings/fixbridge'),
+
+    /** Backend scope-limits writes to log_level / audit / incident /
+     *  backpressure — other file keys are preserved. Nested sub-objects
+     *  are sent whole (no merge semantics). */
+    update: (patch: FixBridgeUpdateBody) =>
+      fetchAPI<RestartRequiredEnvelope>('/api/v1/settings/fixbridge', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** Returns 501 today. Same discriminated-union pattern as gateway.status. */
+    status: () =>
+      fetchWithStub<FixBridgeStatus>('/api/v1/settings/fixbridge/status'),
+  },
+
+  lp: {
+    /** GET /lp/profiles — list of profile summaries + authoritative enabled list. */
+    listProfiles: () =>
+      fetchAPI<LpProfilesResponse>('/api/v1/settings/lp/profiles'),
+
+    /** GET /lp/profiles/:lp_id — full capability JSON. The response may
+     *  be either a flat object or wrapped under `data`; caller unwraps. */
+    getProfile: async (lp_id: string): Promise<LpProfile> => {
+      const raw = await fetchAPI<Record<string, unknown>>(
+        `/api/v1/settings/lp/profiles/${encodeURIComponent(lp_id)}`,
+      );
+      const wrapped = raw.data;
+      const inner   = wrapped && typeof wrapped === 'object' ? wrapped : raw;
+      return inner as LpProfile;
+    },
+
+    /** PUT /lp/profiles/:lp_id — writes the profile. The backend silently
+     *  preserves connection / custom_fields / instruments regardless of
+     *  what the client sends for them, so it's safe (and explicit) to
+     *  send the full object back. restart:fixbridge. */
+    updateProfile: (lp_id: string, profile: LpProfile) =>
+      fetchAPI<RestartRequiredEnvelope>(
+        `/api/v1/settings/lp/profiles/${encodeURIComponent(lp_id)}`,
+        {
+          method: 'PUT',
+          body:   JSON.stringify(profile),
+        },
+      ),
+
+    /** PUT /lp/enabled — replaces the enabled_lps array in
+     *  fixbridge_config.json. restart:fixbridge. */
+    updateEnabled: (body: LpEnabledUpdateBody) =>
+      fetchAPI<RestartRequiredEnvelope>('/api/v1/settings/lp/enabled', {
+        method: 'PUT',
+        body:   JSON.stringify(body),
+      }),
+  },
+
+  logs: {
+    /** Used by the Gateway Service panel to surface the gateway log_dir. */
+    getServices: () =>
+      fetchAPI<LogServicesResponse>('/api/v1/settings/logs/services'),
+
+    /** GET /logs/:service/files — list files for a service, newest first
+     *  (sort order is the backend's responsibility). */
+    getFiles: (service: LogServiceId) =>
+      fetchAPI<LogFilesResponse>(`/api/v1/settings/logs/${encodeURIComponent(service)}/files`),
+
+    /** GET /logs/:service/tail?lines=N — tail the newest file for the service.
+     *  lines is capped at 5000 by the backend. */
+    getTail: (service: LogServiceId, lines: number) => {
+      const params = new URLSearchParams({ lines: String(lines) });
+      return fetchAPI<LogTailResponse>(`/api/v1/settings/logs/${encodeURIComponent(service)}/tail?${params}`);
+    },
+
+    /** GET /logs/:service/search?file=X&q=Y&limit=N — substring search
+     *  within a single file. file must be in the service's log_dir. */
+    search: (service: LogServiceId, file: string, q: string, limit: number) => {
+      const params = new URLSearchParams({ file, q, limit: String(limit) });
+      return fetchAPI<LogSearchResponse>(`/api/v1/settings/logs/${encodeURIComponent(service)}/search?${params}`);
+    },
+
+    /** Builds the URL for a direct <a href> download. The browser sends
+     *  cookies (session auth) and follows the BFF stream; backend sets
+     *  Content-Disposition. Don't fetch+blob unless you have a reason. */
+    downloadUrl: (service: LogServiceId, file: string) => {
+      const params = new URLSearchParams({ file });
+      return `/api/v1/settings/logs/${encodeURIComponent(service)}/download?${params}`;
+    },
+
+    /** PUT /logs/:service/level — set the runtime log level. Returns
+     *  { restart_required: [service], message }. Not valid for fix_messages
+     *  (level_configurable: false). Caller should gate UI on hasPermission
+     *  ('settings', 'EDIT'). */
+    setLevel: (service: LogServiceId, level: LogLevel) =>
+      fetchAPI<RestartRequiredEnvelope>(`/api/v1/settings/logs/${encodeURIComponent(service)}/level`, {
+        method: 'PUT',
+        body:   JSON.stringify({ level }),
+      }),
+  },
+
+  nexrisk: {
+    /** Fetches the full nexrisk config; unwraps { nexrisk: ... } if present.
+     *  Used by the hub to fill NexDay / Trading Economics / Auth tiles. */
+    get: async (): Promise<NexriskConfig> => {
+      const raw = await fetchAPI<Record<string, unknown>>('/api/v1/settings/nexrisk-raw');
+      const wrapped = raw.nexrisk;
+      const inner   = wrapped && typeof wrapped === 'object' ? wrapped : raw;
+      return inner as NexriskConfig;
+    },
+
+    /** PUT /nexrisk/auth — token TTLs, issuer, password policy.
+     *  All fields require a nexrisk_service restart to apply. */
+    updateAuth: (body: AuthConfig) =>
+      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/auth', {
+        method: 'PUT',
+        body:   JSON.stringify(body),
+      }),
+
+    /** PUT /nexrisk/trading-economics — calendar feed config.
+     *  Caller MUST omit api_key (or send null) to keep existing. Never send
+     *  the masked "***" value back — it would be written as-is. */
+    updateTradingEconomics: (patch: TradingEconomicsUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/trading-economics', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** PUT /nexrisk/nexday — market-data integration config.
+     *  Caller MUST omit license_id (or send null) to keep existing. Nested
+     *  sub-objects (polling, retention, hedging) are sent whole. */
+    updateNexday: (patch: NexdayUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/nexday', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** PUT /nexrisk/alerts — global alert policy. Four scalars, no secrets. */
+    updateAlerts: (patch: AlertsUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/alerts', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** PUT /nexrisk/telegram — core Telegram config. Caller MUST omit
+     *  bot_token (or send null) to keep existing. chats can be omitted;
+     *  use the chat CRUD endpoints for chat-level changes. */
+    updateTelegram: (patch: TelegramUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/telegram', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** PUT /nexrisk/webhooks — core webhook switches. Use the endpoint
+     *  CRUD for endpoint-level changes. */
+    updateWebhooks: (patch: WebhooksUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/webhooks', {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+  },
+
+  // ── Telegram CRUD + probes (§ 4) ──────────────────────────────
+  telegram: {
+    /** POST /nexrisk/telegram/validate — verify a bot token works.
+     *  501 today; returns a discriminated ApiResult so the UI can render
+     *  a "not implemented yet" badge. */
+    validate: (bot_token: string) =>
+      fetchWithStub<TelegramValidateResponse>('/api/v1/settings/nexrisk/telegram/validate', {
+        method: 'POST',
+        body:   JSON.stringify({ bot_token }),
+      }),
+
+    /** POST /nexrisk/telegram/resolve-chat — convert @handle to numeric id.
+     *  501 today; 200 returns { chat_id, title, type }. */
+    resolveChat: (username_or_link: string) =>
+      fetchWithStub<TelegramResolveResponse>('/api/v1/settings/nexrisk/telegram/resolve-chat', {
+        method: 'POST',
+        body:   JSON.stringify({ username_or_link }),
+      }),
+
+    /** POST /nexrisk/telegram/test — send an actual Telegram message.
+     *  501 today; 200 returns { ok, message_id }. */
+    test: (chat_id: string, message: string) =>
+      fetchWithStub<TelegramTestResponse>('/api/v1/settings/nexrisk/telegram/test', {
+        method: 'POST',
+        body:   JSON.stringify({ chat_id, message }),
+      }),
+
+    /** POST /nexrisk/telegram/chats — create a chat. Server assigns id. */
+    addChat: (body: TelegramChatCreateBody) =>
+      fetchAPI<TelegramChatCreateResponse>('/api/v1/settings/nexrisk/telegram/chats', {
+        method: 'POST',
+        body:   JSON.stringify(body),
+      }),
+
+    /** PUT /nexrisk/telegram/chats/:id — partial patch. */
+    updateChat: (id: string, patch: TelegramChatUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>(`/api/v1/settings/nexrisk/telegram/chats/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** DELETE /nexrisk/telegram/chats/:id */
+    deleteChat: (id: string) =>
+      fetchAPI<SettingsManagerEnvelope>(`/api/v1/settings/nexrisk/telegram/chats/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+  },
+
+  // ── Webhook endpoint CRUD + test (§ 5) ────────────────────────
+  webhooks: {
+    /** POST /nexrisk/webhooks/endpoints — create an endpoint. */
+    addEndpoint: (body: WebhookEndpointCreateBody) =>
+      fetchAPI<WebhookEndpointCreateResponse>('/api/v1/settings/nexrisk/webhooks/endpoints', {
+        method: 'POST',
+        body:   JSON.stringify(body),
+      }),
+
+    /** PUT /nexrisk/webhooks/endpoints/:id — partial patch. */
+    updateEndpoint: (id: string, patch: WebhookEndpointUpdateBody) =>
+      fetchAPI<SettingsManagerEnvelope>(`/api/v1/settings/nexrisk/webhooks/endpoints/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body:   JSON.stringify(patch),
+      }),
+
+    /** DELETE /nexrisk/webhooks/endpoints/:id */
+    deleteEndpoint: (id: string) =>
+      fetchAPI<SettingsManagerEnvelope>(`/api/v1/settings/nexrisk/webhooks/endpoints/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+
+    /** POST /nexrisk/webhooks/endpoints/:id/test — fire a real HTTP request.
+     *  501 today. */
+    testEndpoint: (id: string) =>
+      fetchWithStub<WebhookTestResponse>(`/api/v1/settings/nexrisk/webhooks/endpoints/${encodeURIComponent(id)}/test`, {
+        method: 'POST',
+      }),
+  },
+
+  // ── Secret rotation (§ 10) — root only. Paths live under /auth/rotate/*
+  //    in the backend (not /settings/*), but registered from the same BFF
+  //    routes file for thematic coherence in the System Administration surface.
+  rotation: {
+    /** POST /auth/rotate/internal-secret — rotates NEXRISK_INTERNAL_SECRET.
+     *  Restarts BOTH nexrisk_service AND the BFF. Update the env var in
+     *  BOTH places before restarting nexrisk, or the BFF→backend link
+     *  breaks. new_secret is returned exactly once. */
+    rotateInternalSecret: () =>
+      fetchAPI<RotateInternalResponse>('/api/v1/auth/rotate/internal-secret', {
+        method: 'POST',
+        body:   JSON.stringify({ confirm: true }),
+      }),
+
+    /** POST /auth/rotate/jwt-secret — rotates NEXRISK_JWT_SECRET.
+     *  Restarts nexrisk_service. All access tokens become invalid on
+     *  restart; refresh tokens remain valid until their own expiry. */
+    rotateJwtSecret: () =>
+      fetchAPI<RotateJwtResponse>('/api/v1/auth/rotate/jwt-secret', {
+        method: 'POST',
+        body:   JSON.stringify({ confirm: true }),
+      }),
+
+    /** GET /auth/rotate/encryption-key/preflight — read-only probe.
+     *  Returns counts of LP accounts and TOTP-enrolled users, plus
+     *  ok_to_proceed and any blockers. Shown before the destructive
+     *  rotation so the operator sees scope and duration up front. */
+    encryptionKeyPreflight: () =>
+      fetchAPI<EncryptionKeyPreflight>('/api/v1/auth/rotate/encryption-key/preflight'),
+
+    /** POST /auth/rotate/encryption-key — 501 today. When wired, body
+     *  is { confirm: true, confirmation_phrase: "ROTATE ENCRYPTION KEY" }.
+     *  Re-encrypts all LP credentials and TOTP secrets with the new key. */
+    rotateEncryptionKey: () =>
+      fetchAPI<RotateEncryptionResponse>('/api/v1/auth/rotate/encryption-key', {
+        method: 'POST',
+        body:   JSON.stringify({
+          confirm:              true,
+          confirmation_phrase:  'ROTATE ENCRYPTION KEY',
+        }),
+      }),
+  },
+};

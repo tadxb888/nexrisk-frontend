@@ -32,12 +32,6 @@ import {
   BusinessPage,
   // Settings Pages
   SettingsPage,
-  SecuritySettingsPage,
-  ConnectivitySettingsPage,
-  SymbologySettingsPage,
-  AuditSettingsPage,
-  NotificationsSettingsPage,
-  RiskLogicSettingsPage,
   // MT5
   NodeManagementPage,
   SymbolMappingPage,
@@ -47,6 +41,18 @@ import {
   // Reports
   ReportsPage,
 } from '@/pages';
+
+// Settings sub-pages (not in @/pages barrel — direct import)
+import { GatewayPage }           from '@/pages/settings/GatewayPage';
+import { AuthSessionPage }       from '@/pages/settings/AuthSessionPage';
+import { TradingEconomicsPage }  from '@/pages/settings/TradingEconomicsPage';
+import { NexDayPage }            from '@/pages/settings/NexDayPage';
+import { FixBridgePage }         from '@/pages/settings/FixBridgePage';
+import { LogViewerPage }         from '@/pages/settings/LogViewerPage';
+import { SecretRotationPage }    from '@/pages/settings/SecretRotationPage';
+import { LpListPage }            from '@/pages/settings/LpListPage';
+import { LpProfilePage }         from '@/pages/settings/LpProfilePage';
+import { AlertingPage }          from '@/pages/settings/AlertingPage';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -118,14 +124,29 @@ function App() {
               <Route path="/flow-hedging"  element={<FlowHedgingPage />} />
               <Route path="/business"      element={<BusinessPage />} />
 
-              {/* ─── Settings (accessible via direct URL) */}
-              <Route path="/settings"                element={<SettingsPage />} />
-              <Route path="/settings/security"       element={<SecuritySettingsPage />} />
-              <Route path="/settings/connectivity"   element={<ConnectivitySettingsPage />} />
-              <Route path="/settings/symbology"      element={<SymbologySettingsPage />} />
-              <Route path="/settings/audit"          element={<AuditSettingsPage />} />
-              <Route path="/settings/notifications"  element={<NotificationsSettingsPage />} />
-              <Route path="/settings/risk-logic"     element={<RiskLogicSettingsPage />} />
+              {/* ─── Settings ─────────────────────────── */}
+              <Route path="/settings"                    element={<SettingsPage />} />
+              <Route path="/settings/gateway"            element={<GatewayPage />} />
+              <Route path="/settings/auth"               element={<AuthSessionPage />} />
+              <Route path="/settings/trading-economics"  element={<TradingEconomicsPage />} />
+              <Route path="/settings/nexday"             element={<NexDayPage />} />
+              <Route path="/settings/fixbridge"          element={<FixBridgePage />} />
+              <Route path="/settings/logs"               element={<LogViewerPage />} />
+              <Route path="/settings/rotation"           element={<SecretRotationPage />} />
+              <Route path="/settings/lp"                 element={<LpListPage />} />
+              <Route path="/settings/lp/:lp_id"          element={<LpProfilePage />} />
+              <Route path="/settings/alerts"             element={<AlertingPage />} />
+
+              {/* Legacy 6-box settings routes — redirect to the new hub.
+                  Each one will be replaced with a direct route to its new
+                  panel as that panel's ticket lands (e.g. /settings/alerts
+                  ships → /settings/notifications redirects there instead). */}
+              <Route path="/settings/security"      element={<Navigate to="/settings" replace />} />
+              <Route path="/settings/connectivity"  element={<Navigate to="/settings" replace />} />
+              <Route path="/settings/symbology"     element={<Navigate to="/settings" replace />} />
+              <Route path="/settings/audit"         element={<Navigate to="/settings" replace />} />
+              <Route path="/settings/notifications" element={<Navigate to="/settings" replace />} />
+              <Route path="/settings/risk-logic"    element={<Navigate to="/settings" replace />} />
             </Route>
           </Routes>
         </BrowserRouter>
