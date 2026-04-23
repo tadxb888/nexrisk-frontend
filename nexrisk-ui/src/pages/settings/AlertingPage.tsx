@@ -23,6 +23,10 @@ import { useNavigate, Navigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 
 import { useAuth } from '@/stores/AuthContext';
+
+// Help content for the operator manual — rendered in the help drawer
+import helpContent from './help/09-alerting.md?raw';
+import { HelpIcon, HelpDrawer, useHelp } from './help';
 import {
   settingsApi,
   ALERT_SEVERITIES,
@@ -61,6 +65,8 @@ export function AlertingPage() {
   if (user && !(SETTINGS_PAGE_ROLES as readonly string[]).includes(user.role)) {
     return <Navigate to="/" replace />;
   }
+
+  const help = useHelp();
 
   const [nexrisk,   setNexrisk]   = useState<NexriskConfig | null>(null);
   const [loading,   setLoading]   = useState(true);
@@ -106,12 +112,15 @@ export function AlertingPage() {
             but save independently.
           </p>
         </div>
-        <span
-          className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
-          style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
-        >
-          restart: nexrisk_service
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
+            style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
+          >
+            restart: nexrisk_service
+          </span>
+          <HelpIcon onClick={help.open} />
+        </div>
       </div>
 
       {loadError ? (
@@ -126,6 +135,13 @@ export function AlertingPage() {
         <TelegramCard   loading={loading} initial={nexrisk?.telegram} onSaved={reload} />
         <WebhooksCard   loading={loading} initial={nexrisk?.webhooks} onSaved={reload} />
       </div>
+
+    <HelpDrawer
+      open={help.isOpen}
+      title="Alerting"
+      content={helpContent}
+      onClose={help.close}
+    />
     </div>
   );
 }
@@ -1519,8 +1535,7 @@ function TestResultBanner({ result, labelOk }: { result: ApiResult<TelegramTestR
     <div className="rounded p-2 mt-1.5" style={{ background: '#162a1c', border: '1px solid #2f6a3f' }}>
       <p className="text-[11.5px] m-0" style={{ color: '#66e07a' }}>
         {labelOk}{result.data.message_id ? ` · id ${result.data.message_id}` : ''}
-      </p>
-    </div>
+      </p>    </div>
   );
 }
 

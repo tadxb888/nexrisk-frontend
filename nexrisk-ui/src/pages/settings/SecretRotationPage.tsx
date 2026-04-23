@@ -35,6 +35,10 @@ import {
   type EncryptionKeyPreflight,
 } from '@/services/api';
 
+// Help content for the operator manual — rendered in the help drawer
+import helpContent from './help/07-secret-rotation.md?raw';
+import { HelpIcon, HelpDrawer, useHelp } from './help';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Hard-copy policy strings — single source of truth
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +130,7 @@ export function SecretRotationPage() {
     return <Navigate to="/settings" replace />;
   }
 
+  const help = useHelp();
   const [openModal, setOpenModal] = useState<OpenModal>(null);
 
   return (
@@ -151,12 +156,15 @@ export function SecretRotationPage() {
             environment variable and restarting a service.
           </p>
         </div>
-        <span
-          className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
-          style={{ background: '#2c1417', color: '#ff9999', border: '1px solid #7a2f36' }}
-        >
-          root only
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
+            style={{ background: '#2c1417', color: '#ff9999', border: '1px solid #7a2f36' }}
+          >
+            root only
+          </span>
+          <HelpIcon onClick={help.open} />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[60fr_40fr] gap-3.5 items-start">
@@ -226,6 +234,13 @@ export function SecretRotationPage() {
           onClose={() => setOpenModal(null)}
         />
       )}
+
+      <HelpDrawer
+        open={help.isOpen}
+        title="Secret rotation"
+        content={helpContent}
+        onClose={help.close}
+      />
     </div>
   );
 }

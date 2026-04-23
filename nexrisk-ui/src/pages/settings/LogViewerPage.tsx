@@ -31,6 +31,10 @@ import {
   type LogSearchResponse,
 } from '@/services/api';
 
+// Help content for the operator manual — rendered in the help drawer
+import helpContent from './help/06-log-viewer.md?raw';
+import { HelpIcon, HelpDrawer, useHelp } from './help';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Access control — same set as the hub
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +86,7 @@ export function LogViewerPage() {
     return <Navigate to="/" replace />;
   }
 
+  const help = useHelp();
   const canSetLevel = hasPermission?.('settings', 'EDIT') ?? false;
 
   // ── service / mode ─────────────────────────────────────────────
@@ -295,6 +300,9 @@ export function LogViewerPage() {
             log level requires settings ≥ EDIT and only affects services flagged as
             level-configurable.
           </p>
+        </div>
+        <div className="shrink-0">
+          <HelpIcon onClick={help.open} />
         </div>
       </div>
 
@@ -550,6 +558,13 @@ export function LogViewerPage() {
           )}
         </div>
       </div>
+
+      <HelpDrawer
+        open={help.isOpen}
+        title="Log viewer"
+        content={helpContent}
+        onClose={help.close}
+      />
     </div>
   );
 }

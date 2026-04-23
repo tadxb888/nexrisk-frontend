@@ -19,6 +19,10 @@ import { useNavigate, Navigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 
 import { useAuth } from '@/stores/AuthContext';
+
+// Help content for the operator manual — rendered in the help drawer
+import helpContent from './help/05-fix-bridge.md?raw';
+import { HelpIcon, HelpDrawer, useHelp } from './help';
 import {
   settingsApi,
   FIX_BRIDGE_LOG_LEVELS,
@@ -120,6 +124,8 @@ export function FixBridgePage() {
   if (user && !(SETTINGS_PAGE_ROLES as readonly string[]).includes(user.role)) {
     return <Navigate to="/" replace />;
   }
+
+  const help = useHelp();
 
   const [initial,      setInitial]      = useState<FixBridgeConfig | null>(null);
   const [draft,        setDraft]        = useState<DraftState>(EMPTY_DRAFT);
@@ -340,12 +346,15 @@ export function FixBridgePage() {
             managed under LP management, not here.
           </p>
         </div>
-        <span
-          className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
-          style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
-        >
-          restart: fixbridge_service
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
+            style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
+          >
+            restart: fixbridge_service
+          </span>
+          <HelpIcon onClick={help.open} />
+        </div>
       </div>
 
       {loadError ? (
@@ -624,6 +633,13 @@ export function FixBridgePage() {
 
         </div>
       </div>
+
+    <HelpDrawer
+      open={help.isOpen}
+      title="FIX bridge"
+      content={helpContent}
+      onClose={help.close}
+    />
     </div>
   );
 }
@@ -893,8 +909,7 @@ function ServiceField({
       </span>
       {note && (
         <span className="text-[10px] text-text-muted italic">{note}</span>
-      )}
-    </div>
+      )}    </div>
   );
 }
 

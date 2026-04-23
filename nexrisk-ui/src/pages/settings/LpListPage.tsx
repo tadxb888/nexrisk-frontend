@@ -16,6 +16,10 @@ import { useNavigate, Navigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 
 import { useAuth } from '@/stores/AuthContext';
+
+// Help content for the operator manual — rendered in the help drawer
+import helpContent from './help/08-lp-management.md?raw';
+import { HelpIcon, HelpDrawer, useHelp } from './help';
 import {
   settingsApi,
   type LpProfileSummary,
@@ -47,6 +51,8 @@ export function LpListPage() {
   if (user && !(SETTINGS_PAGE_ROLES as readonly string[]).includes(user.role)) {
     return <Navigate to="/" replace />;
   }
+
+  const help = useHelp();
 
   const [data,    setData]    = useState<LpProfilesResponse | null>(null);
   const [draft,   setDraft]   = useState<string[]>([]);   // which lp_ids are checked in the UI
@@ -157,12 +163,15 @@ export function LpListPage() {
             profiles live under <span className="font-mono text-text-secondary">config/fixbridge/lp/</span>.
           </p>
         </div>
-        <span
-          className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
-          style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
-        >
-          restart: fixbridge_service
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
+            style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
+          >
+            restart: fixbridge_service
+          </span>
+          <HelpIcon onClick={help.open} />
+        </div>
       </div>
 
       {loadError ? (
@@ -359,6 +368,13 @@ export function LpListPage() {
 
         </div>
       </div>
+
+      <HelpDrawer
+        open={help.isOpen}
+        title="LP management"
+        content={helpContent}
+        onClose={help.close}
+      />
     </div>
   );
 }

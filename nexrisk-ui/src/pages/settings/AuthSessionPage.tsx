@@ -14,6 +14,10 @@ import { useNavigate, Navigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 
 import { useAuth } from '@/stores/AuthContext';
+
+// Help content for the operator manual — rendered in the help drawer
+import helpContent from './help/02-auth-session.md?raw';
+import { HelpIcon, HelpDrawer, useHelp } from './help';
 import {
   settingsApi,
   type AuthConfig,
@@ -86,6 +90,8 @@ export function AuthSessionPage() {
   if (user && !(SETTINGS_PAGE_ROLES as readonly string[]).includes(user.role)) {
     return <Navigate to="/" replace />;
   }
+
+  const help = useHelp();
 
   // ── remote state ─────────────────────────────────────────────────
   const [initial,      setInitial]      = useState<AuthConfig | null>(null);
@@ -250,12 +256,15 @@ export function AuthSessionPage() {
             managed here — see Secret rotation.
           </p>
         </div>
-        <span
-          className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
-          style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
-        >
-          restart: nexrisk_service
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className="shrink-0 font-mono text-xs px-2.5 py-1 rounded"
+            style={{ background: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}
+          >
+            restart: nexrisk_service
+          </span>
+          <HelpIcon onClick={help.open} />
+        </div>
       </div>
 
       {loadError ? (
@@ -440,6 +449,13 @@ export function AuthSessionPage() {
 
         </div>
       </div>
+
+    <HelpDrawer
+      open={help.isOpen}
+      title="Auth & session"
+      content={helpContent}
+      onClose={help.close}
+    />
     </div>
   );
 }
@@ -526,8 +542,7 @@ function ServiceField({
       </span>
       {note && (
         <span className="text-[10px] text-text-muted italic">{note}</span>
-      )}
-    </div>
+      )}    </div>
   );
 }
 
