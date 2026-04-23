@@ -1,5 +1,9 @@
 /**
- * CBookPage.tsx — C-Book: Hedge / Opportunity / Repair orders
+ * CBookPage.tsx — Coverage Book (hybrid)
+ *
+ * Combines manual executions (DOM Trader, LP Terminal) and automated executions
+ * (Hedging Strategies) into a single page. Traditionally manual = C-Book and
+ * automated = A-Book; we call the combined view the Coverage Book.
  *
  * Data source:  FIX Bridge API (via BFF at /api/v1/fix/*)
  * Spec:         NexRisk DOM Trader Frontend Brief v3.0 (March 2026)
@@ -294,6 +298,17 @@ interface FIXMessage {
   msg_type_name: string;
   timestamp: string;
   raw: string;
+}
+
+// Persisted per-strategy stats for the current trading day. Keeps the hedge
+// strategy card visible after the last position for that strategy has closed —
+// switches the P/L column from Unrealized to Realized. Cleared when
+// dailyStats.trade_date rolls over to a new trading day.
+interface StrategyDayStat {
+  realized:    number;  // cumulative realized P/L from closed positions today
+  closedCount: number;  // number of positions that have closed under this strategy today
+  color:       string;  // captured at first close so the card keeps its colour after positions leave the grid
+  firstSeen:   number;  // ms — used to order cards deterministically across a refresh
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -609,6 +624,44 @@ export function CBookPage() {
   // DOM Trader (posOverrideRef) takes precedence over this map.
   const hedgeRecordMapRef = useRef<Map<string, string>>(new Map());
 
+  // rule_name → realized-P/L + closed-count for the current trading day.
+  // Seeded from localStorage; survives page refresh. Cleared when dailyStats.trade_date rolls.
+  // Keeps hedge strategy cards on-screen after the last position for the strategy has closed,
+  // showing Realized P/L in place of Unrealized P/L until end of trading day.
+  const [strategyDayStats, setStrategyDayStats] = useState<Map<string, StrategyDayStat>>(
+    (() => {
+      try {
+        const raw = localStorage.getItem('nexrisk_strategy_day_stats');
+        if (raw) {
+          const parsed = JSON.parse(raw) as { tradeDate?: string; entries?: [string, StrategyDayStat][] };
+          if (Array.isArray(parsed.entries)) return new Map(parsed.entries);
+        }
+      } catch {}
+      return new Map();
+    })()
+  );
+  // Track the last-known trade_date so we can detect a rollover when dailyStats arrives.
+  const tradeDateRef = useRef<string>(
+    (() => {
+      try {
+        const raw = localStorage.getItem('nexrisk_strategy_day_stats');
+        if (raw) {
+          const parsed = JSON.parse(raw) as { tradeDate?: string };
+          return parsed.tradeDate ?? '';
+        }
+      } catch {}
+      return '';
+    })()
+  );
+  const saveStrategyStats = useCallback((map: Map<string, StrategyDayStat>, tradeDate: string) => {
+    try {
+      localStorage.setItem(
+        'nexrisk_strategy_day_stats',
+        JSON.stringify({ tradeDate, entries: [...map.entries()] })
+      );
+    } catch {}
+  }, []);
+
   const saveOverrides = () => {
     try {
       localStorage.setItem('nexrisk_pos_overrides', JSON.stringify([...posOverrideRef.current.entries()]));
@@ -682,8 +735,24 @@ export function CBookPage() {
             if (r.lp_position_id && r.rule_name) map.set(r.lp_position_id, r.rule_name);
           }
           hedgeRecordMapRef.current = map;
-          // Backfill: enrich any grid rows already present that don't yet have a
-          // strategy name — mirrors the ExecutionReport post-map-load enrichment step.
+          // Backfill two places so hedgeStrategyPnl (derived from livePositions)
+          // re-evaluates and the strategy cards render. If we only update the
+          // grid nodes (as was the original behaviour), gridRows still holds the
+          // stale 'Terminal' type and the cards never appear on page loads where
+          // the positions fetch completed before this hedge records fetch.
+          setLivePositions((prev) => {
+            let mutated = false;
+            const next = prev.map((row) => {
+              if (row.type !== 'Terminal') return row; // already labelled
+              const ruleName = map.get(row.positionId);
+              if (!ruleName) return row;
+              mutated = true;
+              return { ...row, type: ruleName };
+            });
+            return mutated ? next : prev;
+          });
+          // Keep the grid in sync (it may already be mounted with rows that were
+          // seeded from the REST poll path, independent of livePositions state).
           const api = gridRef.current?.api;
           if (api) {
             api.forEachNode((node) => {
@@ -1218,6 +1287,10 @@ export function CBookPage() {
             if (evtLpC && evtLpC !== wsLpIdRef.current && evtLpC !== gridLpIdRef.current) return;
             const resolvedCloseLp = evtLpC ?? wsLpIdRef.current ?? gridLpIdRef.current;
             const pid = msg.position_id ?? msg.data?.position_id;
+            // Look up strategy BEFORE clearing anything. We keep the
+            // hedgeRecordMapRef entry in place so subsequent lookups still work,
+            // but we need the rule_name to route realized P/L into strategyDayStats.
+            const ruleNameForClose = pid ? hedgeRecordMapRef.current.get(pid) : undefined;
             if (pid) {
               closedPositionIdsRef.current.add(pid);
               saveClosedIds();
@@ -1233,6 +1306,23 @@ export function CBookPage() {
             const evtPnl   = typeof d.realized_pnl === 'number' ? d.realized_pnl : 0;
             const evtComm  = typeof d.commission   === 'number' ? d.commission   : 0;
             const evtSwap  = typeof d.swap         === 'number' ? d.swap         : 0;
+            // Per-strategy Realized P/L accumulation — only if this close was a hedge
+            // strategy position (i.e. the hedge record map had a rule_name for it).
+            if (ruleNameForClose) {
+              setStrategyDayStats((prev) => {
+                const next = new Map(prev);
+                const existing = next.get(ruleNameForClose);
+                next.set(ruleNameForClose, {
+                  realized:    (existing?.realized    ?? 0) + evtPnl,
+                  closedCount: (existing?.closedCount ?? 0) + 1,
+                  color:       existing?.color ?? (TYPE_COLORS[ruleNameForClose] ?? '#49b3b3'),
+                  firstSeen:   existing?.firstSeen ?? Date.now(),
+                });
+                // Persist immediately so a page refresh mid-day keeps the card
+                if (tradeDateRef.current) saveStrategyStats(next, tradeDateRef.current);
+                return next;
+              });
+            }
             if (evtPnl !== 0 || evtComm !== 0 || evtSwap !== 0) {
               setDailyStats((prev) => prev
                 ? {
@@ -1393,18 +1483,38 @@ export function CBookPage() {
     };
   }, [gridRows]);
 
-  // Unrealized P/L per hedge strategy — same formula as unrealizedPnlTotal but grouped
-  // by execution type. Only includes types that are not 'Terminal' or 'DOM Trader'.
-  // Realized P/L per type is not available client-side (dailyStats is aggregate-only).
+  // Unrealized P/L per hedge strategy — computed from open positions in the grid.
+  // Merged with strategyDayStats so strategies whose positions have all closed
+  // remain on-screen showing Realized P/L until end of trading day.
   // Uses gridRows (not livePositions) so session order rows are included.
-  // Count includes ALL hedge rows; P/L is only computed for open rows with a live price.
   const hedgeStrategyPnl = useMemo(() => {
-    const map = new Map<string, { unrealized: number | null; count: number; color: string }>();
+    const map = new Map<string, {
+      unrealized:  number | null;
+      realized:    number;
+      openCount:   number;
+      closedCount: number;
+      color:       string;
+      firstSeen:   number;
+    }>();
+
+    // 1. Seed from persisted day-stats so cards stay visible after all positions close.
+    for (const [name, stat] of strategyDayStats) {
+      map.set(name, {
+        unrealized:  null,
+        realized:    stat.realized,
+        openCount:   0,
+        closedCount: stat.closedCount,
+        color:       stat.color,
+        firstSeen:   stat.firstSeen,
+      });
+    }
+
+    // 2. Overlay live open positions.
     for (const pos of gridRows) {
       if (!pos.symbol) continue;
       if (pos.type === 'Terminal' || pos.type === 'DOM Trader') continue;
       const existing = map.get(pos.type);
-      // P/L — only for open positions with a live close price
+      // Unrealized P/L — only for open positions with a live close price
       let pnl: number | null = null;
       if (pos._isOpen) {
         const key = pos.side === 'BUY' ? pos.symbol + ':bid' : pos.symbol + ':ask';
@@ -1413,18 +1523,24 @@ export function CBookPage() {
         if (closePrice != null && dir !== 0) pnl = (closePrice - pos.fillPrice) * pos.displayQty * dir;
       }
       if (existing) {
-        existing.count += 1;
+        existing.openCount += 1;
         if (pnl !== null) existing.unrealized = (existing.unrealized ?? 0) + pnl;
       } else {
         map.set(pos.type, {
-          unrealized: pnl,
-          count: 1,
-          color: TYPE_COLORS[pos.type] ?? '#49b3b3',
+          unrealized:  pnl,
+          realized:    0,
+          openCount:   1,
+          closedCount: 0,
+          color:       TYPE_COLORS[pos.type] ?? '#49b3b3',
+          firstSeen:   Date.now(),
         });
       }
     }
-    return [...map.entries()].map(([name, v]) => ({ name, ...v }));
-  }, [gridRows, priceTickCounter]);
+    // Stable order: oldest first-seen first, so cards don't shuffle as events arrive.
+    return [...map.entries()]
+      .map(([name, v]) => ({ name, ...v }))
+      .sort((a, b) => a.firstSeen - b.firstSeen);
+  }, [gridRows, priceTickCounter, strategyDayStats]);
 
   // Unrealized P/L — summed client-side from all open grid rows using live book prices.
   // LP-agnostic: same formula as the per-row P/L valueGetter in columnDefs.
@@ -1463,6 +1579,32 @@ export function CBookPage() {
     const timer = setInterval(fetchDailyStats, 30_000);
     return () => clearInterval(timer);
   }, [domLpId, fetchDailyStats]);
+
+  // ── Trading day rollover — clears persisted strategy cards when the backend's
+  // trade_date advances. Using dailyStats.trade_date as the signal keeps the
+  // frontend aligned with whatever "day trading hours" policy the C++ service
+  // uses to stamp the trade_date column on risk.cbook_closed_positions.
+  useEffect(() => {
+    const td = dailyStats?.trade_date;
+    if (!td) return;
+    if (tradeDateRef.current && tradeDateRef.current !== td) {
+      setStrategyDayStats(new Map());
+      try { localStorage.removeItem('nexrisk_strategy_day_stats'); } catch {}
+    }
+    tradeDateRef.current = td;
+    // If we rehydrated from localStorage but the stored tradeDate didn't match
+    // today's, wipe now that we know the authoritative trade_date.
+    try {
+      const raw = localStorage.getItem('nexrisk_strategy_day_stats');
+      if (raw) {
+        const parsed = JSON.parse(raw) as { tradeDate?: string };
+        if (parsed.tradeDate && parsed.tradeDate !== td) {
+          setStrategyDayStats(new Map());
+          localStorage.removeItem('nexrisk_strategy_day_stats');
+        }
+      }
+    } catch {}
+  }, [dailyStats?.trade_date]);
 
   const instrDecimals = activeInstrument?.price_precision
     ?? (domSymbol.includes('JPY') ? 3 : domSymbol.includes('XAU') || domSymbol.includes('BTC') ? 2 : 5);
@@ -1779,11 +1921,11 @@ export function CBookPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
-      {/* ── Row 1: C-Book title + Account metrics ───────────────────────────── */}
+      {/* ── Row 1: Coverage Book title + Account metrics ────────────────────── */}
       <div className="px-4 py-2 border-b border-[#555] flex items-center gap-6 flex-shrink-0" style={{ backgroundColor: '#1e1e20' }}>
         <div className="flex-shrink-0">
-          <h1 className="text-base font-semibold text-white leading-tight">C-Book</h1>
-          <p className="text-[10px] text-[#777]">Hedge, Trade &amp; Repair orders</p>
+          <h1 className="text-base font-semibold text-white leading-tight">Coverage Book</h1>
+          <p className="text-[10px] text-[#777]">Manual &amp; automated hedge executions</p>
         </div>
         <div className="w-px h-8 bg-[#444] flex-shrink-0" />
         {/* Account metrics — TE only. Only 3 fields confirmed sent by TE sandbox UAA. */}
@@ -1929,7 +2071,10 @@ export function CBookPage() {
           if (s.unrealized == null) return acc;
           return (acc ?? 0) + s.unrealized;
         }, null);
-        const totalCount = hedgeStrategyPnl.reduce((acc, s) => acc + s.count, 0);
+        const totalRealized   = hedgeStrategyPnl.reduce((acc, s) => acc + s.realized, 0);
+        const totalOpen       = hedgeStrategyPnl.reduce((acc, s) => acc + s.openCount, 0);
+        const totalClosed     = hedgeStrategyPnl.reduce((acc, s) => acc + s.closedCount, 0);
+        const hasAnyRealized  = totalClosed > 0;
         return (
           <div className="border-b border-[#444] flex items-stretch flex-shrink-0" style={{ backgroundColor: '#1a191e' }}>
 
@@ -1939,7 +2084,9 @@ export function CBookPage() {
                 style={{ backgroundColor: '#252429', border: '1px solid #49b3b344', borderLeft: '3px solid #49b3b3' }}>
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">All Strategies</div>
-                  <div className="text-xs font-medium font-mono text-white">{hedgeStrategyPnl.length} strat · {totalCount} pos</div>
+                  <div className="text-xs font-medium font-mono text-white">
+                    {hedgeStrategyPnl.length} strat · {totalOpen} open{totalClosed > 0 ? ` · ${totalClosed} closed` : ''}
+                  </div>
                 </div>
                 <div className="w-px self-stretch bg-[#3a3a3e]" />
                 <div>
@@ -1955,42 +2102,59 @@ export function CBookPage() {
                 <div className="w-px self-stretch bg-[#3a3a3e]" />
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
-                  <div className="text-sm font-mono text-white" title="Per-strategy realized P/L requires backend breakdown">—</div>
+                  {hasAnyRealized ? (
+                    <div className="text-sm font-mono font-semibold" style={{ color: totalRealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
+                      {totalRealized >= 0 ? '+' : ''}{totalRealized.toFixed(2)}
+                    </div>
+                  ) : (
+                    <div className="text-sm font-mono text-white">—</div>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* ── Individual strategy cards — scrollable ────────────── */}
             <div className="flex items-center gap-2 overflow-x-auto px-3 py-2 flex-1 min-w-0" style={{ scrollbarWidth: 'thin' }}>
-              {hedgeStrategyPnl.map(({ name, unrealized, count, color }) => (
-                <div
-                  key={name}
-                  className="flex items-center gap-3 rounded px-3 py-1.5 flex-shrink-0"
-                  style={{ backgroundColor: '#252429', border: `1px solid ${color}44`, borderLeft: `3px solid ${color}` }}
-                >
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Strategy</div>
-                    <div className="text-xs font-medium font-mono" style={{ color }}>{name}</div>
-                    <div className="text-[9px] text-white mt-0.5">{count} pos</div>
+              {hedgeStrategyPnl.map(({ name, unrealized, realized, openCount, closedCount, color }) => {
+                const countLabel = openCount > 0
+                  ? `${openCount} open${closedCount > 0 ? ` · ${closedCount} closed` : ''}`
+                  : `${closedCount} closed`;
+                return (
+                  <div
+                    key={name}
+                    className="flex items-center gap-3 rounded px-3 py-1.5 flex-shrink-0"
+                    style={{ backgroundColor: '#252429', border: `1px solid ${color}44`, borderLeft: `3px solid ${color}` }}
+                  >
+                    <div>
+                      <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Strategy</div>
+                      <div className="text-xs font-medium font-mono" style={{ color }}>{name}</div>
+                      <div className="text-[9px] text-white mt-0.5">{countLabel}</div>
+                    </div>
+                    <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
+                    <div>
+                      <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
+                      {unrealized != null ? (
+                        <div className="text-sm font-mono font-semibold" style={{ color: unrealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
+                          {unrealized >= 0 ? '+' : ''}{unrealized.toFixed(2)}
+                        </div>
+                      ) : (
+                        <div className="text-sm font-mono text-white">—</div>
+                      )}
+                    </div>
+                    <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
+                    <div>
+                      <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
+                      {closedCount > 0 ? (
+                        <div className="text-sm font-mono font-semibold" style={{ color: realized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
+                          {realized >= 0 ? '+' : ''}{realized.toFixed(2)}
+                        </div>
+                      ) : (
+                        <div className="text-sm font-mono text-white">—</div>
+                      )}
+                    </div>
                   </div>
-                  <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
-                    {unrealized != null ? (
-                      <div className="text-sm font-mono font-semibold" style={{ color: unrealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
-                        {unrealized >= 0 ? '+' : ''}{unrealized.toFixed(2)}
-                      </div>
-                    ) : (
-                      <div className="text-sm font-mono text-white">—</div>
-                    )}
-                  </div>
-                  <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
-                  <div>
-                    <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
-                    <div className="text-sm font-mono text-white" title="Per-strategy realized P/L requires backend breakdown">—</div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
           </div>
