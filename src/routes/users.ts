@@ -19,9 +19,15 @@ const CreateUserSchema = z.object({
 const UpdateUserSchema = z.object({
   role_id: z.number().int().positive().optional(),
   is_active: z.boolean().optional(),
-}).refine((d) => d.role_id !== undefined || d.is_active !== undefined, {
-  message: 'At least one of role_id or is_active is required',
-});
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
+}).refine(
+  (d) => d.role_id !== undefined
+      || d.is_active !== undefined
+      || d.first_name !== undefined
+      || d.last_name !== undefined,
+  { message: 'At least one of role_id, is_active, first_name or last_name is required' },
+);
 
 const IdParams = z.object({ id: z.string().uuid() });
 const RoleIdParams = z.object({ id: z.coerce.number().int().positive() });

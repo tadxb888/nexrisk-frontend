@@ -25,6 +25,8 @@ interface PlatformUser {
   totp_enrolled?: boolean;
   is_root?: boolean;
   created_at?: string;
+  first_name?: string;
+  last_name?: string;
 }
 
 interface Role {
@@ -76,7 +78,7 @@ const usersApi = {
         body: JSON.stringify({ email, role_id, ...(first_name ? { first_name } : {}), ...(last_name ? { last_name } : {}) }) }
     ),
 
-  update: (id: string, patch: { role_id?: number; is_active?: boolean }) =>
+  update: (id: string, patch: { role_id?: number; is_active?: boolean; first_name?: string; last_name?: string }) =>
     apiFetch<PlatformUser>(`/api/v1/users/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -274,6 +276,69 @@ function ChangeRoleModal({ user, roles, onClose, onUpdated }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Edit Name modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EditNameModal({ user, onClose, onUpdated }: {
+  user: PlatformUser; onClose: () => void; onUpdated: () => void;
+}) {
+  const [firstName, setFirstName] = useState(user.first_name ?? '');
+  const [lastName, setLastName]   = useState(user.last_name  ?? '');
+  const [error, setError]         = useState('');
+  const [loading, setLoading]     = useState(false);
+
+  const initialFirst = (user.first_name ?? '').trim();
+  const initialLast  = (user.last_name  ?? '').trim();
+  const dirty = firstName.trim() !== initialFirst || lastName.trim() !== initialLast;
+
+  async function submit() {
+    if (!dirty) return;
+    setError(''); setLoading(true);
+    try {
+      await usersApi.update(user.id, {
+        first_name: firstName.trim(),
+        last_name:  lastName.trim(),
+      });
+      onUpdated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update');
+      setLoading(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Edit Name" subtitle={user.email} onClose={onClose}>
+      {error && <InlineError msg={error} />}
+      <div className="flex gap-3 mb-6">
+        <div className="flex-1">
+          <label className={labelCls}>First Name</label>
+          <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && void submit()}
+            className={inputCls} placeholder="Optional" autoFocus disabled={loading} />
+        </div>
+        <div className="flex-1">
+          <label className={labelCls}>Last Name</label>
+          <input type="text" value={lastName} onChange={e => setLastName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && void submit()}
+            className={inputCls} placeholder="Optional" disabled={loading} />
+        </div>
+      </div>
+      <div className="flex gap-3">
+        <button onClick={() => void submit()} disabled={loading || !dirty}
+          className={clsx('flex-1 py-2 rounded text-sm font-semibold font-mono transition-colors bg-accent text-background hover:bg-accent-hover',
+            (loading || !dirty) && 'opacity-50 cursor-not-allowed')}>
+          {loading ? 'Saving…' : 'Save'}
+        </button>
+        <button onClick={onClose} disabled={loading}
+          className="flex-1 py-2 rounded text-sm font-mono text-text-secondary border border-border hover:text-text-primary hover:border-border-focus transition-colors">
+          Cancel
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Confirm dialog
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -322,6 +387,7 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
 type ModalState =
   | { type: 'none' }
   | { type: 'add' }
+  | { type: 'editName'; user: PlatformUser }
   | { type: 'changeRole'; user: PlatformUser }
   | { type: 'deactivate'; user: PlatformUser }
   | { type: 'reactivate'; user: PlatformUser }
@@ -355,8 +421,16 @@ export function UserManagementPage() {
   useEffect(() => { void load(); }, [load]);
 
   const filtered = users.filter(u => {
-    if (search && !u.email.toLowerCase().includes(search.toLowerCase()) &&
-        !(u.role_label ?? u.role).toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      const haystack = [
+        u.email,
+        u.role_label ?? u.role,
+        u.first_name ?? '',
+        u.last_name ?? '',
+      ].join(' ').toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
     if (filterRole !== 'ALL' && u.role !== filterRole) return false;
     if (filterStatus === 'ACTIVE'   && !u.is_active) return false;
     if (filterStatus === 'INACTIVE' && u.is_active) return false;
@@ -478,10 +552,10 @@ export function UserManagementPage() {
           <table className="w-full" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr className="border-b border-border bg-surface">
-                {['Email', 'Role', 'Status', 'Enrollment', 'Joined', 'Actions'].map((h, i) => (
+                {['First Name', 'Last Name', 'Email Address', 'Role', 'Status', 'Enrollment', 'Joined', 'Actions'].map((h, i) => (
                   <th key={h} className={clsx(
                     'px-6 py-3 text-xs font-medium font-mono text-text-muted uppercase tracking-wider',
-                    i === 5 ? 'text-right' : 'text-left'
+                    i === 7 ? 'text-right' : 'text-left'
                   )}>{h}</th>
                 ))}
               </tr>
@@ -489,6 +563,16 @@ export function UserManagementPage() {
             <tbody>
               {filtered.map(u => (
                 <tr key={u.id} className="border-b border-border-muted hover:bg-surface transition-colors">
+                  <td className="px-6 py-3 text-sm font-mono">
+                    {u.first_name
+                      ? <span className="text-text-primary">{u.first_name}</span>
+                      : <span className="text-text-muted">—</span>}
+                  </td>
+                  <td className="px-6 py-3 text-sm font-mono">
+                    {u.last_name
+                      ? <span className="text-text-primary">{u.last_name}</span>
+                      : <span className="text-text-muted">—</span>}
+                  </td>
                   <td className="px-6 py-3 text-sm text-text-primary font-mono">{u.email}</td>
                   <td className="px-6 py-3 text-sm text-text-secondary font-mono">{u.role_label ?? u.role}</td>
                   <td className="px-6 py-3"><ActiveBadge active={u.is_active} /></td>
@@ -498,6 +582,10 @@ export function UserManagementPage() {
                   </td>
                   <td className="px-6 py-3">
                     <div className="flex items-center justify-end gap-2">
+                      <button onClick={() => setModal({ type: 'editName', user: u })}
+                        className="px-2.5 py-1 rounded text-xs font-mono text-text-secondary border border-border hover:text-accent hover:border-accent transition-colors">
+                        Edit
+                      </button>
                       {u.role !== 'root' && u.is_active && (
                         <button onClick={() => setModal({ type: 'changeRole', user: u })}
                           className="px-2.5 py-1 rounded text-xs font-mono text-text-secondary border border-border hover:text-accent hover:border-accent transition-colors">
@@ -545,6 +633,10 @@ export function UserManagementPage() {
       {modal.type === 'add' && (
         <AddUserModal roles={roles} onClose={() => setModal({ type: 'none' })}
           onCreated={msg => { setToast(msg); setModal({ type: 'none' }); void load(); }} />
+      )}
+      {modal.type === 'editName' && (
+        <EditNameModal user={modal.user} onClose={() => setModal({ type: 'none' })}
+          onUpdated={() => { setToast(`Name updated for ${modal.user.email}`); setModal({ type: 'none' }); void load(); }} />
       )}
       {modal.type === 'changeRole' && (
         <ChangeRoleModal user={modal.user} roles={roles} onClose={() => setModal({ type: 'none' })}
