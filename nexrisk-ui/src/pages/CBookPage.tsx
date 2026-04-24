@@ -502,7 +502,10 @@ function positionToCBook(pos: FIXPosition, lpId: string, instrMap: Record<string
     unrealizedPnl: pos.unrealized_pnl ?? null,
     currentPrice:  pos.current_price  ?? null,
     type:       'Terminal',
-    comments:        `swap:${(pos.swap ?? 0).toFixed(2)}  comm:${(pos.commission ?? 0).toFixed(2)}`,
+    // Comments field is user-driven only. Swap / commission metadata lives on
+    // the backend payload (pos.swap, pos.commission) and can be surfaced via a
+    // dedicated column if needed — but it doesn't belong here.
+    comments:        '',
     instrumentGroup: ins?.instrument_group ?? 'FX',
     _lpId:      lpId,
     _isOpen:    isOpen,
@@ -529,6 +532,11 @@ export function CBookPage() {
   // Symbols already subscribed for position P&L price feed (avoid duplicate subscribes)
   const posSubscribedRef      = useRef<Set<string>>(new Set());
   const [useLocalTime, setUseLocalTime] = useState<boolean>(true);
+  // Title-bar display controls (match NetExposure pattern — default to Notional).
+  // selectedStrategy persists the user's pick across ticks; '' means "auto-select
+  // the most active strategy" (handled in effectiveStrategyName below).
+  const [volumeDisplayMode, setVolumeDisplayMode] = useState<'Lots' | 'Notional'>('Notional');
+  const [selectedStrategy, setSelectedStrategy]   = useState<string>('');
   const [execPanelOpen, setExecPanelOpen] = useState<boolean>(false);
   const [selectedExec, setSelectedExec]   = useState<ExecEntry | null>(null);
   const [fixMessages, setFixMessages]     = useState<FIXMessage[]>([]);
@@ -542,6 +550,12 @@ export function CBookPage() {
   const [closeRow, setCloseRow] = useState<CBookOrder | null>(null);
 
   // ── DOM state ─────────────────────────────────────────────────────────────
+  // DOM Trader drawer — collapsed by default, opens on row-select (see
+  // onSelectionChanged) or via the expand chevron on the collapsed-state rail.
+  // Panel subtree stays MOUNTED in both states (hidden via display:none when
+  // collapsed) so form values, WS subscriptions, and the exec log all survive
+  // the open/close cycle. Matches the NetExposure pattern.
+  const [domDrawerOpen, setDomDrawerOpen] = useState<boolean>(false);
   const [domLpId, setDomLpId]         = useState<string>('');
   const [domSymbol, setDomSymbol]     = useState<string>('');
   const [symbolSearch, setSymbolSearch] = useState<string>('');
@@ -605,8 +619,38 @@ export function CBookPage() {
   const [domTif, setDomTif]             = useState<string>('GTC');
   const [domQtyLots, setDomQtyLots]     = useState<string>('');
   const [domComment, setDomComment]     = useState<string>('');
-  // Set when DOM order is placed. Picked up by the next REST poll that finds a new position_id.
-  const pendingDomRef   = useRef<{ comment: string; preIds: Set<string> } | null>(null);
+  // DOM-placed orders, pushed on successful submit, consumed when a matching
+  // POSITION_REPORT arrives. Symbol+side FIFO matches the resulting position
+  // regardless of which transport (REST bootstrap, REST refetch after fill, or
+  // WS POSITION_REPORT) reports it first. Replaces an earlier preIds-snapshot
+  // approach that was race-prone whenever the fill's transport order differed
+  // from expected (the preIds snapshot could be consumed by an unrelated new
+  // position, leaving the actual DOM fill labelled 'Terminal').
+  const pendingDomQueueRef = useRef<Array<{
+    symbol:  string;
+    side:    'BUY' | 'SELL';
+    qty:     number;
+    comment: string;
+    ts:      number;
+  }>>([]);
+  const DOM_QUEUE_MAX_AGE_MS = 60_000;
+  // Match-and-consume against the queue. Returns the comment if a pending DOM
+  // order for this symbol+side is waiting; returns null otherwise. Also prunes
+  // entries older than DOM_QUEUE_MAX_AGE_MS so a never-filled order doesn't
+  // later mislabel an unrelated fill.
+  const consumePendingDom = (symbol: string, side: 'BUY' | 'SELL' | 'FLAT'): string | null => {
+    if (side === 'FLAT') return null;
+    const now = Date.now();
+    const fresh = pendingDomQueueRef.current.filter((e) => now - e.ts < DOM_QUEUE_MAX_AGE_MS);
+    const idx = fresh.findIndex((e) => e.symbol === symbol && e.side === side);
+    if (idx < 0) {
+      pendingDomQueueRef.current = fresh;
+      return null;
+    }
+    const match = fresh[idx];
+    pendingDomQueueRef.current = fresh.filter((_, i) => i !== idx);
+    return match.comment;
+  };
   // position_id → {type, comments} — survives REST polls, WS updates, and page refresh
   const posOverrideRef = useRef<Map<string, { type: CBookOrderType; comments: string }>>(
     (() => {
@@ -735,9 +779,9 @@ export function CBookPage() {
             if (r.lp_position_id && r.rule_name) map.set(r.lp_position_id, r.rule_name);
           }
           hedgeRecordMapRef.current = map;
-          // Backfill two places so hedgeStrategyPnl (derived from livePositions)
-          // re-evaluates and the strategy cards render. If we only update the
-          // grid nodes (as was the original behaviour), gridRows still holds the
+          // Backfill two places so bookStats (derived from livePositions)
+          // re-evaluates and the Strategy / A-Book cards render. If we only update
+          // the grid nodes (as was the original behaviour), gridRows still holds the
           // stale 'Terminal' type and the cards never appear on page loads where
           // the positions fetch completed before this hedge records fetch.
           setLivePositions((prev) => {
@@ -852,11 +896,22 @@ export function CBookPage() {
           .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
           .map((p) => {
             const row = positionToCBook(p, gridLpId, instrMap);
-            // Identify hedge strategy positions by LP account match (lower priority than DOM Trader)
+            // Identify hedge strategy positions (lower priority than DOM Trader override)
             const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
             if (hedgeName) row.type = hedgeName;
+            // DOM Trader: consume a pending DOM entry if one matches symbol+side.
+            if (!hedgeName && !posOverrideRef.current.has(p.position_id)) {
+              const comment = consumePendingDom(row.symbol, row.side);
+              if (comment !== null) {
+                posOverrideRef.current.set(p.position_id, {
+                  type:     'DOM Trader',
+                  comments: comment,
+                });
+                saveOverrides();
+              }
+            }
             const ov = posOverrideRef.current.get(p.position_id);
-            if (ov) { row.type = ov.type; row.comments = ov.comments; }
+            if (ov) { row.type = ov.type; if (ov.comments) row.comments = ov.comments; }
             return row;
           });
 
@@ -1025,8 +1080,6 @@ export function CBookPage() {
               bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)
                 .then((r) => {
                   if (!r.success || cancelled) return;
-                  // Stamp DOM type/comments on any new position found by pending DOM order
-                  const pending = pendingDomRef.current;
                   // If REST returns a position with qty>0 that we blacklisted (e.g. DOM
                   // partial close: POSITION_CLOSED fires before PositionReport), unblacklist it.
                   // Track unblacklisted IDs to protect them from toRemove diff logic.
@@ -1044,20 +1097,23 @@ export function CBookPage() {
                     .filter((p) => !closedPositionIdsRef.current.has(p.position_id))
                     .map((p) => {
                       const row = positionToCBook(p, lpSnap, instrMap);
-                      // Identify hedge strategy positions by LP account match (lower priority than DOM Trader)
+                      // Identify hedge strategy positions (lower priority than DOM Trader override)
                       const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
                       if (hedgeName) row.type = hedgeName;
-                      // If a DOM order is pending and this is a new position_id → stamp it
-                      if (pending && !pending.preIds.has(p.position_id)) {
-                        posOverrideRef.current.set(p.position_id, {
-                          type:     'DOM Trader',
-                          comments: pending.comment,
-                        });
-                        saveOverrides();
-                        pendingDomRef.current = null;
+                      // DOM Trader: if this position_id has no existing override or hedge
+                      // match, try to consume a pending DOM entry with matching symbol+side.
+                      if (!hedgeName && !posOverrideRef.current.has(p.position_id)) {
+                        const comment = consumePendingDom(row.symbol, row.side);
+                        if (comment !== null) {
+                          posOverrideRef.current.set(p.position_id, {
+                            type:     'DOM Trader',
+                            comments: comment,
+                          });
+                          saveOverrides();
+                        }
                       }
                       const ov = posOverrideRef.current.get(p.position_id);
-                      if (ov) { row.type = ov.type; row.comments = ov.comments; }
+                      if (ov) { row.type = ov.type; if (ov.comments) row.comments = ov.comments; }
                       return row;
                     });
                   setLivePositions(rows);
@@ -1245,22 +1301,24 @@ export function CBookPage() {
                 gridRef.current?.api?.applyTransaction({ remove: [{ id: closedId } as CBookOrder] });
               } else {
               const row = positionToCBook(pos, resolvedLp, instrMap);
-              // Identify hedge strategy positions by LP account match (lower priority than DOM Trader)
+              // Identify hedge strategy positions (lower priority than DOM Trader override)
               const hedgeName = hedgeRecordMapRef.current.get(pos.position_id);
               if (hedgeName) row.type = hedgeName;
-              // If a DOM order is pending and this position_id is new → stamp it
-              const pending = pendingDomRef.current;
-              if (pending && !pending.preIds.has(pos.position_id)) {
-                posOverrideRef.current.set(pos.position_id, {
-                  type:     'DOM Trader',
-                  comments: pending.comment,
-                });
-                saveOverrides();
-                pendingDomRef.current = null; // consumed
+              // DOM Trader: if this position_id has no existing override or hedge
+              // match, try to consume a pending DOM entry with matching symbol+side.
+              if (!hedgeName && !posOverrideRef.current.has(pos.position_id)) {
+                const comment = consumePendingDom(row.symbol, row.side);
+                if (comment !== null) {
+                  posOverrideRef.current.set(pos.position_id, {
+                    type:     'DOM Trader',
+                    comments: comment,
+                  });
+                  saveOverrides();
+                }
               }
               // Apply persisted type/comment override (survives all subsequent WS updates)
               const ov = posOverrideRef.current.get(pos.position_id);
-              if (ov) { row.type = ov.type; row.comments = ov.comments; }
+              if (ov) { row.type = ov.type; if (ov.comments) row.comments = ov.comments; }
               setLivePositions((prev) => {
                 const idx = prev.findIndex((p) => p.positionId === row.positionId);
                 return idx >= 0 ? prev.map((p, i) => i === idx ? row : p) : [row, ...prev];
@@ -1465,82 +1523,160 @@ export function CBookPage() {
 
   const gridRows = useMemo<CBookOrder[]>(() => [...livePositions, ...sessionOrders], [livePositions, sessionOrders]);
 
-  const stats = useMemo(() => {
-    const openRows = gridRows.filter((r) => r._isOpen);
-    // Split open position volume by instrument group
-    const fxUnits  = openRows.filter((r) => r.instrumentGroup === 'FX').reduce((s, r) => s + (r.displayQty ?? 0), 0);
-    const cfdUnits = openRows.filter((r) => r.instrumentGroup !== 'FX').reduce((s, r) => s + (r.displayQty ?? 0), 0);
-    const fmtFx = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(0)}K` : n.toLocaleString();
-    const parts: string[] = [];
-    if (fxUnits  > 0) parts.push(`${fmtFx(fxUnits)} FX`);
-    if (cfdUnits > 0) parts.push(`${cfdUnits.toLocaleString()} CFDs`);
-    const volDisplay = parts.length ? parts.join(' | ') : '—';
-    return {
-      total:      gridRows.length,
-      buys:       openRows.filter((r) => r.side === 'BUY').length,
-      sells:      openRows.filter((r) => r.side === 'SELL').length,
-      volDisplay,
-    };
-  }, [gridRows]);
-
-  // Unrealized P/L per hedge strategy — computed from open positions in the grid.
-  // Merged with strategyDayStats so strategies whose positions have all closed
-  // remain on-screen showing Realized P/L until end of trading day.
-  // Uses gridRows (not livePositions) so session order rows are included.
-  const hedgeStrategyPnl = useMemo(() => {
-    const map = new Map<string, {
-      unrealized:  number | null;
-      realized:    number;
-      openCount:   number;
-      closedCount: number;
-      color:       string;
-      firstSeen:   number;
+  // Coverage-book aggregates — one pass over gridRows producing:
+  //   • per-strategy stats (drives the Strategy card selector + the old Row-3 strip)
+  //   • A-Book totals   — positions from automated hedge strategies
+  //                       (everything whose `type` is NOT 'Terminal' or 'DOM Trader')
+  //   • C-Book totals   — positions executed manually (Terminal + DOM Trader)
+  //
+  // Per-strategy entries are seeded from strategyDayStats so cards stay visible
+  // after a strategy's last position closes (Realised-P/L-only mode).
+  //
+  // Realised-P/L split note: dailyStats.realized_pnl is LP-wide (sum of all
+  // closed positions for the selected LP today). strategyDayStats.realized is
+  // the A-Book portion (accumulated per rule_name on close). C-Book realised is
+  // therefore computed as (LP total) − (A-Book sum). If the backend later
+  // exposes a per-book split, swap this out for the direct value.
+  const bookStats = useMemo(() => {
+    const strategies = new Map<string, {
+      unrealized:    number | null;
+      realized:      number;
+      openCount:     number;
+      closedCount:   number;
+      totalLots:     number;
+      totalNotional: number;
+      buys:          number;
+      sells:         number;
+      color:         string;
+      firstSeen:     number;
     }>();
 
-    // 1. Seed from persisted day-stats so cards stay visible after all positions close.
+    // Seed strategy map from persisted day-stats so cards stay visible after all positions close.
     for (const [name, stat] of strategyDayStats) {
-      map.set(name, {
-        unrealized:  null,
-        realized:    stat.realized,
-        openCount:   0,
-        closedCount: stat.closedCount,
-        color:       stat.color,
-        firstSeen:   stat.firstSeen,
+      strategies.set(name, {
+        unrealized:    null,
+        realized:      stat.realized,
+        openCount:     0,
+        closedCount:   stat.closedCount,
+        totalLots:     0,
+        totalNotional: 0,
+        buys:          0,
+        sells:         0,
+        color:         stat.color,
+        firstSeen:     stat.firstSeen,
       });
     }
 
-    // 2. Overlay live open positions.
+    // A-Book / C-Book running totals.
+    let aOpen = 0, aBuys = 0, aSells = 0, aLots = 0, aNotional = 0;
+    let aUnrealized: number | null = null;
+    let cOpen = 0, cBuys = 0, cSells = 0, cLots = 0, cNotional = 0;
+    let cUnrealized: number | null = null;
+
     for (const pos of gridRows) {
-      if (!pos.symbol) continue;
-      if (pos.type === 'Terminal' || pos.type === 'DOM Trader') continue;
-      const existing = map.get(pos.type);
-      // Unrealized P/L — only for open positions with a live close price
+      if (!pos.symbol || !pos._isOpen) continue;
+
+      const isManual = pos.type === 'Terminal' || pos.type === 'DOM Trader';
+      const lots     = pos.volume     ?? 0;
+      const notional = pos.displayQty ?? 0;
+
+      // Per-position unrealized P/L — same formula as the row valueGetter.
       let pnl: number | null = null;
-      if (pos._isOpen) {
-        const key = pos.side === 'BUY' ? pos.symbol + ':bid' : pos.symbol + ':ask';
-        const closePrice = currentPricesRef.current.get(key) ?? pos.currentPrice ?? null;
-        const dir = pos.side === 'BUY' ? 1 : pos.side === 'SELL' ? -1 : 0;
-        if (closePrice != null && dir !== 0) pnl = (closePrice - pos.fillPrice) * pos.displayQty * dir;
-      }
-      if (existing) {
-        existing.openCount += 1;
-        if (pnl !== null) existing.unrealized = (existing.unrealized ?? 0) + pnl;
+      const key = pos.side === 'BUY' ? pos.symbol + ':bid' : pos.symbol + ':ask';
+      const closePrice = currentPricesRef.current.get(key) ?? pos.currentPrice ?? null;
+      const dir = pos.side === 'BUY' ? 1 : pos.side === 'SELL' ? -1 : 0;
+      if (closePrice != null && dir !== 0) pnl = (closePrice - pos.fillPrice) * pos.displayQty * dir;
+
+      if (isManual) {
+        cOpen += 1;
+        if (pos.side === 'BUY')  cBuys  += 1;
+        if (pos.side === 'SELL') cSells += 1;
+        cLots     += lots;
+        cNotional += notional;
+        if (pnl !== null) cUnrealized = (cUnrealized ?? 0) + pnl;
       } else {
-        map.set(pos.type, {
-          unrealized:  pnl,
-          realized:    0,
-          openCount:   1,
-          closedCount: 0,
-          color:       TYPE_COLORS[pos.type] ?? '#49b3b3',
-          firstSeen:   Date.now(),
-        });
+        aOpen += 1;
+        if (pos.side === 'BUY')  aBuys  += 1;
+        if (pos.side === 'SELL') aSells += 1;
+        aLots     += lots;
+        aNotional += notional;
+        if (pnl !== null) aUnrealized = (aUnrealized ?? 0) + pnl;
+
+        const existing = strategies.get(pos.type);
+        if (existing) {
+          existing.openCount     += 1;
+          existing.totalLots     += lots;
+          existing.totalNotional += notional;
+          if (pos.side === 'BUY')  existing.buys  += 1;
+          if (pos.side === 'SELL') existing.sells += 1;
+          if (pnl !== null) existing.unrealized = (existing.unrealized ?? 0) + pnl;
+        } else {
+          strategies.set(pos.type, {
+            unrealized:    pnl,
+            realized:      0,
+            openCount:     1,
+            closedCount:   0,
+            totalLots:     lots,
+            totalNotional: notional,
+            buys:          pos.side === 'BUY'  ? 1 : 0,
+            sells:         pos.side === 'SELL' ? 1 : 0,
+            color:         TYPE_COLORS[pos.type] ?? '#49b3b3',
+            firstSeen:     Date.now(),
+          });
+        }
       }
     }
+
+    // Realised P/L split — see note at top of memo.
+    const abookRealized = [...strategyDayStats.values()].reduce((s, v) => s + v.realized, 0);
+    const lpRealized    = dailyStats?.realized_pnl ?? 0;
+    const cbookRealized = lpRealized - abookRealized;
+
     // Stable order: oldest first-seen first, so cards don't shuffle as events arrive.
-    return [...map.entries()]
+    const strategyList = [...strategies.entries()]
       .map(([name, v]) => ({ name, ...v }))
       .sort((a, b) => a.firstSeen - b.firstSeen);
-  }, [gridRows, priceTickCounter, strategyDayStats]);
+
+    return {
+      strategies: strategyList,
+      abook: { positions: aOpen, buys: aBuys, sells: aSells, lots: aLots, notional: aNotional, unrealized: aUnrealized, realized: abookRealized },
+      cbook: { positions: cOpen, buys: cBuys, sells: cSells, lots: cLots, notional: cNotional, unrealized: cUnrealized, realized: cbookRealized },
+      // Coverage = A-Book + C-Book. Realised simplifies to the LP-wide total
+      // since A + (LP-total − A) = LP-total; use dailyStats directly if available
+      // so Coverage still reads correctly before any strategy stats have accumulated.
+      coverage: {
+        positions:  aOpen + cOpen,
+        buys:       aBuys + cBuys,
+        sells:      aSells + cSells,
+        lots:       aLots + cLots,
+        notional:   aNotional + cNotional,
+        unrealized: aUnrealized == null && cUnrealized == null ? null : (aUnrealized ?? 0) + (cUnrealized ?? 0),
+        realized:   lpRealized,
+      },
+    };
+  }, [gridRows, priceTickCounter, strategyDayStats, dailyStats]);
+
+  // Default strategy = user's pick if still present, else the most active one
+  // (highest open count, tiebreak on notional). Keeps the card useful when a
+  // strategy's last position closes (falls through to the next-most-active).
+  const effectiveStrategyName = useMemo(() => {
+    const list = bookStats.strategies;
+    if (selectedStrategy && list.some((s) => s.name === selectedStrategy)) {
+      return selectedStrategy;
+    }
+    if (list.length === 0) return '';
+    const ranked = [...list].sort((a, b) => {
+      if (b.openCount !== a.openCount) return b.openCount - a.openCount;
+      if (b.totalNotional !== a.totalNotional) return b.totalNotional - a.totalNotional;
+      return a.firstSeen - b.firstSeen;
+    });
+    return ranked[0]?.name ?? '';
+  }, [selectedStrategy, bookStats.strategies]);
+
+  const currentStrategy = useMemo(
+    () => bookStats.strategies.find((s) => s.name === effectiveStrategyName) ?? null,
+    [bookStats.strategies, effectiveStrategyName],
+  );
 
   // Unrealized P/L — summed client-side from all open grid rows using live book prices.
   // LP-agnostic: same formula as the per-row P/L valueGetter in columnDefs.
@@ -1694,11 +1830,16 @@ export function CBookPage() {
         if (r.success) {
           entry.clord_id = r.clord_id ?? '—';
           setExecLog((prev) => [entry, ...prev].slice(0, 20));
-          // Register DOM order so EXECUTION_REPORT can stamp type + comment on the new position
-          // Snapshot current position_ids — next REST poll will detect new one
-          const preIds = new Set<string>();
-          gridRef.current?.api?.forEachNode((n) => { if (n.data?.positionId) preIds.add(n.data.positionId); });
-          pendingDomRef.current = { comment: domComment.trim(), preIds };
+          // Push this DOM order onto the queue. The matching POSITION_REPORT
+          // (whichever transport delivers it first) will consume this entry
+          // and label the position as 'DOM Trader' instead of 'Terminal'.
+          pendingDomQueueRef.current.push({
+            symbol:  domSymbol,
+            side,
+            qty,
+            comment: domComment.trim(),
+            ts:      Date.now(),
+          });
           setDomComment('');
           // Optimistic session row — grid shows immediately, fill confirmed by WS EXECUTION_REPORT
           const newRow: CBookOrder = {
@@ -1712,7 +1853,7 @@ export function CBookPage() {
             fillPrice: liveBookRef.current
               ? (side === 'BUY' ? (liveBookRef.current.best_ask ?? 0) : (liveBookRef.current.best_bid ?? 0))
               : parseFloat(limitPrice) || 0,
-            type: 'DOM Trader', comments: domComment.trim() || `FIX:${r.clord_id}`,
+            type: 'DOM Trader', comments: domComment.trim(),
             instrumentGroup: activeInstrument?.instrument_group ?? 'FX',
             stopLoss: null, takeProfit: null, unrealizedPnl: null, currentPrice: null,
             _lpId: domLpId, _isOpen: false,
@@ -1736,10 +1877,17 @@ export function CBookPage() {
     closeRow, domLpInfo,
   ]);
 
-  // ── Grid row selection → close mode ───────────────────────────────────────
+  // ── Grid row selection → close mode + auto-open DOM drawer ────────────────
   const onSelectionChanged = useCallback((e: SelectionChangedEvent<CBookOrder>) => {
     const sel = e.api.getSelectedRows();
-    if (sel.length === 1 && sel[0]._isOpen) setCloseRow(sel[0]);
+    if (sel.length === 1 && sel[0]._isOpen) {
+      setCloseRow(sel[0]);
+      // Selecting a row is the user's signal to operate on it via DOM Trader.
+      // Auto-opening the drawer here saves a click. If the drawer is already
+      // open this is a no-op; if the user manually closed it, re-selecting
+      // another row re-opens it — which is the right affordance.
+      setDomDrawerOpen(true);
+    }
     else setCloseRow(null);
   }, []);
 
@@ -1915,23 +2063,329 @@ export function CBookPage() {
 
   const fmtAcct = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // Title-bar card formatters — mirror NetExposure so the two pages read the same.
+  const fmtHdrMoney = (val: number) => {
+    const abs = Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${val < 0 ? '-' : ''}$${abs}`;
+  };
+  // Compact magnitude formatter for the Volume cell (K / M / B). Keeps the row
+  // narrow so four cards fit on one line alongside the title. Precision:
+  //   < 1K   → full value, no fraction
+  //   < 10K  → $X.XK  (e.g. 1.1K)
+  //   < 1M   → $XXXK  (e.g. 110K)
+  //   < 10M  → $X.XM  (e.g. 1.1M)
+  //   ≥ 10M  → $XXM
+  const fmtHdrCompact = (val: number, prefix = ''): string => {
+    const abs = Math.abs(val);
+    const sign = val < 0 ? '-' : '';
+    if (abs >= 10_000_000) return `${sign}${prefix}${(abs / 1_000_000).toFixed(0)}M`;
+    if (abs >= 1_000_000)  return `${sign}${prefix}${(abs / 1_000_000).toFixed(1)}M`;
+    if (abs >= 10_000)     return `${sign}${prefix}${(abs / 1_000).toFixed(0)}K`;
+    if (abs >= 1_000)      return `${sign}${prefix}${(abs / 1_000).toFixed(1)}K`;
+    const hasFraction = Math.abs(abs - Math.round(abs)) > 0.001;
+    return `${sign}${prefix}${abs.toLocaleString('en-US', {
+      minimumFractionDigits: hasFraction ? 2 : 0,
+      maximumFractionDigits: 2,
+    })}`;
+  };
+  // Volume formatters — both modes print base-currency units; the toggle label
+  // tells the user whether to read the number as lots or notional (base-currency
+  // units). No '$' prefix on Notional because we don't convert to USD; the
+  // number is just the raw base-currency amount (e.g. 500,000 EUR on EURUSD).
+  const fmtHdrNotional = (val: number) => fmtHdrCompact(val, '');
+  const fmtHdrLots     = (val: number) => fmtHdrCompact(val, '');
+  // P/L colour palette — NetExposure convention (softer than the old teal/red).
+  const pnlColor = (v: number | null | undefined) =>
+    v == null ? '#d2d6e2' : v > 0 ? '#6aaa78' : v < 0 ? '#d07070' : '#d2d6e2';
+
   // ==========================================================================
   // RENDER
   // ==========================================================================
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
-      {/* ── Row 1: Coverage Book title + Account metrics ────────────────────── */}
-      <div className="px-4 py-2 border-b border-[#555] flex items-center gap-6 flex-shrink-0" style={{ backgroundColor: '#1e1e20' }}>
+      {/* ── Row 1: Title + Coverage-book summary cards ───────────────────────
+          All four cards are the same height (2 rows: label above value).
+            • Strategy  — native-select dropdown (styled with a visible border +
+                          chevron). Disabled when there's only one strategy.
+            • A-Book    — aggregate over automated hedge-strategy positions
+                          (pos.type is a rule_name, i.e. NOT Terminal/DOM Trader).
+            • C-Book    — aggregate over manual executions (Terminal + DOM Trader).
+            • Coverage  — A-Book + C-Book (full book). Realised equals the LP-wide
+                          total from dailyStats.
+          Lots/Notional toggle lives in Row 2 (next to the LP selector) so the
+          Coverage card has room to sit on the same line. */}
+      <div className="px-4 py-1.5 border-b border-[#808080] flex items-center justify-between gap-2 flex-wrap flex-shrink-0" style={{ backgroundColor: '#1e1e20' }}>
+
         <div className="flex-shrink-0">
-          <h1 className="text-base font-semibold text-white leading-tight">Coverage Book</h1>
-          <p className="text-[10px] text-[#777]">Manual &amp; automated hedge executions</p>
+          <h1 className="text-sm font-semibold text-white leading-tight">Coverage Book</h1>
         </div>
-        <div className="w-px h-8 bg-[#444] flex-shrink-0" />
-        {/* Account metrics — TE only. Only 3 fields confirmed sent by TE sandbox UAA. */}
-        {allLps.find(l => l.lp_id === domLpId)?.provider_type === 'traderevolution' && (
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+
+          {/* ── Strategy card — dropdown selector + per-strategy P/L ───────── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Strategy</div>
+              <div className="flex items-center gap-2">
+                <div className="relative inline-block">
+                  <select
+                    value={effectiveStrategyName}
+                    onChange={(e) => setSelectedStrategy(e.target.value)}
+                    disabled={bookStats.strategies.length <= 1}
+                    className="appearance-none bg-[#1f1e22] border border-[#3a3a3e] rounded pl-2 pr-5 py-0 text-xs font-mono leading-normal focus:outline-none focus:border-[#49b3b3] cursor-pointer disabled:cursor-default disabled:opacity-80 hover:border-[#49b3b3] transition-colors"
+                    style={{ color: currentStrategy?.color ?? '#49b3b3' }}
+                    title={bookStats.strategies.length <= 1 ? 'Only one strategy available' : 'Select another strategy'}
+                  >
+                    {bookStats.strategies.length === 0 ? (
+                      <option value="">—</option>
+                    ) : bookStats.strategies.map((s) => (
+                      <option key={s.name} value={s.name} style={{ backgroundColor: '#2a292c', color: '#fff' }}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[#999] text-[9px] pointer-events-none">▾</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {currentStrategy?.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(currentStrategy.unrealized) }}>
+                  {fmtHdrMoney(currentStrategy.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              {currentStrategy && currentStrategy.closedCount > 0 ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(currentStrategy.realized) }}>
+                  {fmtHdrMoney(currentStrategy.realized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+          </div>
+
+          {/* ── A-Book card — aggregate across automated hedging strategies ──── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="A-Book: positions opened by hedging strategies (automated execution)."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">A-Book</div>
+              <div className="text-xs font-mono text-white">{bookStats.abook.positions} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-xs font-mono">
+                <span style={{ color: '#49b3b3' }}>{bookStats.abook.buys}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{bookStats.abook.sells}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-xs font-mono text-white">
+                {volumeDisplayMode === 'Lots'
+                  ? fmtHdrLots(bookStats.abook.lots)
+                  : fmtHdrNotional(bookStats.abook.notional)}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {bookStats.abook.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(bookStats.abook.unrealized) }}>
+                  {fmtHdrMoney(bookStats.abook.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              <div className="text-xs font-mono" style={{ color: pnlColor(bookStats.abook.realized) }}>
+                {fmtHdrMoney(bookStats.abook.realized)}
+              </div>
+            </div>
+          </div>
+
+          {/* ── C-Book card — aggregate across manual executions ─────────── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="C-Book: positions opened manually via Terminal or DOM Trader."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">C-Book</div>
+              <div className="text-xs font-mono text-white">{bookStats.cbook.positions} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-xs font-mono">
+                <span style={{ color: '#49b3b3' }}>{bookStats.cbook.buys}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{bookStats.cbook.sells}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-xs font-mono text-white">
+                {volumeDisplayMode === 'Lots'
+                  ? fmtHdrLots(bookStats.cbook.lots)
+                  : fmtHdrNotional(bookStats.cbook.notional)}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {bookStats.cbook.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(bookStats.cbook.unrealized) }}>
+                  {fmtHdrMoney(bookStats.cbook.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              <div className="text-xs font-mono" style={{ color: pnlColor(bookStats.cbook.realized) }}>
+                {fmtHdrMoney(bookStats.cbook.realized)}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Coverage card — A-Book + C-Book aggregate ──────────────── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="Coverage Book: all positions combined (A-Book + C-Book)."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Coverage</div>
+              <div className="text-xs font-mono text-white">{bookStats.coverage.positions} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-xs font-mono">
+                <span style={{ color: '#49b3b3' }}>{bookStats.coverage.buys}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{bookStats.coverage.sells}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-xs font-mono text-white">
+                {volumeDisplayMode === 'Lots'
+                  ? fmtHdrLots(bookStats.coverage.lots)
+                  : fmtHdrNotional(bookStats.coverage.notional)}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {bookStats.coverage.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(bookStats.coverage.unrealized) }}>
+                  {fmtHdrMoney(bookStats.coverage.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              <div className="text-xs font-mono" style={{ color: pnlColor(bookStats.coverage.realized) }}>
+                {fmtHdrMoney(bookStats.coverage.realized)}
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* ── Row 2: LP selector + LP-level account metrics ────────────────────
+          Keeps the original small font size (text-xs/11px). Account metrics
+          (Balance / Used Margin / Available Margin / Realized P/L / Unrealized
+          P/L / Commission / Swap Long-Short-Net) only render for TE LPs because
+          the ACCOUNT_STATUS tags (20115, 20080, 7027) and daily-stats endpoint
+          are TE-specific today. */}
+      <div className="px-4 py-1.5 border-b border-[#444] flex items-center gap-4 flex-shrink-0 text-xs flex-wrap" style={{ backgroundColor: '#252527' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-[#aaa]">View LP:</span>
+          {lpsLoading ? <span className="text-[#555]">…</span> : (
+            <select
+              value={gridLpId}
+              onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); }}
+              className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
+            >
+              <option value="">— All LPs —</option>
+              {allLps.map((l) => (
+                <option key={l.lp_id} value={l.lp_id}>
+                  {l.lp_name ?? l.lp_id}{l.state !== 'CONNECTED' ? ` (${l.state})` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          {posLoading && <span className="text-[#555] animate-pulse">↻</span>}
+        </div>
+
+        <div className="w-px h-4 bg-[#555]" />
+
+        <button
+          onClick={() => setUseLocalTime(v => !v)}
+          className="flex items-center gap-1 px-2 py-0.5 rounded border border-[#555] bg-[#232225] hover:border-[#49b3b3] text-[#aaa] hover:text-white transition-colors text-xs"
+          title="Toggle local / server (UTC) time"
+        >
+          {useLocalTime ? 'Local Time' : 'UTC'}
+        </button>
+
+        <div className="w-px h-4 bg-[#555]" />
+
+        {/* LP-level account metrics — TE only. Only 3 balance fields confirmed
+            sent by TE sandbox UAA (tags 20115, 20080, 7027). */}
+        {allLps.find(l => l.lp_id === domLpId)?.provider_type === 'traderevolution' ? (
           account ? (
-            <div className="flex items-center gap-5 text-[11px] flex-wrap">
+            <>
               {/* tag 20115 — ProjectedBalance = UsedMargin + AvailableMargin */}
               <div>
                 <div className="text-[#777] uppercase tracking-wide text-[9px] mb-0.5">Balance</div>
@@ -2013,153 +2467,33 @@ export function CBookPage() {
                   <div className="font-mono text-[#555]">—</div>
                 )}
               </div>
-            </div>
+            </>
           ) : (
             <div className="text-[11px] text-[#555]">Awaiting account data…</div>
           )
-        )}
-      </div>
+        ) : null}
 
-      {/* ── Row 2: Controls + Position stats ─────────────────────────────────── */}
-      <div className="px-4 py-1.5 border-b border-[#444] flex items-center gap-3 flex-shrink-0 text-xs" style={{ backgroundColor: '#252527' }}>
-        <div className="flex items-center gap-2">
-          <span className="text-[#aaa]">View LP:</span>
-          {lpsLoading ? <span className="text-[#555]">…</span> : (
-            <select
-              value={gridLpId}
-              onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); }}
-              className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
-            >
-              <option value="">— All LPs —</option>
-              {allLps.map((l) => (
-                <option key={l.lp_id} value={l.lp_id}>
-                  {l.lp_name ?? l.lp_id}{l.state !== 'CONNECTED' ? ` (${l.state})` : ''}
-                </option>
-              ))}
-            </select>
-          )}
-          {posLoading && <span className="text-[#555] animate-pulse">↻</span>}
-        </div>
-        <div className="w-px h-4 bg-[#555]" />
-
-        <button
-          onClick={() => setUseLocalTime(v => !v)}
-          className="flex items-center gap-1 px-2 py-0.5 rounded border border-[#555] bg-[#232225] hover:border-[#49b3b3] text-[#aaa] hover:text-white transition-colors text-xs"
-          title="Toggle local / server (UTC) time"
-        >
-          {useLocalTime ? 'Local Time' : 'UTC'}
-        </button>
-        <div className="w-px h-4 bg-[#555]" />
-        <div><span className="text-[#aaa]">Pos:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
-        <div>
-          <span className="text-[#aaa]">L/S:</span>
-          <span className="ml-1 font-mono">
-            <span className="text-[#49b3b3]">{stats.buys}</span>
-            <span className="text-[#444]"> / </span>
-            <span className="text-[#e0a020]">{stats.sells}</span>
-          </span>
-        </div>
-        <div>
-          <span className="text-[#aaa]">Vol (Units):</span>
-          <span className="ml-1 font-mono text-white">{stats.volDisplay}</span>
+        {/* Lots / Notional toggle — relocated from Row 1 per Ross's request.
+            ml-auto pushes it to the far right so it doesn't crowd the account
+            metrics even when the TE block isn't rendering.
+            Colour convention: the track stays the same muted grey in both
+            states; the ACTIVE label (whichever side the knob is on) takes
+            teal so the selection reads at a glance without the whole track
+            flipping colour. */}
+        <div className="flex items-center gap-1.5 ml-auto">
+          <span className={clsx('text-[10px] transition-colors', volumeDisplayMode === 'Lots' ? 'text-[#49b3b3]' : 'text-[#666]')}>Lots</span>
+          <button
+            onClick={() => setVolumeDisplayMode(volumeDisplayMode === 'Lots' ? 'Notional' : 'Lots')}
+            className="relative w-9 h-5 rounded-full bg-[#606060] transition-colors duration-200 ease-in-out p-0.5"
+            title="Toggle volume display between Lots and Notional"
+          >
+            <span className={clsx('block w-4 h-4 bg-white rounded-full shadow-md transition-transform duration-200 ease-in-out',
+              volumeDisplayMode === 'Notional' ? 'translate-x-4' : 'translate-x-0')} />
+          </button>
+          <span className={clsx('text-[10px] transition-colors', volumeDisplayMode === 'Notional' ? 'text-[#49b3b3]' : 'text-[#666]')}>Notional</span>
         </div>
       </div>
 
-      {/* ── Row 3: Hedge strategy P/L cards ─────────────────────────────────── */}
-      {hedgeStrategyPnl.length > 0 && (() => {
-        const totalUnrealized = hedgeStrategyPnl.reduce<number | null>((acc, s) => {
-          if (s.unrealized == null) return acc;
-          return (acc ?? 0) + s.unrealized;
-        }, null);
-        const totalRealized   = hedgeStrategyPnl.reduce((acc, s) => acc + s.realized, 0);
-        const totalOpen       = hedgeStrategyPnl.reduce((acc, s) => acc + s.openCount, 0);
-        const totalClosed     = hedgeStrategyPnl.reduce((acc, s) => acc + s.closedCount, 0);
-        const hasAnyRealized  = totalClosed > 0;
-        return (
-          <div className="border-b border-[#444] flex items-stretch flex-shrink-0" style={{ backgroundColor: '#1a191e' }}>
-
-            {/* ── Summary card — sticky, never scrolls ─────────────── */}
-            <div className="flex items-center gap-3 flex-shrink-0 px-4 py-2" style={{ borderRight: '1px solid #3a3a3e' }}>
-              <div className="flex items-center gap-3 rounded px-3 py-1.5"
-                style={{ backgroundColor: '#252429', border: '1px solid #49b3b344', borderLeft: '3px solid #49b3b3' }}>
-                <div>
-                  <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">All Strategies</div>
-                  <div className="text-xs font-medium font-mono text-white">
-                    {hedgeStrategyPnl.length} strat · {totalOpen} open{totalClosed > 0 ? ` · ${totalClosed} closed` : ''}
-                  </div>
-                </div>
-                <div className="w-px self-stretch bg-[#3a3a3e]" />
-                <div>
-                  <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
-                  {totalUnrealized != null ? (
-                    <div className="text-sm font-mono font-semibold" style={{ color: totalUnrealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
-                      {totalUnrealized >= 0 ? '+' : ''}{totalUnrealized.toFixed(2)}
-                    </div>
-                  ) : (
-                    <div className="text-sm font-mono text-white">—</div>
-                  )}
-                </div>
-                <div className="w-px self-stretch bg-[#3a3a3e]" />
-                <div>
-                  <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
-                  {hasAnyRealized ? (
-                    <div className="text-sm font-mono font-semibold" style={{ color: totalRealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
-                      {totalRealized >= 0 ? '+' : ''}{totalRealized.toFixed(2)}
-                    </div>
-                  ) : (
-                    <div className="text-sm font-mono text-white">—</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* ── Individual strategy cards — scrollable ────────────── */}
-            <div className="flex items-center gap-2 overflow-x-auto px-3 py-2 flex-1 min-w-0" style={{ scrollbarWidth: 'thin' }}>
-              {hedgeStrategyPnl.map(({ name, unrealized, realized, openCount, closedCount, color }) => {
-                const countLabel = openCount > 0
-                  ? `${openCount} open${closedCount > 0 ? ` · ${closedCount} closed` : ''}`
-                  : `${closedCount} closed`;
-                return (
-                  <div
-                    key={name}
-                    className="flex items-center gap-3 rounded px-3 py-1.5 flex-shrink-0"
-                    style={{ backgroundColor: '#252429', border: `1px solid ${color}44`, borderLeft: `3px solid ${color}` }}
-                  >
-                    <div>
-                      <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Strategy</div>
-                      <div className="text-xs font-medium font-mono" style={{ color }}>{name}</div>
-                      <div className="text-[9px] text-white mt-0.5">{countLabel}</div>
-                    </div>
-                    <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
-                    <div>
-                      <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Unrealized P/L</div>
-                      {unrealized != null ? (
-                        <div className="text-sm font-mono font-semibold" style={{ color: unrealized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
-                          {unrealized >= 0 ? '+' : ''}{unrealized.toFixed(2)}
-                        </div>
-                      ) : (
-                        <div className="text-sm font-mono text-white">—</div>
-                      )}
-                    </div>
-                    <div className="w-px self-stretch" style={{ backgroundColor: `${color}33` }} />
-                    <div>
-                      <div className="text-[9px] uppercase tracking-widest text-white mb-0.5">Realized P/L</div>
-                      {closedCount > 0 ? (
-                        <div className="text-sm font-mono font-semibold" style={{ color: realized >= 0 ? '#49b3b3' : '#ff5c5c' }}>
-                          {realized >= 0 ? '+' : ''}{realized.toFixed(2)}
-                        </div>
-                      ) : (
-                        <div className="text-sm font-mono text-white">—</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-          </div>
-        );
-      })()}
 
       {/* ── Body ─────────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden p-2 gap-2 min-h-0">
@@ -2203,10 +2537,43 @@ export function CBookPage() {
           </div>
         </div>
 
+        {/* ── DOM Trader Drawer ────────────────────────────────────────
+            Default: collapsed 32px rail with an expand chevron. Click the
+            rail → opens the full panel. Inside the open panel, the header
+            has a close chevron (›) on the far right.
+            Clicking a row in the grid also auto-opens the drawer (see
+            onSelectionChanged).
+            The panel subtree stays mounted in both states (display:none
+            when closed) so order form state (qty, limit, exec log, WS
+            subscriptions) survives the open/close cycle. */}
+        {!domDrawerOpen && (
+          <button
+            onClick={() => setDomDrawerOpen(true)}
+            className="flex flex-col items-center justify-center flex-shrink-0 border border-[#555] rounded transition-colors hover:bg-[#2a292c]"
+            style={{ width: '32px', backgroundColor: '#232225' }}
+            title="Open DOM Trader"
+          >
+            <span style={{ color: '#49b3b3', fontSize: '18px', lineHeight: '1' }}>‹</span>
+            <span
+              className="text-[10px] text-[#999] uppercase tracking-wider mt-2"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', letterSpacing: '0.12em' }}
+            >
+              DOM Trader
+            </span>
+          </button>
+        )}
+
         {/* ── DOM Panel ─────────────────────────────────────────────────────── */}
         <div
           className="flex flex-col border border-[#555] rounded overflow-hidden flex-shrink-0"
-          style={{ width: '300px', backgroundColor: '#232225' }}
+          style={{
+            width: '300px',
+            backgroundColor: '#232225',
+            // display:none hides the panel without unmounting, preserving
+            // form state, WS subscriptions, and the exec log through the
+            // collapse/expand cycle.
+            display: domDrawerOpen ? 'flex' : 'none',
+          }}
         >
 
           {/* Panel header */}
@@ -2233,6 +2600,16 @@ export function CBookPage() {
               <div className="w-2 h-2 rounded-full"
                 style={{ backgroundColor: domLpInfo ? lpDotColor(domLpInfo.state) : '#555' }}
                 title={domLpInfo ? `${domLpId}: ${domLpInfo.state}` : 'No LP'} />
+              {/* Close-drawer chevron. Collapses the panel back to the 32px
+                  rail. Form state and WS subscriptions survive the transition. */}
+              <button
+                onClick={() => setDomDrawerOpen(false)}
+                className="text-[#999] hover:text-white transition-colors ml-1"
+                style={{ fontSize: '18px', lineHeight: '1' }}
+                title="Collapse DOM Trader"
+              >
+                ›
+              </button>
             </div>
           </div>
 
