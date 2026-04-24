@@ -17,6 +17,8 @@ export interface AuthUser {
   role: string;
   role_label: string;
   can_trade: boolean;
+  first_name?: string;
+  last_name?: string;
 }
 
 export const PERM_ORDER = ['NONE', 'VIEW', 'EDIT', 'FULL', 'CRUD', 'SU'] as const;

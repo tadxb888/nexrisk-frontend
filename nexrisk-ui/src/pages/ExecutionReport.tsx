@@ -36,7 +36,11 @@ const gridTheme = themeQuartz.withParams({
 // ══════════════════════════════════════════════════════════════
 // CONSTANTS
 // ══════════════════════════════════════════════════════════════
-const DUMMY_USER = 'Manager';
+// Fallback shown when an order has no identified NexRisk submitter — i.e. it
+// originated outside NexRisk (terminal-placed, LP-side, etc.) or the NOS
+// arrived before C++ started stamping `submitted_by`. Orders placed through
+// the DOM Trader / hedge engine carry submitted_by on the NOS_SENT event.
+const UNKNOWN_SUBMITTER = '—';
 const WS_MAX_RETRIES = 8;
 
 // ── Icons ──────────────────────────────────────────────────────
@@ -215,6 +219,7 @@ interface NosRecord {
   ord_type: string;   // FIX tag 40 code
   tif: string;        // FIX tag 59 code
   nos_ts: number;     // epoch ms
+  submitted_by: string | null;  // NexRisk operator who placed the order, null for external orders
 }
 
 // Build a grid row from a TRADE_CAPTURE_REPORT (35=AE) event.
@@ -246,7 +251,7 @@ function buildRowFromAE(
     nos_time:        corr_nos_ts ? formatSsMs(msToFixTimestamp(corr_nos_ts)) : '—',
     round_trip_ms,
     te_status:       'FILLED',
-    user:            DUMMY_USER,
+    user:            nosRecord?.submitted_by ?? UNKNOWN_SUBMITTER,
     order_id:        ae.order_id,
     exec_id:         ae.exec_id,
     symbol:          ae.symbol,
@@ -277,7 +282,7 @@ function buildPendingRow(nos: NosRecord, lp_id: string): ExecutionReportRow {
     nos_time:        formatSsMs(msToFixTimestamp(nos.nos_ts)),
     round_trip_ms:   null,
     te_status:       'PENDING',
-    user:            DUMMY_USER,
+    user:            nos.submitted_by ?? UNKNOWN_SUBMITTER,
     order_id:        '',
     exec_id:         '',
     symbol:          nos.symbol,
@@ -893,14 +898,20 @@ export function ExecutionReportPage() {
           gridRef.current?.api?.applyTransaction({ update: [updated] });
           return; // handled — do not fall through to type-based handlers
 
-        // ALL fixbridge execution events arrive as type:"EXECUTION_REPORT" because
-        // nexrisk_service overwrites the type for everything on the execution ZMQ topic.
-        // The original payload is always wrapped under msg.data by NexRiskService.cpp:1275.
+        // C++ publishes execution events under msg.type === 'EXECUTION_REPORT'
+        // with the original payload wrapped under msg.data by NexRiskService.
+        // The inner payload distinguishes the sub-type:
         //
-        // NOS_SENT shape:  { type:"EXECUTION_REPORT", lp_id, data:{ cl_ord_id, symbol, side, qty, ... } }
-        // AE fill shape:   { type:"EXECUTION_REPORT", lp_id, data:{ trade_report_id, symbol, side, ... } }
+        //   NOS_SENT  → has data.cl_ord_id (and data.type === 'NOS_SENT' per the
+        //               most recent C++ change). Carries submitted_by stamped
+        //               by the BFF from the authenticated session.
+        //   AE fill   → has data.trade_report_id.
         //
-        // Distinguish by presence of cl_ord_id vs trade_report_id in msg.data.
+        //     { type:"EXECUTION_REPORT", lp_id, data:{ cl_ord_id, symbol, side, qty,
+        //       ord_type, tif, timestamp_ms, submitted_by, ... } }    ← NOS_SENT
+        //     { type:"EXECUTION_REPORT", lp_id, data:{ trade_report_id, symbol,
+        //       side, ... } }                                          ← AE fill
+        //
         } else if (msg.type === 'EXECUTION_REPORT') {
           const lp_id   = msg.lp_id as string ?? '';
           const inner   = msg.data as Record<string, unknown> ?? {};
@@ -915,6 +926,9 @@ export function ExecutionReportPage() {
               ord_type:  (inner.ord_type as string) === 'LIMIT' ? '2' : (inner.ord_type as string) === 'STOP' ? '3' : '1',
               tif:       (inner.tif as string) === 'DAY' ? '0' : (inner.tif as string) === 'IOC' ? '3' : (inner.tif as string) === 'FOK' ? '4' : '1',
               nos_ts:    inner.timestamp_ms as number ?? Date.now(),
+              // Stamped by BFF from authenticated session. Null for orders from
+              // legacy paths; could be "Hedge Engine" for auto-hedges.
+              submitted_by: (inner.submitted_by as string | null | undefined) ?? null,
             };
             const key = `${nosRecord.symbol}|${nosRecord.side}`;
             nosMapRef.current.set(key, nosRecord);

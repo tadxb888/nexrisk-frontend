@@ -114,3 +114,31 @@ export const ROLE_WS_TOPICS: Record<Role, string[]> = {
 export function roleCanSubscribe(role: Role, topic: string): boolean {
   return ROLE_WS_TOPICS[role]?.includes(topic) ?? false;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C++ → BFF role mapping
+//
+// The C++ auth service issues JWTs whose `role` claim uses its own taxonomy
+// ('root', 'administrator', 'broker_dealer', ...) which does not match the
+// BFF's internal Role type ('risk_admin', 'risk_ops', ...). This map
+// translates the incoming string. Unknown values fall back to the most
+// restrictive role (exec_readonly) rather than failing hard — preserves
+// login while denying sensitive capabilities.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CPP_ROLE_MAP: Record<string, Role> = {
+  root:               'risk_admin',
+  administrator:      'risk_admin',
+  sysadmin:           'it_observer',
+  backoffice:         'it_observer',
+  system_dealer:      'risk_admin',
+  broker_dealer:      'risk_admin',
+  risk_manager:       'risk_admin',
+  compliance_officer: 'risk_ops',
+  portfolio_manager:  'risk_ops',
+  executive:          'exec_readonly',
+};
+
+export function mapCppRole(cppRole: string): Role {
+  return CPP_ROLE_MAP[cppRole] ?? 'exec_readonly';
+}

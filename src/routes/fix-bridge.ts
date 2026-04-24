@@ -27,6 +27,40 @@ const auditQuery = z.object({
   limit: z.coerce.number().int().positive().optional(),
 });
 
+// ── Current-operator resolver ─────────────────────────────────
+// The auth plugin (middleware/auth.ts) attaches the authenticated operator
+// to `request.nexriskUser` via the `fastify.authenticate` decorator. Same
+// location the audit middleware reads from. Shape is the `User` type from
+// types/index.ts: { id, email, name, role, capabilities }.
+//
+// Architecture note: the BFF uses cookie-and-session auth. The browser
+// holds only the opaque `nexrisk_session` cookie; the JWT lives server-side
+// in sessionStore. When AUTH_ENABLED=true, fastify.authenticate resolves
+// the session and builds nexriskUser with name = first_name + ' ' + last_name
+// (set by C++ /api/v1/auth/login). When AUTH_ENABLED=false, a hardcoded
+// MOCK_USER is attached — `submitted_by` will always be "Development User".
+
+function resolveSubmitter(request: FastifyRequest): string | null {
+  const user = request.nexriskUser;
+  if (!user) return null;
+  // Prefer human-readable name → email → id
+  if (typeof user.name === 'string' && user.name.trim()) return user.name.trim();
+  if (typeof user.email === 'string' && user.email.trim()) return user.email.trim();
+  if (typeof user.id === 'string' && user.id.trim()) return user.id.trim();
+  return null;
+}
+
+// Inject `submitted_by` into an order-placement body without trusting any
+// client-supplied value — the server's authenticated session is the only
+// source of truth. If the client tried to spoof submitted_by, it's silently
+// overwritten.
+function stampSubmitter(body: unknown, request: FastifyRequest): unknown {
+  const submitter = resolveSubmitter(request);
+  if (!submitter) return body;
+  if (body == null || typeof body !== 'object') return body;
+  return { ...(body as Record<string, unknown>), submitted_by: submitter };
+}
+
 // ── Backend 404 quirk ─────────────────────────────────────────
 // The C++ backend returns HTTP 404 when an in-memory cache is empty
 // (OrderStateMachine, InstrumentCache, PositionCache, FIX message store).
@@ -407,13 +441,29 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // ── Orders ──────────────────────────────────────────────────
-  // C++ backend: POST /api/v1/fix/order  { lp_id, symbol, side, ... }
+  // C++ backend: POST /api/v1/fix/order  { lp_id, symbol, side, ..., submitted_by }
+  //
+  // `submitted_by` is stamped server-side from the authenticated session by
+  // stampSubmitter() — any client-supplied value in request.body is overwritten.
+  // C++ persists this onto the NOS and echoes it back on NOS_SENT execution
+  // events so ExecutionReport.tsx can attribute the order to the operator.
 
   fastify.post(
     '/fix/order',
+    { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      fastify.log.info({ body: request.body }, '[fix] place order');
-      const response = await nexriskApi.post('/api/v1/fix/order', request.body);
+      const body = stampSubmitter(request.body, request);
+      // Diagnostic: if we couldn't resolve a submitter despite the preHandler
+      // completing, log what we saw on request.nexriskUser so the issue can be
+      // traced (misconfig, race, schema drift on the User type, etc.).
+      if (typeof body === 'object' && body !== null && !('submitted_by' in body)) {
+        fastify.log.warn(
+          { nexriskUser: request.nexriskUser ?? null },
+          '[fix] place order — could not resolve submitter; forwarding without submitted_by'
+        );
+      }
+      fastify.log.info({ body }, '[fix] place order');
+      const response = await nexriskApi.post('/api/v1/fix/order', body);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
@@ -421,9 +471,11 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post(
     '/fix/lp/:lp_id/orders',
+    { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
-      const response = await nexriskApi.post(`/api/v1/fix/lp/${lp_id}/orders`, request.body);
+      const body = stampSubmitter(request.body, request);
+      const response = await nexriskApi.post(`/api/v1/fix/lp/${lp_id}/orders`, body);
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }

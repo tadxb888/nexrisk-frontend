@@ -7,6 +7,10 @@ import { randomBytes } from 'crypto';
 export interface SessionUser {
   id: string;
   email: string;
+  /** Present on real login sessions; absent on setup-flow sessions. Added to
+   *  the C++ /api/v1/auth/login response body (AuthEndpoint.cpp L677-678). */
+  first_name?: string;
+  last_name?: string;
   role: string;
   role_label: string;
   can_trade: boolean;

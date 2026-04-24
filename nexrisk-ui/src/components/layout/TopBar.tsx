@@ -152,6 +152,24 @@ function Sparkline({ data, color = '#49b3b3', w = 40, h = 16 }: { data: number[]
   );
 }
 
+// ── Account display helpers ──────────────────────────────────
+// Falls back gracefully when first_name / last_name are absent
+// (e.g. root@taiga.internal, legacy users before the name feature).
+function accountDisplayName(user: { email: string; first_name?: string; last_name?: string } | null): string {
+  if (!user) return 'Account';
+  const full = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
+  return full || user.email;
+}
+
+function accountInitials(user: { email: string; first_name?: string; last_name?: string } | null): string {
+  if (!user) return 'U';
+  const f = user.first_name?.trim()[0];
+  const l = user.last_name?.trim()[0];
+  if (f && l) return (f + l).toUpperCase();
+  if (f)      return f.toUpperCase();
+  return user.email[0]?.toUpperCase() ?? 'U';
+}
+
 // ── KPI strip ────────────────────────────────────────────────
 const kpiData = [
   { label: 'Realized P/L', value: '$16.2K', up: true, delta: '4%', spark: [12500, 14200, 11800, 15600, 16200], color: '#49b3b3' },
@@ -358,9 +376,11 @@ export function TopBar() {
                 className="flex items-center justify-center rounded-full"
                 style={{ width: 26, height: 26, backgroundColor: '#3a3a3e', fontSize: 11, fontWeight: 600, color: '#fff' }}
               >
-                {user?.username?.[0]?.toUpperCase() ?? 'U'}
+                {accountInitials(user)}
               </div>
-              <span style={{ fontSize: 12 }}>{user?.username ?? 'Account'}</span>
+              <span style={{ fontSize: 12, maxWidth: 180 }} className="truncate">
+                {accountDisplayName(user)}
+              </span>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style={{ color: '#bbb' }}>
                 <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
               </svg>
@@ -368,19 +388,49 @@ export function TopBar() {
 
             {accountOpen && (
               <div
-                className="absolute right-0 mt-1 py-1 rounded shadow-lg z-50"
+                className="absolute right-0 mt-1 rounded shadow-lg z-50"
                 style={{
-                  minWidth: 180,
+                  minWidth: 240,
                   backgroundColor: '#2a292c',
                   border: '1px solid #555',
                 }}
               >
-                {/* User info */}
+                {/* Name header */}
                 <div className="px-3 py-2" style={{ borderBottom: '1px solid #3a3a3e' }}>
-                  <div style={{ fontSize: 12, color: '#fff', fontWeight: 500 }}>{user?.username}</div>
-                  <div style={{ fontSize: 10, color: '#aaa', textTransform: 'capitalize' }}>{user?.role}</div>
+                  <div
+                    style={{ fontSize: 13, color: '#fff', fontWeight: 500 }}
+                    className="truncate"
+                    title={accountDisplayName(user)}
+                  >
+                    {accountDisplayName(user)}
+                  </div>
                 </div>
-                {/* Log Out */}
+
+                {/* Details */}
+                <div className="px-3 py-2" style={{ borderBottom: '1px solid #3a3a3e' }}>
+                  <div className="flex items-baseline justify-between gap-3" style={{ marginBottom: 6 }}>
+                    <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Email
+                    </span>
+                    <span
+                      className="font-mono truncate"
+                      style={{ fontSize: 11, color: '#ddd', maxWidth: 170 }}
+                      title={user?.email}
+                    >
+                      {user?.email ?? '—'}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Role
+                    </span>
+                    <span style={{ fontSize: 11, color: '#ddd' }}>
+                      {user?.role_label ?? user?.role ?? '—'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sign out */}
                 <button
                   onClick={() => { setAccountOpen(false); void logout(); }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors text-[#ccc] hover:text-[#ff5c5c] hover:bg-[#3a2020]"
