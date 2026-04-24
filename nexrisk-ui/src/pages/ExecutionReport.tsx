@@ -819,7 +819,26 @@ export function ExecutionReportPage() {
                 nos_sent_ms:       msg.nos_sent_ms || undefined,
               };
 
-              seedRows.push(buildRowFromAE(aeData, lp.lp_id, null));
+              // Legacy rows (placed before C++ started stamping submitted_by)
+              // carry "'" as a placeholder — treat that as null so the grid
+              // falls back to UNKNOWN_SUBMITTER rather than displaying garbage.
+              const rawSubmitter = typeof msg.submitted_by === 'string' ? msg.submitted_by.trim() : '';
+              const submitted_by = rawSubmitter && rawSubmitter !== "'" ? rawSubmitter : null;
+
+              const seedNos: NosRecord | null = submitted_by
+                ? {
+                    clord_id:  msg.cl_ord_id ?? '',
+                    symbol:    msg.symbol    ?? '',
+                    side,
+                    order_qty: 0,
+                    ord_type:  '1',
+                    tif:       '1',
+                    nos_ts:    msg.nos_sent_ms ?? 0,
+                    submitted_by,
+                  }
+                : null;
+
+              seedRows.push(buildRowFromAE(aeData, lp.lp_id, seedNos));
             }
           } catch { /* per-LP non-fatal */ }
         }));
@@ -943,6 +962,11 @@ export function ExecutionReportPage() {
             } else {
               gridRef.current?.api?.applyTransaction({ add: [pendingRow], addIndex: 0 });
             }
+            // Refresh the detail panel if this row is currently selected —
+            // AG Grid mutations don't trigger React re-renders on their own.
+            setSelectedRow((prev) =>
+              prev && prev.trade_report_id === pendingRow.trade_report_id ? pendingRow : prev
+            );
 
           // ── AE fill from TE ────────────────────────────────────
           } else if (inner.trade_report_id) {
@@ -986,6 +1010,14 @@ export function ExecutionReportPage() {
             } else {
               gridRef.current?.api?.applyTransaction({ add: [row], addIndex: 0 });
             }
+            // Refresh the detail panel if this row — or the pending row it
+            // replaced — is currently selected.
+            setSelectedRow((prev) => {
+              if (!prev) return prev;
+              if (prev.trade_report_id === row.trade_report_id) return row;
+              if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
+              return prev;
+            });
           }
 
         // ── TRADE_CAPTURE_REPORT — TE fill (35=AE) ───────────
@@ -1035,6 +1067,14 @@ export function ExecutionReportPage() {
           } else {
             gridRef.current?.api?.applyTransaction({ add: [row], addIndex: 0 });
           }
+          // Refresh the detail panel if this row — or the pending row it
+          // replaced — is currently selected.
+          setSelectedRow((prev) => {
+            if (!prev) return prev;
+            if (prev.trade_report_id === row.trade_report_id) return row;
+            if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
+            return prev;
+          });
         } else if (msg.type === 'SESSION_STATE_CHANGE' || msg.type === 'SESSION_LOGON' || msg.type === 'SESSION_LOGOUT') {
           const lp_id    = msg.lp_id as string | undefined;
           const newState = (msg.session_state ?? msg.state ?? (msg.type === 'SESSION_LOGON' ? 'LOGGED_ON' : 'DISCONNECTED')) as string;
