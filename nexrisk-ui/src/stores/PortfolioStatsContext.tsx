@@ -14,21 +14,20 @@
 //
 // Status by book:
 //   • B-Book — live via mt5.position WebSocket (connectBBookWebSocket).
-//   • A-Book — live via FIX WS POSITION_REPORT, classified by rule_name
-//             from hedge records (lp_position_id → rule_name).
-//   • C-Book — live via FIX WS POSITION_REPORT, positions WITHOUT a
-//             rule_name (i.e. manual: Terminal / DOM Trader). Note we
-//             can't distinguish Terminal vs DOM here — DOM-trader
-//             tagging is owned by CBookPage's posOverrideRef and we
-//             don't touch CBookPage. For Portfolio aggregates that's
-//             fine: both flow into C-Book.
+//             Realized P/L still null pending B-Book daily-stats endpoint.
+//   • A-Book — live via FIX WS POSITION_REPORT (positions / volume /
+//             unrealized) + per-strategy realized P/L accumulated from
+//             POSITION_CLOSED events with rule_name lookup.
+//             Persisted to localStorage so a mid-day refresh keeps the
+//             A vs C split.
+//   • C-Book — live via FIX WS POSITION_REPORT (positions / volume /
+//             unrealized) + realized P/L derived as (lpTotal − A-Book).
+//             lpTotal seeded once via REST (sum of all LPs' daily-stats),
+//             then incremented on each POSITION_CLOSED. Note we can't
+//             distinguish Terminal vs DOM here — DOM-trader tagging is
+//             owned by CBookPage's posOverrideRef. For Portfolio
+//             aggregates that's fine: both flow into C-Book.
 //   • Cost   — placeholder. Pending Commissions + Swaps + Fees endpoint.
-//
-// Realized P/L for A-Book and C-Book is intentionally left null. The
-// CBookPage path requires REST daily-stats backfill plus localStorage
-// persistence for per-strategy realised P/L. Wiring that here is a
-// follow-up — leaving the cell as `—` is more honest than showing
-// "$0.00" until the first close lands after the WS connects.
 // ============================================
 
 import {
@@ -37,6 +36,7 @@ import {
   useState,
   useMemo,
   useEffect,
+  useRef,
   type ReactNode,
 } from 'react';
 
@@ -250,6 +250,46 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   const [fixPositions, setFixPositions] = useState<Map<string, FIXLitePosition>>(new Map());
   const [hedgeRuleMap, setHedgeRuleMap] = useState<Map<string, string>>(new Map());
 
+  // Realised-P/L tracking (cross-LP).
+  //   • lpTotalRealized   — sum of realized_pnl across all LPs for today.
+  //                         Seeded once via REST, then incremented per
+  //                         POSITION_CLOSED event.
+  //   • strategyRealized  — rule_name → cumulative realized today.
+  //                         Built incrementally from POSITION_CLOSED events
+  //                         where the closed position had a rule_name.
+  //                         Hydrated synchronously from localStorage so
+  //                         a mid-day refresh doesn't lose the per-strategy
+  //                         split (synchronous initializer avoids the race
+  //                         between the persist effect and an async load).
+  //   • tradeDate         — the backend's authoritative trade-date (from
+  //                         daily-stats). Triggers strategyRealized clear
+  //                         when the date advances.
+  // C-Book realized = lpTotalRealized − sum(strategyRealized).
+  // Both A-Book and C-Book realized stay null until lpTotalRealized seeds.
+  const STRATEGY_REALIZED_KEY = 'taiga:portfolio-strategy-realized';
+  const [lpTotalRealized,  setLpTotalRealized]  = useState<number | null>(null);
+  const [strategyRealized, setStrategyRealized] = useState<Map<string, number>>(() => {
+    try {
+      const raw = localStorage.getItem(STRATEGY_REALIZED_KEY);
+      if (!raw) return new Map();
+      const parsed = JSON.parse(raw) as { entries?: [string, number][] };
+      return new Map(parsed?.entries ?? []);
+    } catch { return new Map(); }
+  });
+  const [tradeDate, setTradeDate] = useState<string | null>(() => {
+    try {
+      const raw = localStorage.getItem(STRATEGY_REALIZED_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { tradeDate?: string };
+      return parsed?.tradeDate ?? null;
+    } catch { return null; }
+  });
+
+  // Synchronous mirror of hedgeRuleMap so the WS handler can look up
+  // rule_name on a POSITION_CLOSED without a stale-closure issue.
+  const hedgeRuleMapRef = useRef(hedgeRuleMap);
+  useEffect(() => { hedgeRuleMapRef.current = hedgeRuleMap; }, [hedgeRuleMap]);
+
   // ── Hedge records seed (REST, once) ──────────────────────────────────
   // Non-fatal: if unavailable, positions stay C-Book until hedge.fill
   // arrives from the WS.
@@ -270,6 +310,78 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       .catch(() => { /* non-fatal */ });
     return () => { cancelled = true; };
   }, []);
+
+  // Persist strategyRealized + tradeDate to localStorage on every change.
+  // Synchronous useState initializers above hydrate from this same key on
+  // mount, so there's no race between hydration and persistence.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STRATEGY_REALIZED_KEY,
+        JSON.stringify({
+          tradeDate: tradeDate ?? new Date().toISOString().slice(0, 10),
+          entries:   [...strategyRealized.entries()],
+        }),
+      );
+    } catch { /* ignore quota errors */ }
+  }, [strategyRealized, tradeDate]);
+
+  // ── LP list + all-LPs daily-stats backfill (REST, once) ─────────────
+  // Sums realized_pnl across all LPs to seed lpTotalRealized. After this
+  // seed lands, POSITION_CLOSED events keep it incrementally up to date
+  // without further REST traffic (matches WS-first principle).
+  // Drift correction: if missed events cause lpTotalRealized to diverge
+  // from the DB, refreshing the page re-seeds.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/v1/fix/status`)
+      .then(res => (res.ok ? res.json() : null))
+      .then((statusJson: any) => {
+        if (cancelled || !statusJson?.success) return;
+        const lpDict = (statusJson.data?.lps ?? {}) as Record<string, any>;
+        const lpIds = Object.keys(lpDict);
+        if (lpIds.length === 0) {
+          setLpTotalRealized(0);
+          return;
+        }
+        return Promise.all(
+          lpIds.map(id =>
+            fetch(`${API_BASE}/api/v1/fix/daily-stats?lp_id=${encodeURIComponent(id)}`)
+              .then(r => (r.ok ? r.json() : null))
+              .then(j => ({
+                realized:  j?.success && typeof j.data?.realized_pnl === 'number' ? j.data.realized_pnl : 0,
+                tradeDate: j?.success ? (j.data?.trade_date as string | undefined) : undefined,
+              }))
+              .catch(() => ({ realized: 0, tradeDate: undefined as string | undefined })),
+          ),
+        );
+      })
+      .then((results) => {
+        if (cancelled || !results) return;
+        const total = results.reduce((s, r) => s + r.realized, 0);
+        const seenDate = results.find(r => r.tradeDate)?.tradeDate;
+        setLpTotalRealized(total);
+        if (seenDate) setTradeDate(seenDate);
+      })
+      .catch(() => { /* non-fatal — realized P/L cells stay '—' */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Trade-date rollover ──────────────────────────────────────────────
+  // When the backend's tradeDate advances (midnight in the broker's
+  // timezone, or whatever policy nexrisk_service uses to stamp
+  // risk.cbook_closed_positions.trade_date), wipe the per-strategy
+  // realized so today's cards start clean.
+  const tradeDateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tradeDate) return;
+    if (tradeDateRef.current && tradeDateRef.current !== tradeDate) {
+      setStrategyRealized(new Map());
+      setLpTotalRealized(0);
+      try { localStorage.removeItem(STRATEGY_REALIZED_KEY); } catch {}
+    }
+    tradeDateRef.current = tradeDate;
+  }, [tradeDate]);
 
   // ── FIX WebSocket subscription ────────────────────────────────────────
   // Reconnect with exponential back-off (1s → 2s → 4s … cap 30s),
@@ -348,12 +460,38 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // ── POSITION_CLOSED → remove ──────────────────────────────────
+        // ── POSITION_CLOSED → remove + accumulate realized P/L ───────
+        // The event payload carries realized_pnl (and commission/swap,
+        // which we'll wire when the Cost card lands). Route into
+        // strategyRealized if the closed position was an A-Book
+        // (rule_name present in hedgeRuleMap); otherwise it counts
+        // toward C-Book implicitly (cbook = lpTotal − sum(strategy)).
         if (msg.type === 'POSITION_CLOSED') {
           const lpId = msg.lp_id as string | undefined;
           const pid  = (msg.position_id ?? msg.data?.position_id) as string | undefined;
           if (!lpId || !pid) return;
           const key = posKey(lpId, pid);
+
+          // Look up rule_name BEFORE removing from any maps. Once removed
+          // the lookup might still work (we keep hedgeRuleMap entries) but
+          // doing it here mirrors CBookPage's ordering.
+          const ruleName = hedgeRuleMapRef.current.get(pid);
+
+          const d = msg.data ?? msg;
+          const evtPnl = typeof d.realized_pnl === 'number' ? d.realized_pnl : 0;
+          if (evtPnl !== 0) {
+            // LP-wide running total — increment whether A or C.
+            setLpTotalRealized(prev => (prev ?? 0) + evtPnl);
+            // Per-strategy bucket — only when this close was an A-Book hedge.
+            if (ruleName) {
+              setStrategyRealized(prev => {
+                const next = new Map(prev);
+                next.set(ruleName, (next.get(ruleName) ?? 0) + evtPnl);
+                return next;
+              });
+            }
+          }
+
           setFixPositions(prev => {
             if (!prev.has(key)) return prev;
             const next = new Map(prev);
@@ -412,6 +550,14 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   // ── Aggregate A-Book and C-Book ────────────────────────────────────
   // Classification: position has rule_name → A-Book; otherwise C-Book.
   // rule_name is looked up from hedgeRuleMap (REST seed + hedge.fill WS).
+  //
+  // Realized split (matches CBookPage's approach):
+  //   abookRealized = sum of per-strategy realized (built up via WS
+  //                   POSITION_CLOSED, persisted across page refreshes
+  //                   via localStorage)
+  //   cbookRealized = lpTotalRealized − abookRealized
+  // Both stay null until lpTotalRealized has seeded from REST. Once the
+  // backfill lands they show concrete numbers — even if zero.
   const { abook, cbook } = useMemo<{ abook: BookCardStats; cbook: BookCardStats }>(() => {
     let aPos = 0, aBuys = 0, aSells = 0, aVol = 0, aUnrl: number | null = null;
     let cPos = 0, cBuys = 0, cSells = 0, cVol = 0, cUnrl: number | null = null;
@@ -439,19 +585,26 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    const abookRealized: number | null = lpTotalRealized != null
+      ? [...strategyRealized.values()].reduce((s, v) => s + v, 0)
+      : null;
+    const cbookRealized: number | null = lpTotalRealized != null
+      ? lpTotalRealized - (abookRealized ?? 0)
+      : null;
+
     return {
       abook: {
         positions: aPos, buys: aBuys, sells: aSells, volume: aVol,
         unrealized: aUnrl,
-        realized:   null, // TODO: daily-stats backfill + per-strategy WS accumulation
+        realized:   abookRealized,
       },
       cbook: {
         positions: cPos, buys: cBuys, sells: cSells, volume: cVol,
         unrealized: cUnrl,
-        realized:   null, // TODO: daily-stats backfill (LP total − A-Book sum)
+        realized:   cbookRealized,
       },
     };
-  }, [fixPositions, hedgeRuleMap]);
+  }, [fixPositions, hedgeRuleMap, lpTotalRealized, strategyRealized]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // COST — placeholder pending Commissions+Swaps+Fees endpoint
