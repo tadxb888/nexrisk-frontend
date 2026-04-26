@@ -1,10 +1,16 @@
 // ============================================
 // Portfolio Page
-// Tree-style rows with expandable groups
-// MTD / YTD Realized P&L Area Chart below table
-// Wired to:
+// Title-bar summary cards (B-Book / A-Book / C-Book / Cost) + tree-style table.
+// MTD / YTD Realized P&L Area Chart below table.
+//
+// Card data comes from PortfolioStatsContext (WS-driven, no polling).
+// The Provider opens its own MT5 / FIX subscriptions independently of
+// CBookPage so this page works without any CBookPage changes.
+//
+// Table / chart still wired to:
 //   GET /api/v1/portfolio/summary?period=
 //   GET /api/v1/portfolio/pnl-history?from=&to=
+// (Main-page rework is a follow-up.)
 // ============================================
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
@@ -17,17 +23,24 @@ import {
   ResponsiveContainer, ReferenceLine, CartesianGrid
 } from 'recharts';
 
+import {
+  usePortfolioStats,
+  fmtHdrMoney,
+  fmtHdrCompact,
+  pnlColor,
+} from '@/stores/PortfolioStatsContext';
+
 // ======================
 // THEME BASE CONFIG
 // ======================
-const getGridTheme = (zoomLevel: number) => themeQuartz.withParams({
+const gridTheme = themeQuartz.withParams({
   backgroundColor: "#232326",
   browserColorScheme: "dark",
   chromeBackgroundColor: { ref: "foregroundColor", mix: 0.11, onto: "backgroundColor" },
   fontFamily: { googleFont: "IBM Plex Mono" },
-  fontSize: Math.round(12 * zoomLevel / 100),
+  fontSize: 12,
   foregroundColor: "#FFF",
-  headerFontSize: Math.round(14 * zoomLevel / 100),
+  headerFontSize: 14,
 });
 
 // ======================
@@ -379,8 +392,8 @@ function PnlChart({
 export function PortfolioPage() {
   const gridRef = useRef<AgGridReact<PortfolioRow>>(null);
 
-  // Table state
-  const [timePeriod, setTimePeriod] = useState<'today' | 'week' | 'month'>('today');
+  // Table state — period now defaults to 'month' (per user spec)
+  const [timePeriod, setTimePeriod] = useState<'today' | 'week' | 'month'>('month');
   const [rows, setRows] = useState<PortfolioRow[]>([]);
   const [bbookAvailable, setBbookAvailable] = useState(true);
   const [summaryFrom, setSummaryFrom] = useState('');
@@ -389,8 +402,7 @@ export function PortfolioPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Grid state
-  const [zoom, setZoom] = useState(125);
+  // Grid state — zoom slider removed per user spec
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['pnl', 'revenue']));
 
   // Chart state
@@ -403,8 +415,13 @@ export function PortfolioPage() {
   const [chartTo, setChartTo] = useState('');
   const [chartLoading, setChartLoading] = useState(false);
 
-  // Dynamic theme
-  const gridTheme = useMemo(() => getGridTheme(zoom), [zoom]);
+  // ── Title-bar summary cards ───────────────────────────────────
+  // All four cards read from PortfolioStatsContext (mounted in Layout).
+  // The Provider opens its own MT5 / FIX subscriptions independently of
+  // CBookPage, so this page works without any CBookPage modifications.
+  // B-Book is live today; A-Book / C-Book / Cost are placeholders inside
+  // the context — they go live for free here once the context wires them.
+  const { bbook, abook, cbook, cost } = usePortfolioStats();
 
   // ── Fetch summary ──────────────────────────────────────────────
   const fetchSummary = useCallback(async (period: string) => {
@@ -620,66 +637,271 @@ export function PortfolioPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
-      {/* Page Header */}
-      <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-white">Portfolio Summary</h1>
-          <p className="text-xs text-[#999]">P&amp;L and volume metrics across all books</p>
+      {/* ── Row 1: Title + book summary cards ───────────────────────────────
+          Mirrors CBookPage Row 1 (cards strip). Cards share the same teal
+          accent (`#49b3b3`) and cell pattern (label uppercase / value mono).
+            • B-Book — live via mt5.position WS (this file).
+            • A-Book — pending shared FIX hook / aggregate endpoint.
+            • C-Book — pending shared FIX hook / aggregate endpoint.
+            • Cost   — pending Commissions+Swaps+Fees endpoint.
+          P&L cells render `—` when the source isn't wired yet (pnlColor
+          handles the null case as a muted grey). */}
+      <div className="px-4 py-1.5 border-b border-[#808080] flex items-center justify-between gap-2 flex-wrap flex-shrink-0" style={{ backgroundColor: '#1e1e20' }}>
+
+        <div className="flex-shrink-0">
+          <h1 className="text-sm font-semibold text-white leading-tight">Portfolio</h1>
         </div>
 
-        <div className="flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-1.5 flex-wrap">
 
-          {/* Last-updated + manual refresh */}
-          <div className="flex items-center gap-2">
-            {lastUpdatedLabel && (
-              <span className="text-[#606060]">Updated {lastUpdatedLabel}</span>
-            )}
-            <button
-              onClick={() => fetchSummary(timePeriod)}
-              disabled={loading}
-              className="px-2 py-1 rounded text-xs transition-colors"
-              style={{
-                backgroundColor: loading ? '#2a292c' : '#3a3a3c',
-                color: loading ? '#606060' : '#ccc',
-                border: '1px solid #606060',
-              }}
-            >
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </button>
+          {/* ── B-Book card ─────────────────────────────────────────────── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="B-Book: Internalized flow held against the house."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">B-Book</div>
+              <div className="text-xs font-mono text-white">{bbook.positions ?? 0} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-xs font-mono">
+                <span style={{ color: '#49b3b3' }}>{bbook.buys ?? 0}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{bbook.sells ?? 0}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-xs font-mono text-white">
+                {bbook.volume != null ? fmtHdrCompact(bbook.volume) : '—'}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {bbook.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(bbook.unrealized) }}>
+                  {fmtHdrMoney(bbook.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              {bbook.realized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(bbook.realized) }}>
+                  {fmtHdrMoney(bbook.realized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
           </div>
 
-          <div className="w-px h-4 bg-[#808080]" />
+          {/* ── A-Book card ─────────────────────────────────────────────── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="A-Book: positions opened by hedging strategies (automated execution)."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">A-Book</div>
+              <div className="text-xs font-mono text-white">{abook.positions ?? 0} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-xs font-mono">
+                <span style={{ color: '#49b3b3' }}>{abook.buys ?? 0}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{abook.sells ?? 0}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-xs font-mono text-white">
+                {abook.volume != null ? fmtHdrCompact(abook.volume) : '—'}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {abook.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(abook.unrealized) }}>
+                  {fmtHdrMoney(abook.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              {abook.realized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(abook.realized) }}>
+                  {fmtHdrMoney(abook.realized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+          </div>
 
-          {/* Period selector */}
+          {/* ── C-Book card ─────────────────────────────────────────────── */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="C-Book: positions executed manually via Terminal or DOM Trader."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">C-Book</div>
+              <div className="text-xs font-mono text-white">{cbook.positions ?? 0} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-xs font-mono">
+                <span style={{ color: '#49b3b3' }}>{cbook.buys ?? 0}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{cbook.sells ?? 0}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-xs font-mono text-white">
+                {cbook.volume != null ? fmtHdrCompact(cbook.volume) : '—'}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {cbook.unrealized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(cbook.unrealized) }}>
+                  {fmtHdrMoney(cbook.unrealized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              {cbook.realized != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(cbook.realized) }}>
+                  {fmtHdrMoney(cbook.realized)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Cost card ────────────────────────────────────────────────
+              Different shape from the book cards — leftmost cell shows the
+              headline NET (Commissions + Swaps + Fees, earned − charged)
+              with the three category breakdowns to the right. Four cells
+              instead of five so the card reads visually as a different kind
+              of summary. All values colour-coded with pnlColor (positive =
+              revenue, negative = expense). */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="Cost: Commissions + Swaps + Fees, earned by broker − charged to broker."
+          >
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Cost</div>
+              {cost.net != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(cost.net) }}>
+                  {fmtHdrMoney(cost.net)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Commissions</div>
+              {cost.commissions != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(cost.commissions) }}>
+                  {fmtHdrMoney(cost.commissions)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Swaps</div>
+              {cost.swaps != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(cost.swaps) }}>
+                  {fmtHdrMoney(cost.swaps)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Fees</div>
+              {cost.fees != null ? (
+                <div className="text-xs font-mono" style={{ color: pnlColor(cost.fees) }}>
+                  {fmtHdrMoney(cost.fees)}
+                </div>
+              ) : (
+                <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* ── Row 2: Period selector ──────────────────────────────────────────
+          Refresh and Zoom controls dropped per user spec — page is
+          WebSocket-only (no manual refresh) and the global zoom is no
+          longer surfaced here. The lastUpdated indicator stays as
+          informational text driven off the existing summary fetch. */}
+      <div className="px-4 py-1.5 border-b border-[#444] flex items-center gap-4 flex-shrink-0 text-xs" style={{ backgroundColor: '#252527' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-[#aaa]">Period:</span>
           <select
             value={timePeriod}
             onChange={(e) => setTimePeriod(e.target.value as 'today' | 'week' | 'month')}
-            className="bg-[#232225] border border-[#808080] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-[#49b3b3]"
+            className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
           >
             <option value="today">Today</option>
             <option value="week">This Week</option>
             <option value="month">This Month</option>
           </select>
-
-          <div className="w-px h-4 bg-[#808080]" />
-
-          {/* Zoom slider */}
-          <div className="flex items-center gap-2">
-            <span className="text-[#999]">{zoom}%</span>
-            <input
-              type="range"
-              min="100"
-              max="200"
-              value={zoom}
-              onChange={(e) => setZoom(Number(e.target.value))}
-              className="w-20 h-1 rounded-full appearance-none cursor-pointer"
-              style={{
-                WebkitAppearance: 'none',
-                background: `linear-gradient(to right, #49b3b3 0%, #49b3b3 ${zoom - 100}%, #808080 ${zoom - 100}%, #808080 100%)`,
-              }}
-            />
-          </div>
         </div>
+
+        {lastUpdatedLabel && (
+          <span className="text-[#606060] ml-auto">Updated {lastUpdatedLabel}</span>
+        )}
       </div>
 
       {/* Error banner */}
@@ -709,8 +931,8 @@ export function PortfolioPage() {
             defaultColDef={defaultColDef}
             gridOptions={gridOptions}
             onGridReady={onGridReady}
-            headerHeight={Math.round(36 * zoom / 100)}
-            rowHeight={Math.round(26 * zoom / 100)}
+            headerHeight={36}
+            rowHeight={26}
             getRowId={(params) => params.data.id}
             loading={loading && rows.length === 0}
           />

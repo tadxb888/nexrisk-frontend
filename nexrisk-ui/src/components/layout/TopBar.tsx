@@ -1,13 +1,26 @@
 // ============================================
 // TopBar — Primary Navigation
-// taiga branding, horizontal nav sections,
-// pinned favourites, KPI ticker, clock
+//
+// Layout (per Portfolio-redesign spec):
+//   • Top strip (always visible): Pinned tabs on the left,
+//     clock + account dropdown on the right.
+//   • Main strip: Logo, primary nav sections, and a clickable
+//     Portfolio Card on the right (replaces the old KPI ticker).
+//     The Portfolio Card is the global aggregate (B + A + C + Cost,
+//     net of expenses and revenue) and navigates to /portfolio.
 // ============================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/stores/AuthContext';
 import { clsx } from 'clsx';
+
+import {
+  usePortfolioStats,
+  fmtHdrMoney,
+  fmtHdrCompact,
+  pnlColor,
+} from '@/stores/PortfolioStatsContext';
 
 // ── Types ────────────────────────────────────────────────────
 export interface SubItem {
@@ -138,20 +151,6 @@ function findItem(path: string): SubItem | undefined {
   return undefined;
 }
 
-// ── Mini Sparkline ───────────────────────────────────────────
-function Sparkline({ data, color = '#49b3b3', w = 40, h = 16 }: { data: number[]; color?: string; w?: number; h?: number }) {
-  if (!data.length) return null;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * (h - 3) - 1.5}`).join(' ');
-  return (
-    <svg width={w} height={h} className="shrink-0">
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 // ── Account display helpers ──────────────────────────────────
 // Falls back gracefully when first_name / last_name are absent
 // (e.g. root@taiga.internal, legacy users before the name feature).
@@ -170,14 +169,6 @@ function accountInitials(user: { email: string; first_name?: string; last_name?:
   return user.email[0]?.toUpperCase() ?? 'U';
 }
 
-// ── KPI strip ────────────────────────────────────────────────
-const kpiData = [
-  { label: 'Realized P/L', value: '$16.2K', up: true, delta: '4%', spark: [12500, 14200, 11800, 15600, 16200], color: '#49b3b3' },
-  { label: 'Floating P/L', value: '$4.8K',  up: true, delta: '33%', spark: [3200, 2800, 4100, 3600, 4800],   color: '#49b3b3' },
-  { label: 'Net P/L',      value: '$21.0K', up: true, delta: '9%',  spark: [15700, 17000, 15900, 19200, 21000], color: '#66e07a' },
-  { label: 'Volume',       value: '295M',   up: false, delta: '5%', spark: [245, 280, 265, 310, 295],          color: '#e0a020' },
-];
-
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
@@ -189,6 +180,11 @@ export function TopBar() {
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Global Portfolio Card stats. Sourced from PortfolioStatsContext (Layout-
+  // mounted) so the card stays live on every page. The provider owns the WS
+  // subscriptions; this component just reads `total` (B + A + C + Cost).
+  const { total: portfolioStats } = usePortfolioStats();
 
   // Sync pins when SubNav toggles them
   useEffect(() => {
@@ -238,147 +234,83 @@ export function TopBar() {
 
   return (
     <div className="shrink-0 flex flex-col" style={{ userSelect: 'none' }}>
-      {/* ── Pinned favourites bar (only when pins exist) ─── */}
-      {pins.length > 0 && (
-        <div
-          className="flex items-center gap-2 px-4 shrink-0"
-          style={{ height: 28, backgroundColor: '#1c1b1e', borderBottom: '1px solid #3a3a3e' }}
-        >
-          <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>
-            Pinned
-          </span>
-          {pins.map(path => {
-            const item = findItem(path);
-            if (!item) return null;
-            const isActive = location.pathname === path;
-            return (
-              <NavLink
-                key={path}
-                to={path}
-                className="flex items-center gap-1.5 group"
-                style={{
-                  fontSize: 11,
-                  padding: '2px 10px',
-                  borderRadius: 4,
-                  border: `1px solid #6B9AC4`,
-                  color: isActive ? '#c9b87c' : '#fff',
-                  backgroundColor: isActive ? '#2a1f14' : 'transparent',
-                  transition: 'all 0.15s',
-                }}
-              >
-                <span>{item.label}</span>
-                <button
-                  onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(path); }}
-                  style={{
-                    fontSize: 9,
-                    color: '#fff',
-                    marginLeft: 2,
-                    lineHeight: 1,
-                    transition: 'color 0.15s',
-                  }}
-                  className="hover:!text-[#ff5c5c]"
-                  title="Unpin"
-                >
-                  x
-                </button>
-              </NavLink>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ── Main top bar ─────────────────────────────────── */}
-      <header
-        className="flex items-center justify-between px-4 shrink-0"
-        style={{ height: 46, backgroundColor: '#232326', borderBottom: '1px solid #808080' }}
+      {/* ── Top strip — pinned tabs (left) + clock + account (right) ──
+          Always rendered so the clock and account dropdown have a stable
+          home regardless of whether the user has pinned anything. */}
+      <div
+        className="flex items-center gap-2 px-4 shrink-0"
+        style={{ height: 32, backgroundColor: '#1c1b1e', borderBottom: '1px solid #3a3a3e' }}
       >
-        {/* Left — Logo */}
-        <div className="flex items-center shrink-0" style={{ marginRight: 24 }}>
-          <img
-            src="/taiga-logo.png"
-            alt="taiga"
-            style={{ height: 34, objectFit: 'contain' }}
-            draggable={false}
-          />
-        </div>
+        {/* Left: PINNED label + tabs (only when pins exist) */}
+        {pins.length > 0 && (
+          <>
+            <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>
+              Pinned
+            </span>
+            {pins.map(path => {
+              const item = findItem(path);
+              if (!item) return null;
+              const isActive = location.pathname === path;
+              return (
+                <NavLink
+                  key={path}
+                  to={path}
+                  className="flex items-center gap-1.5 group"
+                  style={{
+                    fontSize: 11,
+                    padding: '2px 10px',
+                    borderRadius: 4,
+                    border: `1px solid #6B9AC4`,
+                    color: isActive ? '#c9b87c' : '#fff',
+                    backgroundColor: isActive ? '#2a1f14' : 'transparent',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <span>{item.label}</span>
+                  <button
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(path); }}
+                    style={{
+                      fontSize: 9,
+                      color: '#fff',
+                      marginLeft: 2,
+                      lineHeight: 1,
+                      transition: 'color 0.15s',
+                    }}
+                    className="hover:!text-[#ff5c5c]"
+                    title="Unpin"
+                  >
+                    x
+                  </button>
+                </NavLink>
+              );
+            })}
+          </>
+        )}
 
-        {/* Center — Primary nav sections */}
-        <nav className="flex items-center gap-1 flex-1">
-          {NAV_SECTIONS.map(section => {
-            // Hide sections whose only items the user can't see
-            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
-            if (visibleItems.length === 0) return null;
-
-            const isActive = activeSection?.id === section.id;
-            return (
-              <button
-                key={section.id}
-                onClick={() => handleSectionClick(section)}
-                className={clsx(
-                  'relative px-3 py-1.5 text-[13px] font-medium rounded transition-colors',
-                  isActive
-                    ? 'text-[#c9b87c]'
-                    : 'text-[#ccc] hover:text-white'
-                )}
-              >
-                {section.label}
-                {isActive && (
-                  <div
-                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
-                    style={{ backgroundColor: '#c9b87c' }}
-                  />
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Right — KPI ticker + clock + account */}
-        <div className="flex items-center gap-5 shrink-0">
-          {/* Compact KPI strip */}
-          <div className="hidden xl:flex items-center gap-5">
-            {kpiData.map(k => (
-              <div key={k.label} className="flex items-center gap-2">
-                <div className="flex flex-col">
-                  <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{k.label}</span>
-                  <div className="flex items-baseline gap-1">
-                    <span style={{ fontSize: 12, fontWeight: 600, color: '#fff' }}>{k.value}</span>
-                    <span style={{ fontSize: 9, color: k.up ? '#66e07a' : '#ff5c5c' }}>
-                      {k.up ? '\u25B2' : '\u25BC'}{k.delta}
-                    </span>
-                  </div>
-                </div>
-                <Sparkline data={k.spark} color={k.color} />
-              </div>
-            ))}
-          </div>
-
-          {/* Separator */}
-          <div className="hidden xl:block w-px h-5" style={{ backgroundColor: '#555' }} />
-
+        {/* Right: clock + account dropdown */}
+        <div className="ml-auto flex items-center gap-3 shrink-0">
           {/* Date & Time */}
-          <div className="flex items-center gap-2 text-xs shrink-0">
+          <div className="flex items-center gap-2 shrink-0" style={{ fontSize: 11 }}>
             <span style={{ color: '#bbb' }}>{fmtDate(currentTime)}</span>
             <span className="font-mono" style={{ color: '#fff' }}>{fmt(currentTime)}</span>
           </div>
 
-          {/* Separator */}
-          <div className="w-px h-5" style={{ backgroundColor: '#555' }} />
+          <div className="w-px h-4" style={{ backgroundColor: '#555' }} />
 
           {/* Account dropdown */}
           <div ref={accountRef} className="relative">
             <button
               onClick={() => setAccountOpen(v => !v)}
-              className="flex items-center gap-2 px-2 py-1 rounded transition-colors text-[#ccc] hover:text-white"
+              className="flex items-center gap-2 px-1.5 py-0.5 rounded transition-colors text-[#ccc] hover:text-white"
             >
-              {/* Avatar circle */}
+              {/* Avatar circle — slightly smaller to fit pinned bar height */}
               <div
                 className="flex items-center justify-center rounded-full"
-                style={{ width: 26, height: 26, backgroundColor: '#3a3a3e', fontSize: 11, fontWeight: 600, color: '#fff' }}
+                style={{ width: 22, height: 22, backgroundColor: '#3a3a3e', fontSize: 10, fontWeight: 600, color: '#fff' }}
               >
                 {accountInitials(user)}
               </div>
-              <span style={{ fontSize: 12, maxWidth: 180 }} className="truncate">
+              <span style={{ fontSize: 11, maxWidth: 180 }} className="truncate">
                 {accountDisplayName(user)}
               </span>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style={{ color: '#bbb' }}>
@@ -444,6 +376,117 @@ export function TopBar() {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* ── Main top bar ─────────────────────────────────── */}
+      <header
+        className="flex items-center justify-between px-4 shrink-0"
+        style={{ height: 68, backgroundColor: '#232326', borderBottom: '1px solid #808080' }}
+      >
+        {/* Left — Logo */}
+        <div className="flex items-center shrink-0" style={{ marginRight: 24 }}>
+          <img
+            src="/taiga-logo.png"
+            alt="taiga"
+            style={{ height: 34, objectFit: 'contain' }}
+            draggable={false}
+          />
+        </div>
+
+        {/* Center — Primary nav sections */}
+        <nav className="flex items-center gap-1 flex-1">
+          {NAV_SECTIONS.map(section => {
+            // Hide sections whose only items the user can't see
+            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
+            if (visibleItems.length === 0) return null;
+
+            const isActive = activeSection?.id === section.id;
+            return (
+              <button
+                key={section.id}
+                onClick={() => handleSectionClick(section)}
+                className={clsx(
+                  'relative px-3 py-1.5 text-[15px] font-medium rounded transition-colors',
+                  isActive
+                    ? 'text-[#c9b87c]'
+                    : 'text-[#ccc] hover:text-white'
+                )}
+              >
+                {section.label}
+                {isActive && (
+                  <div
+                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
+                    style={{ backgroundColor: '#c9b87c' }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Right — Global Portfolio Card (B + A + C + Cost aggregate).
+            Clickable; navigates to /portfolio. Yellow side line (#c9b87c)
+            ties the card to the nav system — same colour as the active
+            section indicator and pinned-active tabs. Background stays
+            constant (#252429) on every route so the card reads cleanly
+            against the dark header bar; the active-on-/portfolio cue is
+            already handled by the SubNav and the pinned-tab strip, no
+            need to double up here. */}
+        <div className="flex items-center shrink-0">
+          <NavLink
+            to="/portfolio"
+            title="Open Portfolio (B + A + C + Cost — net of expenses and revenue)"
+            className="inline-flex items-stretch gap-2 rounded px-2 py-2 transition-colors hover:bg-[#2a292e]"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #c9b87c44',
+              borderLeft: '3px solid #c9b87c',
+            }}
+          >
+            <div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Portfolio</div>
+              <div className="text-sm font-mono text-white">{portfolioStats.positions ?? 0} pos</div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+              <div className="text-sm font-mono">
+                <span style={{ color: '#49b3b3' }}>{portfolioStats.buys ?? 0}</span>
+                <span className="text-[#505050]"> / </span>
+                <span style={{ color: '#e0a020' }}>{portfolioStats.sells ?? 0}</span>
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Volume</div>
+              <div className="text-sm font-mono text-white">
+                {portfolioStats.volume != null ? fmtHdrCompact(portfolioStats.volume) : '—'}
+              </div>
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              {portfolioStats.unrealized != null ? (
+                <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.unrealized) }}>
+                  {fmtHdrMoney(portfolioStats.unrealized)}
+                </div>
+              ) : (
+                <div className="text-sm font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+            <div className="w-px self-stretch bg-[#3a3a3e]" />
+            <div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+              {portfolioStats.realized != null ? (
+                <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.realized) }}>
+                  {fmtHdrMoney(portfolioStats.realized)}
+                </div>
+              ) : (
+                <div className="text-sm font-mono text-[#d2d6e2]">—</div>
+              )}
+            </div>
+          </NavLink>
         </div>
       </header>
     </div>
