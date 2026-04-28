@@ -22,6 +22,8 @@ import {
   pnlColor,
 } from '@/stores/PortfolioStatsContext';
 
+import { CardsPeriodSelector } from '@/components/portfolio/CardsPeriodSelector';
+
 // ── Types ────────────────────────────────────────────────────
 export interface SubItem {
   path: string;
@@ -425,15 +427,22 @@ export function TopBar() {
           })}
         </nav>
 
-        {/* Right — Global Portfolio Card (B + A + C + Cost aggregate).
-            Clickable; navigates to /portfolio. Yellow side line (#c9b87c)
-            ties the card to the nav system — same colour as the active
-            section indicator and pinned-active tabs. Background stays
-            constant (#252429) on every route so the card reads cleanly
-            against the dark header bar; the active-on-/portfolio cue is
-            already handled by the SubNav and the pinned-tab strip, no
-            need to double up here. */}
-        <div className="flex items-center shrink-0">
+        {/* Right — Cards Period Selector + Global Portfolio Card.
+
+            • Cards Period Selector (left): controls the period shown in
+              all 5 cards (B / A / C / Cost + this Portfolio Card).
+              Bound to PortfolioStatsContext so the same value drives
+              the page-level selector on Row 2 of the Portfolio page.
+
+            • Portfolio Card (right): clickable; navigates to /portfolio.
+              Yellow side line (#c9b87c) ties the card to the nav system —
+              same colour as the active section indicator and pinned-active
+              tabs. Background stays constant (#252429) on every route so
+              the card reads cleanly against the dark header bar; the
+              active-on-/portfolio cue is already handled by the SubNav
+              and the pinned-tab strip, no need to double up here. */}
+        <div className="flex items-center gap-2 shrink-0">
+          <CardsPeriodSelector compact />
           <NavLink
             to="/portfolio"
             title="Open Portfolio (B + A + C + Cost — net of expenses and revenue)"
@@ -450,12 +459,14 @@ export function TopBar() {
             </div>
             <div className="w-px self-stretch bg-[#3a3a3e]" />
             <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Long / Short</div>
-              <div className="text-sm font-mono">
-                <span style={{ color: '#49b3b3' }}>{portfolioStats.buys ?? 0}</span>
-                <span className="text-[#505050]"> / </span>
-                <span style={{ color: '#e0a020' }}>{portfolioStats.sells ?? 0}</span>
-              </div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Rev. & Exp.</div>
+              {portfolioStats.cost != null ? (
+                <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.cost) }}>
+                  {fmtHdrMoney(portfolioStats.cost)}
+                </div>
+              ) : (
+                <div className="text-sm font-mono text-[#d2d6e2]">—</div>
+              )}
             </div>
             <div className="w-px self-stretch bg-[#3a3a3e]" />
             <div>
@@ -466,7 +477,7 @@ export function TopBar() {
             </div>
             <div className="w-px self-stretch bg-[#3a3a3e]" />
             <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Unrealized P/L (Net)</div>
               {portfolioStats.unrealized != null ? (
                 <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.unrealized) }}>
                   {fmtHdrMoney(portfolioStats.unrealized)}
@@ -477,12 +488,17 @@ export function TopBar() {
             </div>
             <div className="w-px self-stretch bg-[#3a3a3e]" />
             <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
-              {portfolioStats.realized != null ? (
-                <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.realized) }}>
-                  {fmtHdrMoney(portfolioStats.realized)}
-                </div>
-              ) : (
+              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Realized P/L (Net)</div>
+              {portfolioStats.realized != null ? (() => {
+                // Net Realized = realized + cost (commissions + swaps + rebates).
+                // cost is positive when broker earned, negative when charged.
+                const netRealized = portfolioStats.realized + (portfolioStats.cost ?? 0);
+                return (
+                  <div className="text-sm font-mono" style={{ color: pnlColor(netRealized) }}>
+                    {fmtHdrMoney(netRealized)}
+                  </div>
+                );
+              })() : (
                 <div className="text-sm font-mono text-[#d2d6e2]">—</div>
               )}
             </div>

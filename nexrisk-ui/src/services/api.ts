@@ -917,6 +917,123 @@ export function connectBBookWebSocket(
   };
 }
 
+// ============================================================================
+// SNIPPET — add to src/services/api.ts
+//
+// Place near connectBBookWebSocket (around line 894). This snippet defines the
+// types and the connect function for the portfolio.summary WebSocket topic.
+// Does NOT replace anything — it's purely additive.
+// ============================================================================
+
+/** A single per-book block from the portfolio.summary payload. */
+export interface PortfolioWsBookFields {
+  positions:   number;
+  realized:    number;
+  unrealized:  number;
+  volume:      number;
+  commissions: number;
+  swaps:       number;
+  rebates:     number;
+}
+
+/** The data payload pushed for topic "portfolio.summary". */
+export interface PortfolioSummaryData {
+  period:   string;             // "today"
+  from:     string;             // ISO 8601
+  to:       string;             // ISO 8601
+  baseline: string;             // YYYY-MM-DD
+  books: {
+    B: PortfolioWsBookFields;
+    A: PortfolioWsBookFields;
+    C: PortfolioWsBookFields;
+  };
+  total: PortfolioWsBookFields;
+}
+
+export type PortfolioWsEvent =
+  | { type: 'SNAPSHOT';   data: PortfolioSummaryData }
+  | { type: 'subscribed'; data: { topics: string[] } }
+  | { type: 'pong';       data: { timestamp_ms: number } };
+
+/**
+ * Opens a managed WebSocket to the Portfolio Summary feed.
+ * Returns a cleanup function — call from useEffect cleanup to close gracefully.
+ *
+ * Mirrors connectBBookWebSocket exactly (same envelope shape, same topic-based
+ * subscribe). Server pushes "SNAPSHOT" envelopes whenever the underlying data
+ * changes (deal, position, tick).
+ */
+// ============================================================================
+// SNIPPET — REPLACE the existing connectPortfolioWebSocket section in
+// src/services/api.ts with this. The previous version had no period param.
+// ============================================================================
+
+/** A single per-book block from the portfolio.summary payload. */
+export interface PortfolioWsBookFields {
+  positions:   number;
+  realized:    number;
+  unrealized:  number;
+  volume:      number;
+  commissions: number;
+  swaps:       number;
+  rebates:     number;
+}
+
+/** Push payload for topic "portfolio.summary.{period}". */
+export interface PortfolioSummaryData {
+  period:   string;             // "today" | "month"
+  from:     string;             // ISO 8601
+  to:       string;             // ISO 8601
+  baseline: string;             // YYYY-MM-DD
+  books: {
+    B: PortfolioWsBookFields;
+    A: PortfolioWsBookFields;
+    C: PortfolioWsBookFields;
+  };
+  total: PortfolioWsBookFields;
+}
+
+export type PortfolioWsEvent =
+  | { type: 'SNAPSHOT';   data: PortfolioSummaryData }
+  | { type: 'subscribed'; data: { topics: string[] } }
+  | { type: 'pong';       data: { timestamp_ms: number } };
+
+/** Period the frontend can ask for. */
+export type PortfolioWsPeriod = 'today' | 'month';
+
+/**
+ * Open a managed WebSocket to the Portfolio Summary feed for a given period.
+ * Switching periods closes and re-opens this connection (caller responsibility).
+ */
+export function connectPortfolioWebSocket(
+  period: PortfolioWsPeriod,
+  onMessage: (event: PortfolioWsEvent) => void,
+  onStatus?: (status: 'open' | 'closed' | 'error') => void
+): () => void {
+  const ws    = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+  const topic = `portfolio.summary.${period}`;
+
+  ws.onopen = () => {
+    onStatus?.('open');
+    ws.send(JSON.stringify({ type: 'subscribe', topics: [topic] }));
+  };
+
+  ws.onmessage = (ev: MessageEvent<string>) => {
+    try {
+      const envelope = JSON.parse(ev.data);
+      if (envelope.topic && envelope.topic !== topic) return;
+      onMessage({ type: envelope.type, data: envelope.data } as PortfolioWsEvent);
+    } catch { /* ignore parse errors */ }
+  };
+
+  ws.onerror = () => onStatus?.('error');
+  ws.onclose = () => onStatus?.('closed');
+
+  return () => {
+    ws.onclose = null;
+    ws.close(1000, 'Client disconnecting');
+  };
+}
 /** REST endpoint that mirrors WebSocketManager::GetStatsJSON() */
 export const wsApi = {
   getStats: () =>

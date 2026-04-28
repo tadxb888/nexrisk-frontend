@@ -33,13 +33,14 @@ function connectBackend() {
     // receive everything and filter client-side.
     backendWs?.send(JSON.stringify({
       type: 'subscribe',
-      topics: ['mt5.position', 'mt5.node_status', 'mt5.deal']
+      topics: ['mt5.position', 'mt5.node_status', 'mt5.deal',
+               'portfolio.summary.today', 'portfolio.summary.month']
     }));
 
     fastifyRef?.log.info('[MT5 WS] Backend connected — fetching snapshot');
     try {
-      const nodesRes = await nexriskApi.get<{ nodes: { id: number; node_name: string; connection_status: string; is_enabled: boolean }[] }>('/api/v1/mt5/nodes');
-      if (!nodesRes.ok || !nodesRes.data) return;
+      const nodesRes = await nexriskApi.get<{ nodes: { id: number; node_name: string; connection_status: string; is_enabled: boolean }[] }>
+('/api/v1/mt5/nodes');                                                                                                                           if (!nodesRes.ok || !nodesRes.data) return;
       // Filter by is_enabled only — connection_status from backend is unreliable.
       const connected = nodesRes.data.nodes.filter(n => n.is_enabled !== false);
       const allPositions: unknown[] = [];
@@ -59,8 +60,11 @@ function connectBackend() {
 
   backendWs.on('message', (data: WebSocket.RawData) => {
     try {
-      const msg = JSON.parse(data.toString()) as { type?: string };
-      if (msg.type === "SNAPSHOT") return;
+      const msg = JSON.parse(data.toString()) as { type?: string; topic?: string };
+      // Skip SNAPSHOTs only for mt5.position — that one is rebuilt locally
+      // via REST above. SNAPSHOTs for any other topic (portfolio.summary,
+      // future topics) must pass through to browser clients.
+      if (msg.type === "SNAPSHOT" && msg.topic === "mt5.position") return;
       if (msg.type === "ping") { backendWs?.send(JSON.stringify({ type: "pong", timestamp_ms: Date.now() })); return; }
     } catch { /**/ }
     const frame = data.toString();

@@ -27,7 +27,7 @@ import { authRoutes } from './routes/auth.js';
 import { usersRoutes } from './routes/users.js';
 import { auditLogRoutes } from './routes/audit-log.js';
 import { reportsRoutes } from './routes/reports.js';
-
+import { chartsRoutes } from './routes/charts.js';
 /**
  * Create and configure Fastify server
  */
@@ -166,6 +166,7 @@ async function buildServer() {
       await api.register(calendarRoutes);
       await api.register(auditLogRoutes);
       await api.register(reportsRoutes);
+      await api.register(chartsRoutes);
     },
     { prefix: '/api/v1' }
   );
