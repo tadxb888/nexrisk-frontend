@@ -7,6 +7,7 @@ import { clsx } from 'clsx';
 
 import { BBookCharts } from '@/components/charts/BBookCharts';
 import { mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAPI, type BBookWsEvent } from '@/services/api';
+import { fmtHdrMoney, fmtHdrCompact, pnlColor, usePortfolioStats } from '@/stores/PortfolioStatsContext';
 
 // ======================
 // THEME (Quartz dark)
@@ -52,13 +53,6 @@ export type BBookStreamMsg = {
 // WS CONNECTION STATUS
 // ======================
 type WsStatus = 'connecting' | 'live' | 'reconnecting' | 'error';
-
-const WS_BADGE: Record<WsStatus, { color: string; label: string }> = {
-  connecting:   { color: '#e0a020', label: 'Connecting…'   },
-  live:         { color: '#66e07a', label: 'Live'           },
-  reconnecting: { color: '#e0a020', label: 'Reconnecting…' },
-  error:        { color: '#ff5c5c', label: 'Disconnected'  },
-};
 
 // ======================
 // FIELD MAPPING
@@ -195,12 +189,25 @@ export function BBookPage() {
   const [activeNodes, setActiveNodes] = useState<MT5NodeAPI[]>([]);
   const [wsStatus,    setWsStatus]    = useState<WsStatus>('connecting');
   const [error,       setError]       = useState<string | null>(null);
-  const [lastEventAt, setLastEventAt] = useState<Date | null>(null);
+  // lastEventAt: setter only — value no longer surfaced in UI but kept so that
+  // future debug overlays / LP sync indicators can read it without re-wiring.
+  const [, setLastEventAt] = useState<Date | null>(null);
 
   // Filter state
   const [groupInput,   setGroupInput]   = useState('');
   const [symbolInput,  setSymbolInput]  = useState('');
-  const [filterServer, setFilterServer] = useState<string>('ALL');
+  // Defaults to '' until the master node is resolved, then snaps to the master's name.
+  // No "All Servers" option — single-node-at-a-time only.
+  const [filterServer, setFilterServer] = useState<string>('');
+
+  // Lots / Units toggle for the Volume cell on the B-Book card.
+  const [volumeDisplayMode, setVolumeDisplayMode] = useState<'Lots' | 'Units'>('Lots');
+
+  // Period-scoped values (Realized P/L, Cost components, Unrealized P/L delta,
+  // C-Book volume for the hedge ratio) come from the shared Portfolio summary
+  // hook. The TopBar period selector ("Today" / "This Month") drives both this
+  // page and the Portfolio page from the same state — no local subscription.
+  const portfolio = usePortfolioStats();
 
   // Row index for O(1) upsert/remove
   const rowIndexRef = useRef<Map<string, BBookPosition>>(new Map());
@@ -219,7 +226,15 @@ export function BBookPage() {
   // One-time node list fetch (nodes don't change at position frequency)
   useEffect(() => {
     mt5Api.getNodes()
-      .then(({ nodes }) => setActiveNodes(nodes.filter(n => n.connection_status === 'CONNECTED')))
+      .then(({ nodes }) => {
+        const connected = nodes.filter(n => n.connection_status === 'CONNECTED');
+        setActiveNodes(connected);
+        // Default the selector to the MASTER node. If for any reason no node
+        // is flagged as master, fall back to the first connected node so the
+        // page still renders something sensible.
+        const master = connected.find(n => n.is_master) ?? connected[0];
+        if (master) setFilterServer(prev => prev === '' ? master.node_name : prev);
+      })
       .catch(() => { /* non-fatal — node badges just won't show */ });
   }, []);
 
@@ -294,7 +309,7 @@ export function BBookPage() {
   const uniqueLogins  = useMemo(() => Array.from(new Set(positions.map(p => String(p.login)))).sort(), [positions]);
   const uniqueSymbols = useMemo(() => Array.from(new Set(positions.map(p => p.symbol))).sort(), [positions]);
   const uniqueGroups  = useMemo(() => Array.from(new Set(positions.map(p => p.group).filter(Boolean))).sort(), [positions]);
-  const uniqueServers = useMemo(() => ['ALL', ...activeNodes.map(n => n.node_name).sort()], [activeNodes]);
+  const uniqueServers = useMemo(() => activeNodes.map(n => n.node_name).sort(), [activeNodes]);
 
   // ── Filtered positions ──────────────────────────────────────
   const filteredPositions = useMemo(() => {
@@ -308,7 +323,10 @@ export function BBookPage() {
         if (!matchesGroup && !matchesLogin) return false;
       }
       if (sTerm && !p.symbol.toUpperCase().includes(sTerm)) return false;
-      if (filterServer !== 'ALL' && p.server !== filterServer) return false;
+      // filterServer is empty only during the initial load (before the master
+      // node has been resolved). In that brief window, show everything; once
+      // the selector snaps to the master, this filter narrows to that node.
+      if (filterServer !== '' && p.server !== filterServer) return false;
       return true;
     });
   }, [positions, groupInput, symbolInput, filterServer]);
@@ -428,19 +446,54 @@ export function BBookPage() {
     const totalPnL  = src.reduce((s, p) => s + p.profit, 0);
     const totalSwap = src.reduce((s, p) => s + (p.swap ?? 0), 0);
     const totalComm = src.reduce((s, p) => s + (p.commission ?? 0), 0);
+    const totalLots = src.reduce((s, p) => s + p.volume, 0);
+    // Units = lots × contract size. We don't have per-symbol contract sizes
+    // wired into the page yet — assume the FX standard 100,000 for now.
+    // For symbols where this is wrong (XAU, BTC, indices), the Units number
+    // will be off until per-symbol contract sizes are surfaced.
+    const totalUnits = totalLots * 100_000;
     return {
       total:       src.length,
       buyCount:    src.filter(p => p.type === 'BUY').length,
       sellCount:   src.filter(p => p.type === 'SELL').length,
-      totalVolume: src.reduce((s, p) => s + p.volume, 0),
+      totalVolume: totalLots,
+      totalUnits,
       totalPnL,
       netPnL:      totalPnL + totalSwap + totalComm,
       hedgedCount: src.filter(p => p.hedge !== 'No').length,
     };
   }, [filteredPositions]);
 
-  const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '' || filterServer !== 'ALL';
-  const badge = WS_BADGE[wsStatus];
+  const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '';
+
+  // ── Period-scoped derived values for the B-Book card ─────────────────────
+  // Source: usePortfolioStats() — the same hook the Portfolio page uses.
+  // Period follows the TopBar selector (Today / This Month). Each value is
+  // null when the WS hasn't snapped yet, and the card shows '—' for those.
+  //
+  // Unrealized P/L is already period-scoped on the wire:
+  //   period_unrealized = live_floating - baseline_unrealized_eod
+  // where the baseline is yesterday's EOD for Today, last-day-of-prev-month
+  // for This Month. Computed in PortfolioBroadcaster.cpp.
+  const periodCost = useMemo(() => {
+    const c = portfolio.bbook.commissions;
+    const s = portfolio.bbook.swaps;
+    const r = portfolio.bbook.rebates;
+    if (c == null && s == null && r == null) return null;
+    return (c ?? 0) + (s ?? 0) + (r ?? 0);
+  }, [portfolio.bbook.commissions, portfolio.bbook.swaps, portfolio.bbook.rebates]);
+
+  // Hedge Ratio = C-Book volume / B-Book volume × 100, both for the selected
+  // period. Same-units comparison (both are lots from the broadcaster), so
+  // the Lots/Units toggle doesn't affect the ratio. Returns null when either
+  // side hasn't loaded; '' when B-volume is zero (rendered as the "- -" placeholder).
+  const hedgeRatioPct: number | '' | null = useMemo(() => {
+    const bVol = portfolio.bbook.volume;
+    const cVol = portfolio.cbook.volume;
+    if (bVol == null || cVol == null) return null;
+    if (bVol === 0) return '';
+    return (cVol / bVol) * 100;
+  }, [portfolio.bbook.volume, portfolio.cbook.volume]);
 
   // ======================
   // RENDER
@@ -448,64 +501,115 @@ export function BBookPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
-      {/* Page Header */}
-      <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between">
-        <div>
+      {/* Page Header — title on left, B-Book card right-aligned */}
+      <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between gap-4">
+        <div className="shrink-0">
           <h1 className="text-lg font-semibold text-white">B-Book</h1>
-          <p className="text-xs text-[#999]">Internalized flow — Live positions held against the house</p>
         </div>
 
-        <div className="flex items-center gap-6 text-xs">
-          {/* Node badges — one per active node */}
-          {activeNodes.length > 0 && (
-            <>
-              <div className="flex items-center gap-2">
-                {activeNodes.map(n => (
-                  <div key={n.id} className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#66e07a]" />
-                    <span className="text-[#999] font-mono text-[10px]">{n.node_name}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="w-px h-4 bg-[#808080]" />
-            </>
-          )}
-
-          {/* Stats */}
-          <div><span className="text-[#999]">Positions:</span><span className="ml-1 font-mono text-white">{stats.total}</span></div>
-          <div className="w-px h-4 bg-[#808080]" />
-          <div><span className="text-[#999]">Long / Short:</span><span className="ml-1 font-mono"><span className="text-[#49b3b3]">{stats.buyCount}</span><span className="text-[#505050]"> / </span><span className="text-[#e0a020]">{stats.sellCount}</span></span></div>
-          <div><span className="text-[#999]">Volume:</span><span className="ml-1 font-mono text-white">{stats.totalVolume.toFixed(2)} lots</span></div>
+        {/* ── B-Book card — 7 cells: title | Long/Short | Volume | Unrealized | Realized | Cost | Hedge Ratio ──
+           Live cells (positions, Long/Short, Volume) reflect open positions right now.
+           Period cells (Unrealized/Realized/Cost/Hedge Ratio) follow the TopBar period selector. */}
+        <div
+          className="inline-flex items-stretch gap-2 rounded px-2 py-1 ml-auto"
+          style={{
+            backgroundColor: '#252429',
+            border: '1px solid #49b3b344',
+            borderLeft: '3px solid #49b3b3',
+          }}
+          title="B-Book card. Live cells reflect open positions; Unrealized/Realized P/L, Cost and Hedge Ratio follow the period selector in the top bar."
+        >
+          {/* Cell 1 — Card name + position count */}
           <div>
-            <span className="text-[#999]">Float P&amp;L:</span>
-            <span className={clsx('ml-1 font-mono', stats.totalPnL >= 0 ? 'text-[#66e07a]' : 'text-[#ff5c5c]')}>
-              {stats.totalPnL >= 0 ? '' : '-'}${Math.abs(stats.totalPnL).toFixed(2)}
-            </span>
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">B-Book</div>
+            <div className="text-xs font-mono text-white">{stats.total} pos</div>
           </div>
+          <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+          {/* Cell 2 — Long / Short */}
           <div>
-            <span className="text-[#999]">Net P&amp;L:</span>
-            <span className={clsx('ml-1 font-mono', stats.netPnL >= 0 ? 'text-[#66e07a]' : 'text-[#ff5c5c]')}>
-              {stats.netPnL >= 0 ? '' : '-'}${Math.abs(stats.netPnL).toFixed(2)}
-            </span>
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Long / Short</div>
+            <div className="text-xs font-mono">
+              <span style={{ color: '#49b3b3' }}>{stats.buyCount}</span>
+              <span className="text-[#505050]"> / </span>
+              <span style={{ color: '#e0a020' }}>{stats.sellCount}</span>
+            </div>
           </div>
-          <div><span className="text-[#999]">Hedged:</span><span className="ml-1 font-mono text-white">{stats.hedgedCount}</span></div>
+          <div className="w-px self-stretch bg-[#3a3a3e]" />
 
-          <div className="w-px h-4 bg-[#808080]" />
-
-          {/* WS status badge + manual refresh */}
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: badge.color }} />
-            <span className="font-mono text-[10px]" style={{ color: badge.color }}>{badge.label}</span>
-            {lastEventAt && wsStatus === 'live' && (
-              <span className="text-[#666] font-mono text-[10px]">{lastEventAt.toLocaleTimeString()}</span>
-            )}
+          {/* Cell 3 — Volume (Lots / Units toggle).
+             Title rendered as a <button> styled to match neighboring <div> titles
+             (block, p-0, leading-tight, bg-transparent) so the row baseline aligns.
+             Painted in the brand teal #49b3b3 to signal it's clickable. */}
+          <div>
             <button
-              onClick={fetchPositions}
-              className="text-[10px] text-[#999] hover:text-white transition-colors ml-1"
-              title="Force full refresh via REST"
+              type="button"
+              onClick={() => setVolumeDisplayMode(m => m === 'Lots' ? 'Units' : 'Lots')}
+              className="block p-0 m-0 mb-0.5 leading-tight bg-transparent border-0 text-[10px] uppercase tracking-wider hover:opacity-80 transition-opacity cursor-pointer"
+              style={{ color: '#49b3b3' }}
+              title="Click to toggle between Lots and Units"
             >
-              ↻
+              Volume ({volumeDisplayMode})
             </button>
+            <div className="text-xs font-mono text-white">
+              {volumeDisplayMode === 'Lots'
+                ? fmtHdrCompact(stats.totalVolume, '')
+                : fmtHdrCompact(stats.totalUnits, '')}
+            </div>
+          </div>
+          <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+          {/* Cell 4 — Unrealized P/L (period-scoped: live floating - baseline_eod) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
+            {portfolio.bbook.unrealized != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(portfolio.bbook.unrealized) }}>
+                {fmtHdrMoney(portfolio.bbook.unrealized)}
+              </div>
+            ) : (
+              <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+            )}
+          </div>
+          <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+          {/* Cell 5 — Realized P/L (period rollup) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
+            {portfolio.bbook.realized != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(portfolio.bbook.realized) }}>
+                {fmtHdrMoney(portfolio.bbook.realized)}
+              </div>
+            ) : (
+              <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+            )}
+          </div>
+          <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+          {/* Cell 6 — Cost (period: commissions + swaps + rebates) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Cost</div>
+            {periodCost != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(periodCost) }}>
+                {fmtHdrMoney(periodCost)}
+              </div>
+            ) : (
+              <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+            )}
+          </div>
+          <div className="w-px self-stretch bg-[#3a3a3e]" />
+
+          {/* Cell 7 — Hedge Ratio (period: C-Book vol / B-Book vol, %) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Hedge Ratio</div>
+            {hedgeRatioPct === null ? (
+              <div className="text-xs font-mono text-[#d2d6e2]">—</div>
+            ) : hedgeRatioPct === '' ? (
+              <div className="text-xs font-mono text-[#d2d6e2]">- -</div>
+            ) : (
+              <div className="text-xs font-mono text-white">
+                {hedgeRatioPct.toFixed(1)}%
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -556,12 +660,12 @@ export function BBookPage() {
           onChange={(e) => setFilterServer(e.target.value)}
           className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
         >
-          {uniqueServers.map(s => <option key={s} value={s}>{s === 'ALL' ? 'All Servers' : s}</option>)}
+          {uniqueServers.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
         {hasActiveFilters && (
           <button
-            onClick={() => { setGroupInput(''); setSymbolInput(''); setFilterServer('ALL'); }}
+            onClick={() => { setGroupInput(''); setSymbolInput(''); }}
             className="text-xs text-[#999] hover:text-white transition-colors"
           >
             ✕ Clear
