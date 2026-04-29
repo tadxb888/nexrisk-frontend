@@ -22,16 +22,13 @@ import {
   AbcNetVolumeIcon,
 } from '../icons/ChartIcons';
 
-import {
-  MostTradedSymbolsChart,
-  PortfolioPerformanceChart,
-  SymbolsHedgeChart,
-  CostRevenuesExpensesChart,
-  TopHoldersChart,
-  AbcNetVolumeChart,
-} from './ChartPlaceholders';
-
-import { Chart2Combination } from './Chart2Combination';
+import { Chart1MostTradedSymbols }    from './Chart1MostTradedSymbols';
+import { Chart2Combination }          from './Chart2Combination';
+import { Chart3PortfolioPerformance } from './Chart3PortfolioPerformance';
+import { Chart4SymbolsHedge }         from './Chart4SymbolsHedge';
+import { Chart5CostRevenuesExpenses } from './Chart5CostRevenuesExpenses';
+import { Chart6TopHolders }           from './Chart6TopHolders';
+import { Chart7NetVolume }            from './Chart7NetVolume';
 
 // ── Period domain ───────────────────────────────────────────────
 // The full set of period keys any chart can support. Per-chart
@@ -45,16 +42,25 @@ export type ChartPeriod =
   | 'last_month'
   | 'h1'
   | 'h2'
-  | 'this_year';
+  | 'this_year'
+  // Trailing-N-months periods. Used by Chart 5 (Cost: Revenues &
+  // Expenses) which is monthly-aggregated by design — calendar
+  // periods like "today" and "this_week" are meaningless for it.
+  | 'trailing_3m'
+  | 'trailing_6m'
+  | 'trailing_12m';
 
 export const PERIOD_LABEL: Record<ChartPeriod, string> = {
-  today:       'Today',
-  this_week:   'This Week',
-  this_month:  'This Month',
-  last_month:  'Last Month',
-  h1:          'H1 (Jan–Jun)',
-  h2:          'H2 (Jul–Dec)',
-  this_year:   'This Year',
+  today:         'Today',
+  this_week:     'This Week',
+  this_month:    'This Month',
+  last_month:    'Last Month',
+  h1:            'H1 (Jan–Jun)',
+  h2:            'H2 (Jul–Dec)',
+  this_year:     'This Year',
+  trailing_3m:   'Last 3 Months',
+  trailing_6m:   'Last 6 Months',
+  trailing_12m:  'Last 12 Months',
 };
 
 // ── Per-chart props passed to chart components ──────────────────
@@ -112,11 +118,11 @@ export const CHART_REGISTRY: ChartEntry[] = [
     defaultPeriod: 'this_month',
     periodOptions: ['today', 'this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
     Icon:          MostTradedSymbolsIcon,
-    Component:     MostTradedSymbolsChart,
+    Component:     Chart1MostTradedSymbols,
   },
   {
     id:            'abc-combination',
-    label:         'A/B/C Combination',
+    label:         'Realised P/L per Book',
     description:   'Realised P/L across A, B and C books — daily for prior days, hourly for today.',
     defaultPeriod: 'this_month',
     periodOptions: ['today', 'this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
@@ -125,51 +131,51 @@ export const CHART_REGISTRY: ChartEntry[] = [
   },
   {
     id:            'portfolio-performance',
-    label:         'Portfolio Performance',
-    description:   'Realized P/L across business days of the period.',
+    label:         'Portfolio Performance - Cumulative P/L',
+    description:   'Cumulative realised P/L over the selected period. Green positive, red negative.',
     defaultPeriod: 'this_month',
     periodOptions: ['today', 'this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
     Icon:          PortfolioPerformanceIcon,
-    Component:     PortfolioPerformanceChart,
+    Component:     Chart3PortfolioPerformance,
   },
   {
     id:             'symbols-hedge',
     label:          'Symbols Hedge',
-    description:    'Hedge coverage % per symbol; orange = over-hedge.',
+    description:    'Per-symbol B-Book volume with Coverage (A+C) drawn inside.',
     defaultPeriod:  'this_month',
     periodOptions:  ['today', 'this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
     hasHedgeToggle: true,
     Icon:           SymbolsHedgeIcon,
-    Component:      SymbolsHedgeChart,
+    Component:      Chart4SymbolsHedge,
   },
   {
     id:            'cost-revenues-expenses',
     label:         'Cost: Revenues & Expenses',
     thumbnailLabel:'Revenues & Expenses',
-    description:   'Commissions, swaps, rebates — last 6 months. Negative = broker expense.',
-    defaultPeriod: 'this_month',
-    periodOptions: ['this_month'],
+    description:   'Monthly commission, swap, net revenue and LP commission paid. Negative = broker expense.',
+    defaultPeriod: 'trailing_3m',
+    periodOptions: ['trailing_3m', 'trailing_6m', 'trailing_12m'],
     Icon:          CostRevenuesExpensesIcon,
-    Component:     CostRevenuesExpensesChart,
+    Component:     Chart5CostRevenuesExpenses,
   },
   {
     id:            'top-holders',
     label:         'Top 30 Holders by Gross Volume',
     thumbnailLabel:'Top 30 Holders',
-    description:   'Top 30 logins by long / short / total volume.',
+    description:   'Top 30 logins by gross traded volume — month-to-date (period fixed backend-side).',
     defaultPeriod: 'this_month',
     periodOptions: ['this_month'],
     Icon:          TopHoldersIcon,
-    Component:     TopHoldersChart,
+    Component:     Chart6TopHolders,
   },
   {
     id:            'abc-net-volume',
     label:         'A/B/C Net Volume',
-    description:   'Share of net volume across A, B and C books.',
+    description:   'Snapshot of net volume across A, B and C books. Click a slice to see contributing symbols.',
     defaultPeriod: 'this_month',
     periodOptions: ['this_month'],
     Icon:          AbcNetVolumeIcon,
-    Component:     AbcNetVolumeChart,
+    Component:     Chart7NetVolume,
   },
 ];
 

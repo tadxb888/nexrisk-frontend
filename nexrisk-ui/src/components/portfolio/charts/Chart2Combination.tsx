@@ -1,27 +1,33 @@
 // ============================================
-// Chart2Combination — A/B/C Combination
+// Chart2Combination — A/B/C Combination (3 synchronized stacked charts)
 //
-// Spec (Ross's word doc + clarifications):
-//   • 3 lines: A-Book / B-Book / C-Book Realised P/L on shared X-axis.
-//   • y-axis: Realised P/L (USD).
-//   • x-axis behaviour depends on period:
-//     - Today           → hourly buckets (00:01 hour till current hour).
-//     - Multi-day       → daily points for prior days + today's hourly
-//                         portion appended at the right edge.
-//   • Default period: This Month.
-//   • Full period set: Today / This Week / This Month / Last Month /
-//                      H1 / H2 / This Year.
-//   • No floating tiles, no top strip — chart fills the panel.
+// Spec: matches the Highcharts "synchronized-charts" demo
+// (https://www.highcharts.com/demo/highcharts/synchronized-charts).
 //
-// Data sources:
-//   • Today period           → /api/v1/charts/hourly-pnl  (hours[])
-//   • Multi-day periods      → /api/v1/portfolio/pnl-history (daily prior)
-//                              + /api/v1/charts/hourly-pnl (today's hours)
-//                              merged into a single timeline.
+// Layout:
+//   Three vertically-stacked LineCharts, equal height (1/3 each):
+//     • Top    — B-Book (yellow)
+//     • Middle — A-Book (teal)
+//     • Bottom — C-Book (orange)
+//   Each panel has its own independent Y-axis so the smaller books
+//   are still readable when B-Book has 100x larger swings.
+//   X-axis is shared across the three (same data points, same labels).
 //
-// Polling lifecycle (Q4): only the visible chart polls. Mount = start
-// 30s interval; unmount or period change = clear interval + abort
-// in-flight fetch.
+// Synchronized cursor:
+//   When the user hovers one panel, a vertical cursor line appears at
+//   the same X-index on the OTHER two panels too. Implemented via a
+//   shared `activeIndex` state held at the parent level — each panel
+//   receives the index, draws a ReferenceLine at that X, and reports
+//   its own mouse moves up to the parent.
+//
+// Data:
+//   Same dual-source pattern as the previous Chart 2 implementation:
+//     • Period = today           → /api/v1/charts/hourly-pnl  (hourly)
+//     • Period = multi-day       → /api/v1/portfolio/pnl-history (daily)
+//                                  + /api/v1/charts/hourly-pnl  (today's hours)
+//   Merged into a single timeline shared across the three panels.
+//
+// Polling: 30s while visible (cancel on unmount or period change).
 // ============================================
 
 import { useEffect, useRef, useState } from 'react';
@@ -32,8 +38,8 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
+  ReferenceLine,
 } from 'recharts';
 
 import type { ChartComponentProps } from './registry';
@@ -46,25 +52,22 @@ import {
 const POLL_INTERVAL_MS = 30_000;
 
 // Brand colours per book.
-const COLOR_B = '#c9b87c';   // yellow — primary
-const COLOR_A = '#4ecdc4';   // teal — hedge
-const COLOR_C = '#f4a261';   // orange — manual
+const COLOR_B = '#c9b87c';
+const COLOR_A = '#4ecdc4';
+const COLOR_C = '#f4a261';
 
 // ── Format helpers ─────────────────────────────────────────────
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
-/** Tick formatter — date for daily points, "HH:00" for hourly. */
-function fmtTick(point: TimelinePoint): string {
-  const d = new Date(point.ts);
-  if (point.granularity === 'hour') {
+function fmtTickLabel(ts: number, granularity: 'day' | 'hour'): string {
+  const d = new Date(ts);
+  if (granularity === 'hour') {
     return `${pad2(d.getUTCHours())}:00`;
   }
-  // daily — show "Apr 15"
   const month = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
   return `${month} ${d.getUTCDate()}`;
 }
 
-/** Compact money: $1.2k / -$3.4M / $0 — Y-axis ticks. */
 function fmtMoney(n: number | null | undefined): string {
   if (n == null) return '—';
   const abs = Math.abs(n);
@@ -75,10 +78,8 @@ function fmtMoney(n: number | null | undefined): string {
 }
 
 // ── Unified timeline shape ─────────────────────────────────────
-// Each point on the chart, regardless of source. `granularity` lets
-// the tick formatter render daily and hourly portions distinctly.
 interface TimelinePoint {
-  ts:          number;            // ms epoch — natural numeric X-axis
+  ts:          number;            // ms epoch — natural numeric X
   label:       string;            // pre-formatted tick label
   granularity: 'day' | 'hour';
   b_book:      number;
@@ -86,14 +87,13 @@ interface TimelinePoint {
   c_book:      number;
 }
 
-// ── Data loader ────────────────────────────────────────────────
+// ── Data loader (unchanged behaviour from previous Chart 2) ────
 async function loadTimeline(period: string): Promise<TimelinePoint[]> {
-  // Today-only: just hourly.
   if (period === 'today') {
     const hr = await fetchHourlyPnl();
     return hr.hours.map(h => ({
       ts:          new Date(h.hour).getTime(),
-      label:       '',                          // filled at render
+      label:       fmtTickLabel(new Date(h.hour).getTime(), 'hour'),
       granularity: 'hour' as const,
       b_book:      h.b_book,
       a_book:      h.a_book,
@@ -101,48 +101,45 @@ async function loadTimeline(period: string): Promise<TimelinePoint[]> {
     }));
   }
 
-  // Multi-day: daily prior days + today's hourly portion.
   const range = periodToDateRange(period as any);
-  const fromDate = range.from.slice(0, 10);   // YYYY-MM-DD
+  const fromDate = range.from.slice(0, 10);
   const toDate   = range.to.slice(0, 10);
 
   const [daily, hourly] = await Promise.all([
     fetchPnlHistory({ from: fromDate, to: toDate }),
-    fetchHourlyPnl(),    // hourly-pnl is always today's window — backend default
+    fetchHourlyPnl(),
   ]);
 
-  // Today's date string for filtering daily points.
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  // Daily points for prior days only (skip today — replaced by hourly).
   const priorDays: TimelinePoint[] = daily.points
     .filter(p => p.date < todayStr)
-    .map(p => ({
-      // Anchor daily points at noon UTC so they sort cleanly between
-      // 00:00-of-this-day and 00:00-of-next-day, and won't collide with
-      // the first hourly tick.
-      ts:          new Date(`${p.date}T12:00:00Z`).getTime(),
-      label:       '',
-      granularity: 'day' as const,
-      // Defensive against the legacy `bbook` (no underscore) field — backend
-      // is being migrated to `b_book` per Q8. Either-or, never both populated.
-      b_book:      p.b_book ?? (p as any).bbook ?? 0,
-      a_book:      p.a_book ?? 0,
-      c_book:      p.c_book ?? 0,
-    }));
+    .map(p => {
+      // Daily points anchored at noon UTC for clean sort.
+      const ts = new Date(`${p.date}T12:00:00Z`).getTime();
+      return {
+        ts,
+        label:       fmtTickLabel(ts, 'day'),
+        granularity: 'day' as const,
+        // Defensive: backend transitionally still emits legacy `bbook`.
+        b_book:      p.b_book ?? (p as any).bbook ?? 0,
+        a_book:      p.a_book ?? 0,
+        c_book:      p.c_book ?? 0,
+      };
+    });
 
-  // Today's hourly points.
-  const todayHours: TimelinePoint[] = hourly.hours.map(h => ({
-    ts:          new Date(h.hour).getTime(),
-    label:       '',
-    granularity: 'hour' as const,
-    b_book:      h.b_book,
-    a_book:      h.a_book,
-    c_book:      h.c_book,
-  }));
+  const todayHours: TimelinePoint[] = hourly.hours.map(h => {
+    const ts = new Date(h.hour).getTime();
+    return {
+      ts,
+      label:       fmtTickLabel(ts, 'hour'),
+      granularity: 'hour' as const,
+      b_book:      h.b_book,
+      a_book:      h.a_book,
+      c_book:      h.c_book,
+    };
+  });
 
-  // Sort by timestamp — daily points (noon) interleave correctly with
-  // any future hours of today.
   return [...priorDays, ...todayHours].sort((a, b) => a.ts - b.ts);
 }
 
@@ -152,8 +149,11 @@ export function Chart2Combination({ period }: ChartComponentProps) {
   const [loading, setLoading] = useState<boolean>(true);
   const [error,   setError]   = useState<string | null>(null);
 
-  // Cancel in-flight fetch on period change / unmount to prevent
-  // stale responses from clobbering fresh state.
+  // Synchronized cursor — null means "no panel hovered". Set by the
+  // panel currently under the mouse via onMouseMove; cleared on
+  // onMouseLeave. Read by all three panels to draw the ReferenceLine.
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -202,41 +202,162 @@ export function Chart2Combination({ period }: ChartComponentProps) {
     );
   }
 
-  // Decorate each point with its tick label.
-  const data = points.map(p => ({ ...p, label: fmtTick(p) }));
+  // All-zero detector for the pipeline-pending overlay.
+  const allZero =
+    points.every(p => p.a_book === 0 && p.b_book === 0 && p.c_book === 0);
+
+  // Panel descriptors — same data array, different dataKey + color
+  // per panel. Top panel keeps the X-axis hidden (label-less), middle
+  // also; only the bottom panel renders the X-axis labels (saves
+  // vertical space and matches the Highcharts demo).
+  const panels = [
+    { dataKey: 'b_book' as const, name: 'B-Book', color: COLOR_B, showXAxis: false },
+    { dataKey: 'a_book' as const, name: 'A-Book', color: COLOR_A, showXAxis: false },
+    { dataKey: 'c_book' as const, name: 'C-Book', color: COLOR_C, showXAxis: true  },
+  ];
+
+  return (
+    <div className="h-full w-full flex flex-col gap-1 relative">
+      {panels.map(panel => (
+        <div key={panel.dataKey} className="flex-1 min-h-0">
+          <SyncPanel
+            data={points}
+            dataKey={panel.dataKey}
+            name={panel.name}
+            color={panel.color}
+            showXAxis={panel.showXAxis}
+            activeIndex={activeIndex}
+            onActiveIndexChange={setActiveIndex}
+          />
+        </div>
+      ))}
+
+      {allZero && (
+        <div
+          className="absolute top-2 right-2 px-2 py-1 rounded font-mono text-[10px]"
+          style={{
+            backgroundColor: '#252429',
+            border: '1px solid #c9b87c66',
+            color: '#c9b87c',
+            pointerEvents: 'none',
+          }}
+        >
+          All values $0 — daily P&L pipeline pending
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SyncPanel — one of the three stacked charts ────────────────
+interface SyncPanelProps {
+  data:                TimelinePoint[];
+  dataKey:             'b_book' | 'a_book' | 'c_book';
+  name:                string;
+  color:               string;
+  showXAxis:           boolean;
+  activeIndex:         number | null;
+  onActiveIndexChange: (idx: number | null) => void;
+}
+
+function SyncPanel({
+  data,
+  dataKey,
+  name,
+  color,
+  showXAxis,
+  activeIndex,
+  onActiveIndexChange,
+}: SyncPanelProps) {
+  // Recharts gives us activeTooltipIndex on every mouse-move event; we
+  // bubble it to the parent via onActiveIndexChange. Other panels read
+  // back through `activeIndex` and draw the ReferenceLine.
+  const handleMove = (state: any) => {
+    if (state && state.activeTooltipIndex != null) {
+      onActiveIndexChange(state.activeTooltipIndex);
+    }
+  };
+  const handleLeave = () => onActiveIndexChange(null);
+
+  // The label at the synced index — drives ReferenceLine x-coordinate.
+  const activeLabel =
+    activeIndex != null && activeIndex >= 0 && activeIndex < data.length
+      ? data[activeIndex].label
+      : null;
 
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart
         data={data}
-        margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
+        margin={{ top: 4, right: 16, bottom: showXAxis ? 16 : 0, left: 0 }}
+        onMouseMove={handleMove}
+        onMouseLeave={handleLeave}
       >
         <CartesianGrid strokeDasharray="3 3" stroke="#3a3a3c" />
         <XAxis
           dataKey="label"
           stroke="#808080"
-          tick={{ fill: '#d2d6e2', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+          tick={
+            showXAxis
+              ? { fill: '#d2d6e2', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }
+              : false
+          }
+          axisLine={showXAxis}
+          tickLine={showXAxis}
+          height={showXAxis ? 20 : 0}
           minTickGap={32}
         />
         <YAxis
           tickFormatter={fmtMoney}
           stroke="#808080"
-          tick={{ fill: '#d2d6e2', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+          tick={{ fill: '#d2d6e2', fontSize: 10, fontFamily: 'IBM Plex Mono, monospace' }}
           width={64}
+          // Each panel scales independently — readable even when other
+          // books have very different magnitudes.
+          domain={['auto', 'auto']}
+          label={{
+            value:    name,
+            angle:    -90,
+            position: 'insideLeft',
+            offset:   10,
+            style: {
+              fill:       color,
+              fontSize:   11,
+              fontFamily: 'IBM Plex Mono, monospace',
+              fontWeight: 600,
+              textAnchor: 'middle',
+            },
+          }}
         />
         <Tooltip
           contentStyle={{
             backgroundColor: '#252429',
-            border: '1px solid #3a3a3c',
-            fontFamily: 'IBM Plex Mono, monospace',
-            fontSize: 12,
+            border:          '1px solid #3a3a3c',
+            fontFamily:      'IBM Plex Mono, monospace',
+            fontSize:        12,
           }}
-          formatter={(value: number, name: string) => [fmtMoney(value), name]}
+          formatter={(value: number) => [fmtMoney(value), name]}
+          // Hide cursor here — we draw our own ReferenceLine for sync.
+          cursor={false}
         />
-        <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }} />
-        <Line type="monotone" dataKey="b_book" name="B-Book" stroke={COLOR_B} strokeWidth={2} dot={false} />
-        <Line type="monotone" dataKey="a_book" name="A-Book" stroke={COLOR_A} strokeWidth={2} dot={false} />
-        <Line type="monotone" dataKey="c_book" name="C-Book" stroke={COLOR_C} strokeWidth={2} dot={false} />
+        {/* Synchronized cursor — drawn in EVERY panel at the same
+            X-label, regardless of which panel the mouse is over. */}
+        {activeLabel != null && (
+          <ReferenceLine
+            x={activeLabel}
+            stroke="#ffffff66"
+            strokeWidth={1}
+            ifOverflow="extendDomain"
+          />
+        )}
+        <Line
+          type="monotone"
+          dataKey={dataKey}
+          stroke={color}
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
       </LineChart>
     </ResponsiveContainer>
   );
