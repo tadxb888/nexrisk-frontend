@@ -925,58 +925,47 @@ export function connectBBookWebSocket(
 // Does NOT replace anything — it's purely additive.
 // ============================================================================
 
-/** A single per-book block from the portfolio.summary payload. */
+/** A single per-book block from the portfolio.summary.{period} payload. */
 export interface PortfolioWsBookFields {
-  positions:   number;
-  realized:    number;
-  unrealized:  number;
-  volume:      number;
-  commissions: number;
-  swaps:       number;
-  rebates:     number;
+  positions:    number;
+  realized:     number;
+  unrealized:   number;
+  /** Gross traded volume over the period (open legs + close legs), in lots. */
+  volume:       number;
+  /** Gross traded volume in MT5 contract-size units (lots × contract size). */
+  volume_notional: number;
+  /** Broker-direction long volume, in lots. For B-Book this is the SUM of
+   *  client SELL position volumes (broker takes opposite side). For A and C
+   *  this is the broker's own long-side volume from risk.hedge_records. */
+  long_volume:  number;
+  /** Broker-direction short volume, in lots. Mirror of long_volume. */
+  short_volume: number;
+  /** Per-book: long_volume - short_volume.
+   *  For Portfolio (total): straight sum of A+B+C broker-direction volumes,
+   *  representing firm directional lean. POSITIVE = net long lean.
+   *  Hedge coverage uses a separate field (hedge_direction) on the total. */
+  net_volume:   number;
+  /** Notional equivalents of long_volume / short_volume / net_volume.
+   *  Used when the consumer toggles to "Notional" units mode. */
+  long_volume_notional:  number;
+  short_volume_notional: number;
+  net_volume_notional:   number;
+  commissions:  number;
+  swaps:        number;
+  rebates:      number;
 }
 
-/** The data payload pushed for topic "portfolio.summary". */
-export interface PortfolioSummaryData {
-  period:   string;             // "today"
-  from:     string;             // ISO 8601
-  to:       string;             // ISO 8601
-  baseline: string;             // YYYY-MM-DD
-  books: {
-    B: PortfolioWsBookFields;
-    A: PortfolioWsBookFields;
-    C: PortfolioWsBookFields;
-  };
-  total: PortfolioWsBookFields;
-}
-
-export type PortfolioWsEvent =
-  | { type: 'SNAPSHOT';   data: PortfolioSummaryData }
-  | { type: 'subscribed'; data: { topics: string[] } }
-  | { type: 'pong';       data: { timestamp_ms: number } };
-
-/**
- * Opens a managed WebSocket to the Portfolio Summary feed.
- * Returns a cleanup function — call from useEffect cleanup to close gracefully.
- *
- * Mirrors connectBBookWebSocket exactly (same envelope shape, same topic-based
- * subscribe). Server pushes "SNAPSHOT" envelopes whenever the underlying data
- * changes (deal, position, tick).
- */
-// ============================================================================
-// SNIPPET — REPLACE the existing connectPortfolioWebSocket section in
-// src/services/api.ts with this. The previous version had no period param.
-// ============================================================================
-
-/** A single per-book block from the portfolio.summary payload. */
-export interface PortfolioWsBookFields {
-  positions:   number;
-  realized:    number;
-  unrealized:  number;
-  volume:      number;
-  commissions: number;
-  swaps:       number;
-  rebates:     number;
+/** Total block on the portfolio.summary payload. Same shape as per-book plus
+ *  hedge-coverage metrics that only make sense at portfolio level. */
+export interface PortfolioWsTotalFields extends PortfolioWsBookFields {
+  /** Hedge Direction = (A.net + C.net) − B.net, in lots.
+   *  POSITIVE = OVER-hedged (hedges exceed B-Book exposure).
+   *  NEGATIVE = under-hedged (B-Book exposure exceeds hedges).
+   *  ZERO     = fully hedged.
+   *  Distinct from net_volume which is straight-sum directional lean. */
+  hedge_direction:          number;
+  /** Notional equivalent of hedge_direction (lots × contract size summed). */
+  hedge_direction_notional: number;
 }
 
 /** Push payload for topic "portfolio.summary.{period}". */
@@ -990,7 +979,7 @@ export interface PortfolioSummaryData {
     A: PortfolioWsBookFields;
     C: PortfolioWsBookFields;
   };
-  total: PortfolioWsBookFields;
+  total: PortfolioWsTotalFields;
 }
 
 export type PortfolioWsEvent =

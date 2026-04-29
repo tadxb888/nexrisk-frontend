@@ -58,14 +58,30 @@ type VolumeMode = 'lots' | 'notional';
 const HEADER_ROW = 36;
 const DATA_ROW   = 34;
 
-const ROWS: Array<{ key: string; label: string; kind: 'pnl' | 'count' | 'volume' }> = [
-  { key: 'netReal',     label: 'Net Real P/L',  kind: 'pnl'    },
-  { key: 'netUnrl',     label: 'Net Unrl P/L',  kind: 'pnl'    },
-  { key: 'positions',   label: 'Positions',     kind: 'count'  },
-  { key: 'volume',      label: 'Volume',        kind: 'volume' },
-  { key: 'commissions', label: 'Commissions',   kind: 'pnl'    },
-  { key: 'swaps',       label: 'Swaps',         kind: 'pnl'    },
-  { key: 'rebates',     label: 'Rebates',       kind: 'pnl'    },
+const ROWS: Array<{ key: string; label: string; kind: 'pnl' | 'count' | 'volume' | 'netVolume' | 'hedgeDirection' | 'netPositions' }> = [
+  { key: 'netReal',        label: 'Net Real P/L',     kind: 'pnl'            },
+  // Unrealized P/L — period-scoped, computed broker-side as
+  //   live_unrealized − baseline_eod_unrealized
+  // (yesterday for Today, last day of previous month for This Month).
+  // Cost is NOT subtracted — Unrealized is the change in floating P/L over
+  // the period, separate from realized cost-of-trading. This row is
+  // intentionally NOT named "Net Unrl P/L" because there is no Net concept
+  // for unrealized — only for realized which IS net of cost.
+  { key: 'unrl',           label: 'Unrl P/L',         kind: 'pnl'            },
+  { key: 'positions',      label: 'Positions',        kind: 'count'          },
+  // Net Positions = (A.positions + C.positions) − B.positions = Coverage − B.
+  // Same formula as Hedge Direction but applied to position COUNTS rather
+  // than lot-volumes. Per-book cells render "—" since the (A+C)−B
+  // relationship only exists at portfolio level.
+  { key: 'netPositions',   label: 'Net Positions',    kind: 'netPositions'   },
+  { key: 'volume',         label: 'Volume',           kind: 'volume'         },
+  { key: 'longVolume',     label: 'Long Vol',         kind: 'volume'         },
+  { key: 'shortVolume',    label: 'Short Vol',        kind: 'volume'         },
+  { key: 'netVolume',      label: 'Net Vol',          kind: 'netVolume'      },
+  { key: 'hedgeDirection', label: 'Hedge Direction',  kind: 'hedgeDirection' },
+  { key: 'commissions',    label: 'Commissions',      kind: 'pnl'            },
+  { key: 'swaps',          label: 'Swaps',            kind: 'pnl'            },
+  { key: 'rebates',        label: 'Rebates',          kind: 'pnl'            },
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -74,29 +90,66 @@ function sumOrNull(vals: (number | null)[]): number | null {
   return present.length === 0 ? null : present.reduce((s, v) => s + v, 0);
 }
 
-function netPL(gross: number | null, comm: number | null, swp: number | null, rbt: number | null) {
-  return sumOrNull([gross, comm, swp, rbt]);
+// Net Realized P/L = Realized − Cost, where Cost = commissions + swaps + rebates.
+// Cost components are stored as POSITIVE magnitudes by the backend
+// (BookSnapshotWriter aggregates `std::abs(deal->Commission())` etc.) — they
+// represent the broker's actual outflow regardless of which book is the cost
+// payer/receiver. The frontend subtracts them from gross to land at net.
+//
+// Uniform across all books: B-Book, A-Book, C-Book, Portfolio. The semantic
+// of the resulting number differs per book (B-Book net realized is broker
+// revenue minus broker outlays; A/C net realized is hedge P/L minus
+// LP-charged costs) but the formula is identical.
+function netRealized(realized: number | null,
+                      commissions: number | null,
+                      swaps: number | null,
+                      rebates: number | null): number | null {
+  if (realized == null && commissions == null && swaps == null && rebates == null) {
+    return null;
+  }
+  const cost = (commissions ?? 0) + (swaps ?? 0) + (rebates ?? 0);
+  return (realized ?? 0) - cost;
 }
 
 interface ColumnStats {
-  netReal:     number | null;
-  netUnrl:     number | null;
-  positions:   number | null;
-  volume:      number | null;
-  commissions: number | null;
-  swaps:       number | null;
-  rebates:     number | null;
+  netReal:        number | null;
+  unrl:           number | null;
+  positions:      number | null;
+  /** Only populated for the Portfolio column (= (A+C) − B). Per-book columns
+   *  leave null (rendered as "—") since (A+C)−B is inherently a relationship
+   *  between books and has no per-book value. Same convention as hedgeDirection. */
+  netPositions:   number | null;
+  volume:         number | null;
+  longVolume:     number | null;
+  shortVolume:    number | null;
+  netVolume:      number | null;
+  /** Only populated for the Portfolio column. Per-book columns leave null
+   *  (rendered as "—") since (A+C)−B is inherently a relationship between
+   *  books and has no per-book value. */
+  hedgeDirection: number | null;
+  commissions:    number | null;
+  swaps:          number | null;
+  rebates:        number | null;
 }
 
 function rollUp(stats: BookCardStats, volumeMode: VolumeMode): ColumnStats {
+  // Mode switch:
+  //   lots     → read raw lot fields
+  //   notional → read notional fields (lots × MT5 contract size)
+  const inLots = volumeMode === 'lots';
   return {
-    netReal:     netPL(stats.realized,   stats.commissions, stats.swaps, stats.rebates),
-    netUnrl:     netPL(stats.unrealized, stats.commissions, stats.swaps, stats.rebates),
-    positions:   stats.positions,
-    volume:      volumeMode === 'lots' ? stats.volume : stats.volumeNotional,
-    commissions: stats.commissions,
-    swaps:       stats.swaps,
-    rebates:     stats.rebates,
+    netReal:        netRealized(stats.realized, stats.commissions, stats.swaps, stats.rebates),
+    unrl:           stats.unrealized,
+    positions:      stats.positions,
+    netPositions:   null,   // per-book — see ColumnStats comment
+    volume:         inLots ? stats.volume       : stats.volume_notional,
+    longVolume:     inLots ? stats.long_volume  : stats.long_volume_notional,
+    shortVolume:    inLots ? stats.short_volume : stats.short_volume_notional,
+    netVolume:      inLots ? stats.net_volume   : stats.net_volume_notional,
+    hedgeDirection: null,   // per-book — see ColumnStats comment
+    commissions:    stats.commissions,
+    swaps:          stats.swaps,
+    rebates:        stats.rebates,
   };
 }
 
@@ -107,20 +160,45 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
   // need persistence (cheap to flip again).
   const [volumeMode, setVolumeMode] = useState<VolumeMode>('lots');
 
-  const allCosts = sumOrNull([
-    bbook.commissions, bbook.swaps, bbook.rebates,
-    abook.commissions, abook.swaps, abook.rebates,
-    cbook.commissions, cbook.swaps, cbook.rebates,
-  ]);
+  const inLots = volumeMode === 'lots';
+
+  // Net Positions = (A.positions + C.positions) − B.positions = Coverage − B.
+  // Same hedge-coverage logic as Hedge Direction but applied to position
+  // counts. Null if any input is null (consumer renders "—").
+  const netPositionsValue =
+    (abook.positions == null || bbook.positions == null || cbook.positions == null)
+      ? null
+      : (abook.positions + cbook.positions) - bbook.positions;
+
   const portfolio: ColumnStats = {
-    netReal:     sumOrNull([total.realized,   allCosts]),
-    netUnrl:     sumOrNull([total.unrealized, allCosts]),
+    // Net Realized = Realized − Cost (uniform across all books).
+    // Uses the same netRealized helper as the per-book rows for consistency.
+    netReal:     netRealized(total.realized, total.commissions, total.swaps, total.rebates),
+    // Unrealized — direct from total.unrealized (already period-scoped on
+    // the wire as live − baseline_eod). Cost is NOT subtracted: Unrealized
+    // is the floating-P/L delta over the period, separate from cost-of-trading.
+    unrl:        total.unrealized,
     positions:   total.positions,
-    volume:      volumeMode === 'lots' ? total.volume : total.volumeNotional,
-    commissions: allCosts,
-    swaps:       null,  // Portfolio aggregates the cost categories into one value
-    rebates:     null,  // (in Commissions cell). Per-category Portfolio totals
-                        // can be split here later if Ross wants them.
+    netPositions: netPositionsValue,
+    volume:      inLots ? total.volume       : total.volume_notional,
+    // Long/Short/Net at portfolio level = straight sum across A+B+C of the
+    // per-book broker-direction volumes. Net Vol indicates firm directional
+    // LEAN (positive = net long lean, negative = net short lean) — distinct
+    // from hedge coverage, which is shown in the dedicated Hedge Direction row.
+    longVolume:  inLots ? total.long_volume  : total.long_volume_notional,
+    shortVolume: inLots ? total.short_volume : total.short_volume_notional,
+    netVolume:   inLots ? total.net_volume   : total.net_volume_notional,
+    // Hedge Direction = (A.net + C.net) − B.net.
+    // Positive = over-hedged, Negative = under-hedged, Zero = fully hedged.
+    hedgeDirection: inLots ? total.hedge_direction : total.hedge_direction_notional,
+    // Cost categories as separate Portfolio totals.
+    // Each is the straight sum across A+B+C of that category, served on the
+    // wire by PortfolioBroadcaster. The Portfolio column thus shows three
+    // distinct cost lines that match the per-book columns visually rather
+    // than collapsing them all into one "Commissions" cell.
+    commissions: total.commissions,
+    swaps:       total.swaps,
+    rebates:     total.rebates,
   };
 
   const columns: Array<{ kind: 'parent' | 'child'; label: string; stats: ColumnStats; tooltip?: string }> = [
@@ -249,6 +327,60 @@ function ValueCell({
 
   if (row.kind === 'volume') {
     return <span className="text-[14px] font-mono text-white">{fmtHdrCompact(value)}</span>;
+  }
+
+  if (row.kind === 'netVolume') {
+    // Net Vol = long − short (per-book) or straight sum across A+B+C
+    // (Portfolio). Indicates DIRECTIONAL LEAN — positive = net long, negative
+    // = net short. Neutral coloring; not a risk signal in itself.
+    // (Hedge coverage is the Hedge Direction row below.)
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const absValue = Math.abs(value);
+    return (
+      <span className="text-[14px] font-mono text-white">
+        {sign}{fmtHdrCompact(absValue)}
+      </span>
+    );
+  }
+
+  if (row.kind === 'hedgeDirection') {
+    // Hedge Direction = (A.net + C.net) − B.net.
+    //   positive → OVER-hedged: hedge books exceed B-Book exposure (capital drag)
+    //   negative → under-hedged: B-Book exposure exceeds hedges (market risk)
+    //   zero     → fully hedged
+    // Amber for over, dim teal for under — same convention used on the
+    // B-Book card hedge ratio.
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const absValue = Math.abs(value);
+    const color = value > 0 ? '#e0a020' : value < 0 ? '#49b3b3' : '#d2d6e2';
+    const tooltip =
+      value > 0 ? `Over-hedged by ${fmtHdrCompact(absValue)} — broker net LONG via hedges`
+      : value < 0 ? `Under-hedged by ${fmtHdrCompact(absValue)} — broker net SHORT exposure`
+      :            'Fully hedged — no net exposure';
+    return (
+      <span className="text-[14px] font-mono" style={{ color }} title={tooltip}>
+        {sign}{fmtHdrCompact(absValue)}
+      </span>
+    );
+  }
+
+  if (row.kind === 'netPositions') {
+    // Net Positions = (A.positions + C.positions) − B.positions.
+    // Same hedge-coverage convention as Hedge Direction, applied to position
+    // counts rather than lot-volumes. Same color scheme so the visual
+    // language carries from one row to the other.
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const absValue = Math.abs(value);
+    const color = value > 0 ? '#e0a020' : value < 0 ? '#49b3b3' : '#d2d6e2';
+    const tooltip =
+      value > 0 ? `Over-hedged by ${absValue} positions — A+C exceed B-Book count`
+      : value < 0 ? `Under-hedged by ${absValue} positions — B-Book exceeds A+C count`
+      :            'Position counts balanced — A+C = B';
+    return (
+      <span className="text-[14px] font-mono" style={{ color }} title={tooltip}>
+        {sign}{absValue} pos
+      </span>
+    );
   }
 
   // pnl

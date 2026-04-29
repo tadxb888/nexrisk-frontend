@@ -24,6 +24,7 @@ import {
   connectPortfolioWebSocket,
   type PortfolioWsEvent,
   type PortfolioWsBookFields,
+  type PortfolioWsTotalFields,
   type PortfolioWsPeriod,
 } from '@/services/api';
 
@@ -35,7 +36,24 @@ export interface BookCardStats {
   positions:      number | null;
   buys:           number | null;
   sells:          number | null;
+  /** Gross traded volume over the period (lots). */
   volume:         number | null;
+  /** Gross traded volume in notional (lots × MT5 contract size). */
+  volume_notional: number | null;
+  /** Broker-direction long volume (lots). */
+  long_volume:    number | null;
+  /** Broker-direction short volume (lots). */
+  short_volume:   number | null;
+  /** long_volume - short_volume (per-book). For Portfolio: directional lean
+   *  via straight sum across A+B+C. POSITIVE = net long lean. */
+  net_volume:     number | null;
+  /** Notional equivalents — used by the consumer when "Notional" mode is selected. */
+  long_volume_notional:  number | null;
+  short_volume_notional: number | null;
+  net_volume_notional:   number | null;
+  /** Legacy field name retained for backward compat with older renderers
+   *  that look up volumeNotional (camelCase). Will be removed once those
+   *  renderers are updated to read volume_notional. */
   volumeNotional: number | null;
   unrealized:     number | null;
   realized:       number | null;
@@ -46,7 +64,10 @@ export interface BookCardStats {
 
 export const EMPTY_BOOK_STATS: BookCardStats = {
   positions: null, buys: null, sells: null,
-  volume: null, volumeNotional: null,
+  volume: null, volume_notional: null,
+  long_volume: null, short_volume: null, net_volume: null,
+  long_volume_notional: null, short_volume_notional: null, net_volume_notional: null,
+  volumeNotional: null,
   unrealized: null, realized: null,
   commissions: null, swaps: null, rebates: null,
 };
@@ -66,7 +87,22 @@ export interface TotalCardStats {
   positions:      number | null;
   buys:           number | null;
   sells:          number | null;
+  /** Gross traded volume over the period (lots). Straight sum across A+B+C. */
   volume:         number | null;
+  volume_notional: number | null;
+  /** Broker-direction long volume — straight sum across A+B+C. */
+  long_volume:    number | null;
+  short_volume:   number | null;
+  /** Net Vol — directional lean (long − short straight sum). */
+  net_volume:     number | null;
+  long_volume_notional:  number | null;
+  short_volume_notional: number | null;
+  net_volume_notional:   number | null;
+  /** Hedge Direction — (A.net + C.net) − B.net.
+   *  POSITIVE = over-hedged, NEGATIVE = under-hedged, ZERO = fully hedged.
+   *  Surfaced as a separate row below Net Vol in the breakdown grid. */
+  hedge_direction:          number | null;
+  hedge_direction_notional: number | null;
   volumeNotional: number | null;
   unrealized:     number | null;
   realized:       number | null;
@@ -80,7 +116,11 @@ export interface TotalCardStats {
 
 const EMPTY_TOTAL_STATS: TotalCardStats = {
   positions: null, buys: null, sells: null,
-  volume: null, volumeNotional: null,
+  volume: null, volume_notional: null,
+  long_volume: null, short_volume: null, net_volume: null,
+  long_volume_notional: null, short_volume_notional: null, net_volume_notional: null,
+  hedge_direction: null, hedge_direction_notional: null,
+  volumeNotional: null,
   unrealized: null, realized: null,
   commissions: null, swaps: null, rebates: null,
   cost: null,
@@ -182,32 +222,48 @@ function periodToWs(p: CardsPeriod): PortfolioWsPeriod {
 
 function mapBook(b: PortfolioWsBookFields): BookCardStats {
   return {
-    positions:      b.positions,
-    buys:           null,
-    sells:          null,
-    volume:         b.volume,
-    volumeNotional: null,
-    unrealized:     b.unrealized,
-    realized:       b.realized,
-    commissions:    b.commissions,
-    swaps:          b.swaps,
-    rebates:        b.rebates,
+    positions:             b.positions,
+    buys:                  null,
+    sells:                 null,
+    volume:                b.volume,
+    volume_notional:       b.volume_notional,
+    long_volume:           b.long_volume,
+    short_volume:          b.short_volume,
+    net_volume:            b.net_volume,
+    long_volume_notional:  b.long_volume_notional,
+    short_volume_notional: b.short_volume_notional,
+    net_volume_notional:   b.net_volume_notional,
+    volumeNotional:        b.volume_notional,   // legacy alias for older renderers
+    unrealized:            b.unrealized,
+    realized:              b.realized,
+    commissions:           b.commissions,
+    swaps:                 b.swaps,
+    rebates:               b.rebates,
   };
 }
 
-function mapTotal(t: PortfolioWsBookFields): TotalCardStats {
+function mapTotal(t: PortfolioWsTotalFields): TotalCardStats {
   const cost = (t.commissions ?? 0) + (t.swaps ?? 0) + (t.rebates ?? 0);
   return {
-    positions:      t.positions,
-    buys:           null,
-    sells:          null,
-    volume:         t.volume,
-    volumeNotional: null,
-    unrealized:     t.unrealized,
-    realized:       t.realized,
-    commissions:    t.commissions,
-    swaps:          t.swaps,
-    rebates:        t.rebates,
+    positions:                t.positions,
+    buys:                     null,
+    sells:                    null,
+    volume:                   t.volume,
+    volume_notional:          t.volume_notional,
+    long_volume:              t.long_volume,
+    short_volume:             t.short_volume,
+    net_volume:               t.net_volume,
+    long_volume_notional:     t.long_volume_notional,
+    short_volume_notional:    t.short_volume_notional,
+    net_volume_notional:      t.net_volume_notional,
+    hedge_direction:          t.hedge_direction,
+    hedge_direction_notional: t.hedge_direction_notional,
+    volumeNotional:           t.volume_notional,   // legacy alias
+    unrealized:               t.unrealized,
+    realized:                 t.realized,
+    commissions:              t.commissions,
+    swaps:                    t.swaps,
+    rebates:                  t.rebates,
     cost,
   };
 }
