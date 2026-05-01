@@ -58,7 +58,7 @@ type VolumeMode = 'lots' | 'notional';
 const HEADER_ROW = 36;
 const DATA_ROW   = 34;
 
-const ROWS: Array<{ key: string; label: string; kind: 'pnl' | 'count' | 'volume' | 'netVolume' | 'hedgeDirection' | 'netPositions' }> = [
+const ROWS: Array<{ key: string; label: string; kind: 'pnl' | 'count' | 'volume' | 'netVolume' | 'hedgeDirection' }> = [
   { key: 'netReal',        label: 'Net Real P/L',     kind: 'pnl'            },
   // Unrealized P/L — period-scoped, computed broker-side as
   //   live_unrealized − baseline_eod_unrealized
@@ -69,11 +69,6 @@ const ROWS: Array<{ key: string; label: string; kind: 'pnl' | 'count' | 'volume'
   // for unrealized — only for realized which IS net of cost.
   { key: 'unrl',           label: 'Unrl P/L',         kind: 'pnl'            },
   { key: 'positions',      label: 'Positions',        kind: 'count'          },
-  // Net Positions = (A.positions + C.positions) − B.positions = Coverage − B.
-  // Same formula as Hedge Direction but applied to position COUNTS rather
-  // than lot-volumes. Per-book cells render "—" since the (A+C)−B
-  // relationship only exists at portfolio level.
-  { key: 'netPositions',   label: 'Net Positions',    kind: 'netPositions'   },
   { key: 'volume',         label: 'Volume',           kind: 'volume'         },
   { key: 'longVolume',     label: 'Long Vol',         kind: 'volume'         },
   { key: 'shortVolume',    label: 'Short Vol',        kind: 'volume'         },
@@ -115,17 +110,16 @@ interface ColumnStats {
   netReal:        number | null;
   unrl:           number | null;
   positions:      number | null;
-  /** Only populated for the Portfolio column (= (A+C) − B). Per-book columns
-   *  leave null (rendered as "—") since (A+C)−B is inherently a relationship
-   *  between books and has no per-book value. Same convention as hedgeDirection. */
-  netPositions:   number | null;
   volume:         number | null;
   longVolume:     number | null;
   shortVolume:    number | null;
   netVolume:      number | null;
-  /** Only populated for the Portfolio column. Per-book columns leave null
-   *  (rendered as "—") since (A+C)−B is inherently a relationship between
-   *  books and has no per-book value. */
+  /** Per-book columns: same as netVolume — used to render directional label
+   *  (Long/Short/Flat) in the Hedge Direction row. Portfolio column: also
+   *  same as netVolume — rendered as Over-hedged/Under-hedged/Balanced.
+   *  Backend serves hedge_direction equal to net_volume for the portfolio
+   *  total; for per-book we copy net_volume locally so the kind handler
+   *  has data to render. */
   hedgeDirection: number | null;
   commissions:    number | null;
   swaps:          number | null;
@@ -137,16 +131,19 @@ function rollUp(stats: BookCardStats, volumeMode: VolumeMode): ColumnStats {
   //   lots     → read raw lot fields
   //   notional → read notional fields (lots × MT5 contract size)
   const inLots = volumeMode === 'lots';
+  const netVol = inLots ? stats.net_volume : stats.net_volume_notional;
   return {
     netReal:        netRealized(stats.realized, stats.commissions, stats.swaps, stats.rebates),
     unrl:           stats.unrealized,
     positions:      stats.positions,
-    netPositions:   null,   // per-book — see ColumnStats comment
     volume:         inLots ? stats.volume       : stats.volume_notional,
     longVolume:     inLots ? stats.long_volume  : stats.long_volume_notional,
     shortVolume:    inLots ? stats.short_volume : stats.short_volume_notional,
-    netVolume:      inLots ? stats.net_volume   : stats.net_volume_notional,
-    hedgeDirection: null,   // per-book — see ColumnStats comment
+    netVolume:      netVol,
+    // Per-book Hedge Direction = the book's own Net Vol. Sign indicates
+    // direction (Long/Short/Flat) for that book in isolation. The
+    // "over/under-hedged" interpretation only applies at Portfolio level.
+    hedgeDirection: netVol,
     commissions:    stats.commissions,
     swaps:          stats.swaps,
     rebates:        stats.rebates,
@@ -162,14 +159,6 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
 
   const inLots = volumeMode === 'lots';
 
-  // Net Positions = (A.positions + C.positions) − B.positions = Coverage − B.
-  // Same hedge-coverage logic as Hedge Direction but applied to position
-  // counts. Null if any input is null (consumer renders "—").
-  const netPositionsValue =
-    (abook.positions == null || bbook.positions == null || cbook.positions == null)
-      ? null
-      : (abook.positions + cbook.positions) - bbook.positions;
-
   const portfolio: ColumnStats = {
     // Net Realized = Realized − Cost (uniform across all books).
     // Uses the same netRealized helper as the per-book rows for consistency.
@@ -179,17 +168,19 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
     // is the floating-P/L delta over the period, separate from cost-of-trading.
     unrl:        total.unrealized,
     positions:   total.positions,
-    netPositions: netPositionsValue,
     volume:      inLots ? total.volume       : total.volume_notional,
     // Long/Short/Net at portfolio level = straight sum across A+B+C of the
     // per-book broker-direction volumes. Net Vol indicates firm directional
     // LEAN (positive = net long lean, negative = net short lean) — distinct
-    // from hedge coverage, which is shown in the dedicated Hedge Direction row.
+    // from the over/under-hedged framing rendered in Hedge Direction.
     longVolume:  inLots ? total.long_volume  : total.long_volume_notional,
     shortVolume: inLots ? total.short_volume : total.short_volume_notional,
     netVolume:   inLots ? total.net_volume   : total.net_volume_notional,
-    // Hedge Direction = (A.net + C.net) − B.net.
-    // Positive = over-hedged, Negative = under-hedged, Zero = fully hedged.
+    // Hedge Direction at Portfolio level = Net Vol (backend ships them
+    // equal). Same number; rendered with directional verbiage:
+    //   positive → over-hedged (firm net long across all books combined)
+    //   negative → under-hedged (firm net short)
+    //   zero     → fully balanced
     hedgeDirection: inLots ? total.hedge_direction : total.hedge_direction_notional,
     // Cost categories as separate Portfolio totals.
     // Each is the straight sum across A+B+C of that category, served on the
@@ -298,7 +289,12 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
                 style={{ gridColumn: gridCol, gridRow: i + 2 }}
                 className="flex items-center justify-center px-3 z-10"
               >
-                <ValueCell row={row} value={col.stats[row.key as keyof ColumnStats]} />
+                <ValueCell
+                  row={row}
+                  value={col.stats[row.key as keyof ColumnStats]}
+                  isPortfolio={isParent}
+                  inLots={inLots}
+                />
               </div>
             ))}
           </div>
@@ -313,9 +309,13 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
 function ValueCell({
   row,
   value,
+  isPortfolio,
+  inLots,
 }: {
   row: typeof ROWS[number];
   value: number | null;
+  isPortfolio: boolean;
+  inLots: boolean;
 }) {
   if (value == null) {
     return <span className="text-[14px] font-mono text-white opacity-60">—</span>;
@@ -330,10 +330,9 @@ function ValueCell({
   }
 
   if (row.kind === 'netVolume') {
-    // Net Vol = long − short (per-book) or straight sum across A+B+C
-    // (Portfolio). Indicates DIRECTIONAL LEAN — positive = net long, negative
-    // = net short. Neutral coloring; not a risk signal in itself.
-    // (Hedge coverage is the Hedge Direction row below.)
+    // Net Vol = long − short. Sign indicates directional lean. Neutral
+    // coloring; not a risk signal in itself. (The Hedge Direction row
+    // below renders the same number with directional verbiage.)
     const sign = value > 0 ? '+' : value < 0 ? '-' : '';
     const absValue = Math.abs(value);
     return (
@@ -344,41 +343,33 @@ function ValueCell({
   }
 
   if (row.kind === 'hedgeDirection') {
-    // Hedge Direction = (A.net + C.net) − B.net.
-    //   positive → OVER-hedged: hedge books exceed B-Book exposure (capital drag)
-    //   negative → under-hedged: B-Book exposure exceeds hedges (market risk)
-    //   zero     → fully hedged
-    // Amber for over, dim teal for under — same convention used on the
-    // B-Book card hedge ratio.
-    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    // Directional label varies by column:
+    //   Portfolio: Over-hedged / Under-hedged / Balanced
+    //   B/A/C:     Long / Short / Flat
+    // Tooltip exposes the magnitude with units.
     const absValue = Math.abs(value);
-    const color = value > 0 ? '#e0a020' : value < 0 ? '#49b3b3' : '#d2d6e2';
-    const tooltip =
-      value > 0 ? `Over-hedged by ${fmtHdrCompact(absValue)} — broker net LONG via hedges`
-      : value < 0 ? `Under-hedged by ${fmtHdrCompact(absValue)} — broker net SHORT exposure`
-      :            'Fully hedged — no net exposure';
-    return (
-      <span className="text-[14px] font-mono" style={{ color }} title={tooltip}>
-        {sign}{fmtHdrCompact(absValue)}
-      </span>
-    );
-  }
+    const unit = inLots ? 'lots' : 'units';
 
-  if (row.kind === 'netPositions') {
-    // Net Positions = (A.positions + C.positions) − B.positions.
-    // Same hedge-coverage convention as Hedge Direction, applied to position
-    // counts rather than lot-volumes. Same color scheme so the visual
-    // language carries from one row to the other.
-    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-    const absValue = Math.abs(value);
+    const label = isPortfolio
+      ? (value > 0 ? 'Over-hedged' : value < 0 ? 'Under-hedged' : 'Balanced')
+      : (value > 0 ? 'Long'        : value < 0 ? 'Short'        : 'Flat');
+
+    // Color: amber for "long lean / over-hedged" side, dim teal for "short
+    // lean / under-hedged" side, neutral for flat. Same visual language as
+    // the prior implementation.
     const color = value > 0 ? '#e0a020' : value < 0 ? '#49b3b3' : '#d2d6e2';
-    const tooltip =
-      value > 0 ? `Over-hedged by ${absValue} positions — A+C exceed B-Book count`
-      : value < 0 ? `Under-hedged by ${absValue} positions — B-Book exceeds A+C count`
-      :            'Position counts balanced — A+C = B';
+
+    const tooltip = isPortfolio
+      ? (value > 0 ? `Over-hedged by ${fmtHdrCompact(absValue)} ${unit} — firm net long across A+B+C`
+        : value < 0 ? `Under-hedged by ${fmtHdrCompact(absValue)} ${unit} — firm net short across A+B+C`
+        :            'Fully balanced — no net firm exposure')
+      : (value > 0 ? `Long ${fmtHdrCompact(absValue)} ${unit}`
+        : value < 0 ? `Short ${fmtHdrCompact(absValue)} ${unit}`
+        :            'Flat — no open exposure');
+
     return (
       <span className="text-[14px] font-mono" style={{ color }} title={tooltip}>
-        {sign}{absValue} pos
+        {label}
       </span>
     );
   }
