@@ -15,7 +15,7 @@
 
 import { ChartHeader } from './ChartHeader';
 import { ChartExplanation } from './ChartExplanation';
-import type { ChartEntry, ChartPeriod } from './charts/registry';
+import type { ChartEntry, ChartId, ChartPeriod } from './charts/registry';
 
 interface Props {
   entry:           ChartEntry;
@@ -26,6 +26,11 @@ interface Props {
   onHedgeSide:     (s: 'long' | 'short' | 'both') => void;
   insightOn:       boolean;
   onToggleInsight: () => void;
+  /** Phase 1A: chart switching now lives inside the header. */
+  selectedChartId: ChartId;
+  pinnedChartId:   ChartId;
+  onSelectChart:   (id: ChartId) => void;
+  onPinChart:      (id: ChartId) => void;
 }
 
 export function ChartPanel({
@@ -37,6 +42,10 @@ export function ChartPanel({
   onHedgeSide,
   insightOn,
   onToggleInsight,
+  selectedChartId,
+  pinnedChartId,
+  onSelectChart,
+  onPinChart,
 }: Props) {
   const Chart = entry.Component;
 
@@ -50,6 +59,10 @@ export function ChartPanel({
         onHedgeSide={onHedgeSide}
         insightOn={insightOn}
         onToggleInsight={onToggleInsight}
+        selectedChartId={selectedChartId}
+        pinnedChartId={pinnedChartId}
+        onSelectChart={onSelectChart}
+        onPinChart={onPinChart}
       />
 
       <div className="flex-1 min-h-0 flex overflow-hidden">

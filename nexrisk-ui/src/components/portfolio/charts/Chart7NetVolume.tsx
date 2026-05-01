@@ -35,14 +35,15 @@ import {
 import type { ChartComponentProps } from './registry';
 import { fetchNetVolumeByBook, refreshExposureSnapshot } from '@/services/chartsApi';
 import type { NetVolumeResponse, NetSymbolRow } from '@/types/charts';
+import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 30_000;
 
-// Brand palette per book — same mapping used in TopBar / Portfolio
-// breakdown so colors stay consistent across the app.
-const COLOR_A = '#4ecdc4';   // teal — A-Book
-const COLOR_B = '#c9b87c';   // yellow — B-Book
-const COLOR_C = '#f4a261';   // orange — C-Book
+// Brand palette per book — sourced from the central palette so this
+// stays in sync with TopBar / Portfolio breakdown / other charts.
+const COLOR_A = BOOK_COLORS.a;
+const COLOR_B = BOOK_COLORS.b;
+const COLOR_C = BOOK_COLORS.c;
 
 type BookKey = 'a' | 'b' | 'c';
 
@@ -306,7 +307,7 @@ function BookSymbolTable({ book, rows, onClose }: BookSymbolTableProps) {
         style={{ borderColor: '#3a3a3c', color: '#808080' }}
       >
         <div className="flex items-center justify-between mb-2">
-          <span style={{ color: '#f4a261' }}>C-Book contributors</span>
+          <span style={{ color: COLOR_C }}>C-Book contributors</span>
           <button
             type="button"
             onClick={onClose}

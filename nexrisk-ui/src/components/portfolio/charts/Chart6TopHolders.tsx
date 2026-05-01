@@ -36,14 +36,15 @@ import {
 import type { ChartComponentProps } from './registry';
 import { fetchTopHolders } from '@/services/chartsApi';
 import type { Holder } from '@/types/charts';
+import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 60_000;
 const HOLDER_LIMIT     = 30;
 
-// Single-color ranked bar — yellow (B-Book brand color) since these
-// are gross broker volumes, not directional.
-const BAR_COLOR    = '#c9b87c';
-const BAR_STROKE   = '#a89a64';
+// Single-color ranked bar — these are gross broker volumes (not
+// directional). B-Book brand color since the volumes mostly originate
+// there in the broker's mental model.
+const BAR_COLOR = BOOK_COLORS.b;
 
 // ── Format helpers ─────────────────────────────────────────────
 function fmtLots(n: number | null | undefined): string {
@@ -200,8 +201,6 @@ export function Chart6TopHolders(_props: ChartComponentProps) {
         <Bar
           dataKey="volume_lots"
           fill={BAR_COLOR}
-          stroke={BAR_STROKE}
-          strokeWidth={1}
           maxBarSize={MAX_BAR_SIZE}
           isAnimationActive={false}
         />

@@ -29,6 +29,8 @@ import { Chart4SymbolsHedge }         from './Chart4SymbolsHedge';
 import { Chart5CostRevenuesExpenses } from './Chart5CostRevenuesExpenses';
 import { Chart6TopHolders }           from './Chart6TopHolders';
 import { Chart7NetVolume }            from './Chart7NetVolume';
+import { Chart8DailyVolumes }         from './Chart8DailyVolumes';
+import { Chart9DailyCostBreakdown }   from './Chart9DailyCostBreakdown';
 
 // ── Period domain ───────────────────────────────────────────────
 // The full set of period keys any chart can support. Per-chart
@@ -102,7 +104,9 @@ export type ChartId =
   | 'symbols-hedge'
   | 'cost-revenues-expenses'
   | 'top-holders'
-  | 'abc-net-volume';
+  | 'abc-net-volume'
+  | 'daily-volumes'
+  | 'daily-cost-breakdown';
 
 // Default chart loaded when the user lands on /portfolio with no
 // localStorage pin yet. Per spec.
@@ -176,6 +180,31 @@ export const CHART_REGISTRY: ChartEntry[] = [
     periodOptions: ['this_month'],
     Icon:          AbcNetVolumeIcon,
     Component:     Chart7NetVolume,
+  },
+  {
+    id:            'daily-volumes',
+    label:         'Daily Volumes per Book',
+    thumbnailLabel:'Daily Volumes',
+    description:   'Per-day volume across A, B, C and Portfolio over the selected period. Lots/Notional toggle inside the chart.',
+    defaultPeriod: 'this_month',
+    // 'today' excluded — single-day data point isn't useful for a time-series view.
+    periodOptions: ['this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
+    // Re-using MostTradedSymbolsIcon (bar/chart shape) as a placeholder.
+    // Swap to a dedicated line-chart icon when ChartIcons gets one.
+    Icon:          MostTradedSymbolsIcon,
+    Component:     Chart8DailyVolumes,
+  },
+  {
+    id:            'daily-cost-breakdown',
+    label:         'Daily Cost Breakdown per Book',
+    thumbnailLabel:'Cost Breakdown',
+    description:   'Period-summed commissions, swaps and rebates per book. Two bars per book: stacked breakdown + total.',
+    defaultPeriod: 'this_month',
+    // 'today' excluded — daily-aggregate source data.
+    periodOptions: ['this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
+    // Re-using CostRevenuesExpensesIcon (cost/$ shape) as a placeholder.
+    Icon:          CostRevenuesExpensesIcon,
+    Component:     Chart9DailyCostBreakdown,
   },
 ];
 

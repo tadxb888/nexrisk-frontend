@@ -14,6 +14,8 @@
 //   /api/v1/charts/cost-summary              (Chart 5)
 //   /api/v1/charts/top-holders               (Chart 6)
 //   /api/v1/charts/net-volume-by-book        (Chart 7)
+//   /api/v1/charts/daily-volumes             (Chart 8)
+//   /api/v1/charts/daily-costs               (Chart 9)
 //   /api/v1/exposure/refresh    [POST]       (Chart 7 manual refresh — Q5)
 //
 // Capability:
@@ -148,6 +150,34 @@ export async function chartsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const query = limitOnlyQuery.parse(request.query);
       const response = await nexriskApi.get('/api/v1/charts/net-volume-by-book', clean(query));
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    },
+  );
+
+  // ── Chart 8: Daily Volumes per Book ────────────────────────────────────
+  // Time series — one point per day; from/to bound the period. Backend
+  // computes the Portfolio total (A+B+C) at read time.
+  fastify.get(
+    '/charts/daily-volumes',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('positions.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = periodWithLimitQuery.parse(request.query);
+      const response = await nexriskApi.get('/api/v1/charts/daily-volumes', clean(query));
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    },
+  );
+
+  // ── Chart 9: Daily Cost Breakdown per Book ─────────────────────────────
+  // Single-period summary — sums commissions/swaps/rebates over the from/to
+  // window and returns one set of totals (NOT a time series).
+  fastify.get(
+    '/charts/daily-costs',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('positions.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = periodWithLimitQuery.parse(request.query);
+      const response = await nexriskApi.get('/api/v1/charts/daily-costs', clean(query));
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     },

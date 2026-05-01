@@ -48,13 +48,14 @@ import {
   fetchPnlHistory,
   periodToDateRange,
 } from '@/services/chartsApi';
+import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 30_000;
 
-// Brand colours per book.
-const COLOR_B = '#c9b87c';
-const COLOR_A = '#4ecdc4';
-const COLOR_C = '#f4a261';
+// Brand colours per book — sourced from the central palette.
+const COLOR_B = BOOK_COLORS.b;
+const COLOR_A = BOOK_COLORS.a;
+const COLOR_C = BOOK_COLORS.c;
 
 // ── Format helpers ─────────────────────────────────────────────
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -237,8 +238,8 @@ export function Chart2Combination({ period }: ChartComponentProps) {
           className="absolute top-2 right-2 px-2 py-1 rounded font-mono text-[10px]"
           style={{
             backgroundColor: '#252429',
-            border: '1px solid #c9b87c66',
-            color: '#c9b87c',
+            border: '1px solid #d4a05266',
+            color: '#d4a052',
             pointerEvents: 'none',
           }}
         >

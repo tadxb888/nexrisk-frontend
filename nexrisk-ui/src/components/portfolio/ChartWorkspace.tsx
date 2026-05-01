@@ -1,22 +1,24 @@
 // ============================================
 // ChartWorkspace
 //
-// Body of the Portfolio page. Three horizontally-arranged zones:
+// Body of the Portfolio page. Two horizontally-arranged zones (the
+// left thumbnail rail was removed in Phase 1A — chart switching now
+// happens via the dropdown in ChartHeader):
 //
-//   ┌─[rail]─┬──[chart container]──┬─[breakdown pane]─┐
-//   │  ☰     │ Header  Period  ⓘ  │  Period          │
-//   │  ★ 1   ├─────────────────────┤  MT5 Node        │
-//   │    2   │                     │  ── Cards ──     │
-//   │    3   │     CHART           │  Portfolio       │
-//   │    ⋮   │   (+ AI panel       │  B-Book          │
-//   │    7   │     when on)        │  A-Book          │
-//   │  ◀     │                     │  C-Book          │
-//   └────────┴─────────────────────┴──────────────────┘
+//   ┌──[chart container]──┬─[breakdown pane]─┐
+//   │ ▾Chart Selector  ⓘ  │  Period          │
+//   │ Period              │  MT5 Node        │
+//   ├─────────────────────┤  ── Cards ──     │
+//   │                     │  Portfolio       │
+//   │     CHART           │  B-Book          │
+//   │   (+ AI panel       │  A-Book          │
+//   │     when on)        │  C-Book          │
+//   │                     │                  │
+//   └─────────────────────┴──────────────────┘
 //
 // Interaction rules:
-//   • Click thumbnail → switch chart.
-//   • Click ★ on a thumbnail → pin as default (localStorage).
-//   • Click rail chevron → rail collapses to icon-only strip.
+//   • Click ChartSelector dropdown → switch chart.
+//   • Click ★ inside a dropdown row → pin as default (localStorage).
 //   • Click breakdown chevron → breakdown collapses to vertical strip.
 //   • Click "Get Insight" in chart header → AI panel opens INSIDE the
 //       chart container; if breakdown was expanded, it AUTO-COLLAPSES
@@ -42,7 +44,6 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ChartPanel } from './ChartPanel';
 import { PortfolioBreakdownPane } from './PortfolioBreakdownPane';
-import { ThumbnailRail } from './ThumbnailRail';
 import {
   getChartById,
   type ChartId,
@@ -96,14 +97,6 @@ export function ChartWorkspace({
   return (
     <div className="flex-1 min-h-0 flex overflow-hidden">
 
-      {/* ── Left: thumbnail rail ─────────────────────────────────── */}
-      <ThumbnailRail
-        selectedChartId={selectedChartId}
-        pinnedChartId={pinnedChartId}
-        onSelect={onSelectChart}
-        onPin={onPinChart}
-      />
-
       {/* ── Center: chart container (chart + optional AI panel) ─── */}
       <div className="flex-1 min-w-0 h-full">
         <ChartPanel
@@ -115,6 +108,10 @@ export function ChartWorkspace({
           onHedgeSide={(s) => setHedgeSideByChart(prev => ({ ...prev, [selectedChartId]: s }))}
           insightOn={insightOn}
           onToggleInsight={handleToggleInsight}
+          selectedChartId={selectedChartId}
+          pinnedChartId={pinnedChartId}
+          onSelectChart={onSelectChart}
+          onPinChart={onPinChart}
         />
       </div>
 

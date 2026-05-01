@@ -222,3 +222,76 @@ export async function refreshExposureSnapshot(): Promise<{ success?: boolean; [k
   }
   return res.json();
 }
+
+// =============================================================================
+// Chart 8 — Daily Volumes per Book (time series)
+// =============================================================================
+//
+// Per-day volume per book over the period. Backend sums Portfolio (A+B+C)
+// at read time. Days with no rows in book_pnl_daily are omitted from the
+// response — frontend gap-fills the time axis if it wants continuity.
+
+export interface DailyVolumeBookFields {
+  volume_lots:           number;
+  longs_lots:            number;
+  shorts_lots:           number;
+  volume_notional:       number;
+  long_volume_notional:  number;
+  short_volume_notional: number;
+}
+
+export interface DailyVolumePoint {
+  date:      string;                       // YYYY-MM-DD
+  b:         DailyVolumeBookFields;
+  a:         DailyVolumeBookFields;
+  c:         DailyVolumeBookFields;
+  portfolio: DailyVolumeBookFields;
+}
+
+export interface DailyVolumesResponse {
+  from:   string;
+  to:     string;
+  points: DailyVolumePoint[];
+}
+
+/** Chart 8 — Daily Volumes per Book. Default backend period: month-to-date. */
+export async function fetchDailyVolumes(opts?: {
+  from?: string;
+  to?:   string;
+}): Promise<DailyVolumesResponse> {
+  return fetchChart<DailyVolumesResponse>('/api/v1/charts/daily-volumes', opts);
+}
+
+// =============================================================================
+// Chart 9 — Daily Cost Breakdown per Book (single-period summary)
+// =============================================================================
+//
+// SUM commissions/swaps/rebates across the period. Returns ONE set of
+// totals per book (B/A/C/Portfolio), NOT a time series. The chart renders
+// 8 bars: 2 per book (breakdown stacked + total).
+
+export interface DailyCostBookFields {
+  commissions: number;
+  swaps:       number;
+  rebates:     number;
+  total:       number;   // commissions + swaps + rebates
+}
+
+export interface DailyCostsResponse {
+  from:  string;
+  to:    string;
+  books: {
+    b:         DailyCostBookFields;
+    a:         DailyCostBookFields;
+    c:         DailyCostBookFields;
+    portfolio: DailyCostBookFields;
+  };
+}
+
+/** Chart 9 — Daily Cost Breakdown per Book. Default backend period: month-to-date. */
+export async function fetchDailyCosts(opts?: {
+  from?: string;
+  to?:   string;
+}): Promise<DailyCostsResponse> {
+  return fetchChart<DailyCostsResponse>('/api/v1/charts/daily-costs', opts);
+}

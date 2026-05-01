@@ -41,6 +41,7 @@ import {
 import type { ChartComponentProps } from './registry';
 import { fetchSymbolsHedge, periodToDateRange } from '@/services/chartsApi';
 import type { SymbolsHedgeRow } from '@/types/charts';
+import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 60_000;
 const SYMBOL_LIMIT     = 20;
@@ -48,11 +49,12 @@ const SYMBOL_LIMIT     = 20;
 // Inner bar drawn at this fraction of the outer bar's width.
 const INNER_WIDTH_RATIO = 0.5;
 
-// Brand colours.
-const COLOR_OUTER        = '#c9b87c';   // B-Book — outer
-const COLOR_OUTER_STROKE = '#a89a64';
-const COLOR_INNER        = '#4ecdc4';   // Coverage (A+C) — inner
-const COLOR_INNER_STROKE = '#3a9a96';
+// Outer = B-Book volume (B-Book brand color from central palette).
+// Inner = Coverage (A+C combined) — uses Portfolio teal because it
+// represents the aggregated hedge side, distinct from the per-book
+// A or C colors which would be ambiguous when combined.
+const COLOR_OUTER = BOOK_COLORS.b;
+const COLOR_INNER = BOOK_COLORS.portfolio;
 
 // ── Format helpers ─────────────────────────────────────────────
 function fmtLots(n: number | null | undefined): string {
@@ -127,8 +129,6 @@ function NestedBarShape(props: NestedBarShapeProps) {
         width={width}
         height={height}
         fill={COLOR_OUTER}
-        stroke={COLOR_OUTER_STROKE}
-        strokeWidth={1}
       />
       {/* Inner = Coverage (A+C) volume — only render if there's coverage */}
       {hVol > 0 && (
@@ -138,8 +138,6 @@ function NestedBarShape(props: NestedBarShapeProps) {
           width={innerWidth}
           height={innerHeight}
           fill={COLOR_INNER}
-          stroke={COLOR_INNER_STROKE}
-          strokeWidth={1}
         />
       )}
     </g>

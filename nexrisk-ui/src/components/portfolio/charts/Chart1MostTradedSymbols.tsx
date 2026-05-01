@@ -38,12 +38,13 @@ import {
 import type { ChartComponentProps } from './registry';
 import { fetchMostTradedSymbols, periodToDateRange } from '@/services/chartsApi';
 import type { SymbolVolume } from '@/types/charts';
+import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 60_000;
 const SYMBOL_LIMIT     = 20;
 
 // B-Book brand color — primary, since this chart is B-Book volume only.
-const BAR_COLOR = '#c9b87c';
+const BAR_COLOR = BOOK_COLORS.b;
 
 // ── Format helpers ─────────────────────────────────────────────
 /** Compact lots: 206.4 / 1.2k / 1.2M */
@@ -173,10 +174,6 @@ export function Chart1MostTradedSymbols({ period }: ChartComponentProps) {
         <Bar
           dataKey="volume_lots"
           fill={BAR_COLOR}
-          // Slight darker stroke gives the bars some definition on the
-          // dark background without going neon.
-          stroke="#a89a64"
-          strokeWidth={1}
         />
       </BarChart>
     </ResponsiveContainer>
