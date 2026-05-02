@@ -1,29 +1,28 @@
 // ============================================
-// Chart7NetVolume — A/B/C Net Volume
+// Chart7NetVolume — A/B/C Net Volume (WS-driven)
 //
-// Per Ross's spec (Chart 7) + design choices:
-//   • Top: pie chart of A/B/C book net volumes.
+// Subscribes to portfolio.exposure.symbols, a live WebSocket topic
+// pushed by the C++ broadcaster on its standard ≈1 Hz Recompute
+// cadence (debounced under tick storms). Replaces the legacy REST
+// polling + manual refresh + as_of staleness UX, which depended on
+// the now-retired ExposureEngine snapshot writer.
+//
+// Layout:
+//   • Pie chart of A/B/C book net volumes.
 //     - Slice SIZE  = absolute value of net_lots (pie can't show negatives).
 //     - Slice LABEL = signed value (e.g. "A: +1240" or "B: -820").
-//     - Slice COLOR = always the book's brand color regardless of sign.
+//     - Slice COLOR = book brand color regardless of sign.
 //   • Click a slice → drill-down table of by_symbol contributors to
 //     that book appears below. Click again to deselect.
-//   • C-Book has NO per-symbol breakdown from the backend — clicking
-//     the C slice shows an honest message instead of an empty table.
-//   • Refresh button top-right next to the `as_of` timestamp:
-//     POST /api/v1/exposure/refresh, then refetch this endpoint.
-//   • Auto-refresh every 30s while visible.
-//
-// Backend snapshot quirk (per spec):
-//   The ExposureEngine background job that updates snapshots is
-//   currently stopped (known data gap). `as_of` may be stale. The
-//   manual refresh button forces a one-shot recompute.
+//   • Now includes per-symbol C-Book breakdown (c_book_lots), which
+//     the legacy REST shape lacked. The "no C breakdown" placeholder
+//     is gone.
 //
 // `period` prop is in the signature for ChartComponentProps compat —
-// this chart ignores it (snapshot endpoint, no period semantics).
+// this chart ignores it (live snapshot, no period semantics).
 // ============================================
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   PieChart,
   Pie,
@@ -33,19 +32,19 @@ import {
 } from 'recharts';
 
 import type { ChartComponentProps } from './registry';
-import { fetchNetVolumeByBook, refreshExposureSnapshot } from '@/services/chartsApi';
-import type { NetVolumeResponse, NetSymbolRow } from '@/types/charts';
+import {
+  connectPortfolioExposureWebSocket,
+  type PortfolioExposureSymbolsData,
+  type PortfolioExposureSymbolRow,
+} from '@/services/api';
 import { BOOK_COLORS } from './bookColors';
 
-const POLL_INTERVAL_MS = 30_000;
-
-// Brand palette per book — sourced from the central palette so this
-// stays in sync with TopBar / Portfolio breakdown / other charts.
 const COLOR_A = BOOK_COLORS.a;
 const COLOR_B = BOOK_COLORS.b;
 const COLOR_C = BOOK_COLORS.c;
 
 type BookKey = 'a' | 'b' | 'c';
+type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
 
 interface PieDatum {
   key:    BookKey;
@@ -65,92 +64,41 @@ function fmtLots(n: number | null | undefined): string {
   return `${sign}${abs.toFixed(2)}`;
 }
 
-/** "2026-04-28T13:42:11Z" → "13:42:11 UTC" */
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const hh = String(d.getUTCHours()  ).padStart(2, '0');
-  const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  const ss = String(d.getUTCSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss} UTC`;
-}
-
 // ── Component ──────────────────────────────────────────────────
 export function Chart7NetVolume(_props: ChartComponentProps) {
-  const [resp,    setResp]    = useState<NetVolumeResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error,   setError]   = useState<string | null>(null);
+  const [data,    setData]    = useState<PortfolioExposureSymbolsData | null>(null);
+  const [status,  setStatus]  = useState<WsStatus>('connecting');
 
   // Which book's contributors are showing in the drill-down table.
   // null = pie shown alone, no table.
   const [selectedBook, setSelectedBook] = useState<BookKey | null>(null);
 
-  // True while a refresh-then-fetch round-trip is in flight (button
-  // disabled + spinner shown).
-  const [refreshing, setRefreshing] = useState<boolean>(false);
-
-  const abortRef = useRef<AbortController | null>(null);
-
-  // ── Data fetch ───────────────────────────────────────────────
-  const load = async (signal?: AbortSignal) => {
-    try {
-      const json = await fetchNetVolumeByBook({ limit: 50 });
-      if (signal?.aborted) return;
-      setResp(json);
-      setError(null);
-    } catch (e: any) {
-      if (signal?.aborted) return;
-      setError(e?.message ?? 'Failed to load');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // ── WS subscription ──────────────────────────────────────────
   useEffect(() => {
-    let mounted = true;
-
-    const tick = async () => {
-      if (!mounted) return;
-      if (abortRef.current) abortRef.current.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-      await load(ctrl.signal);
-    };
-
-    tick();
-    const id = setInterval(tick, POLL_INTERVAL_MS);
-
-    return () => {
-      mounted = false;
-      clearInterval(id);
-      if (abortRef.current) abortRef.current.abort();
-    };
+    setStatus('connecting');
+    const cleanup = connectPortfolioExposureWebSocket(
+      (event) => {
+        if (event.type === 'SNAPSHOT') {
+          setData(event.data);
+        }
+      },
+      (s) => setStatus(s),
+    );
+    return cleanup;
   }, []);
 
-  // ── Manual refresh handler ───────────────────────────────────
-  const onRefresh = async () => {
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      // Fire-and-forget: refresh THEN fetch. We don't bail on refresh
-      // failure — even if the recompute didn't run, the latest snapshot
-      // (stale or not) is still worth seeing.
-      await refreshExposureSnapshot().catch(() => undefined);
-      await load();
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
   // ── Render branches ──────────────────────────────────────────
-  if (loading && !resp) {
-    return <BodyMessage>Loading…</BodyMessage>;
+  if (!data && status === 'connecting') {
+    return <BodyMessage>Connecting…</BodyMessage>;
   }
-  if (error && !resp) {
-    return <BodyMessage tone="error">Failed to load: {error}</BodyMessage>;
+  if (!data && status === 'error') {
+    return <BodyMessage tone="error">Connection error</BodyMessage>;
   }
-  if (!resp) {
-    return <BodyMessage>No data</BodyMessage>;
+  if (!data && status === 'closed') {
+    return <BodyMessage tone="error">Disconnected</BodyMessage>;
+  }
+  if (!data) {
+    return <BodyMessage>Waiting for data…</BodyMessage>;
   }
 
   // ── Build pie data ───────────────────────────────────────────
@@ -164,9 +112,9 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
   // The `signed` field carries the true value through to label and
   // tooltip — only the rendering size is fudged.
   const rawAbs = {
-    a: Math.abs(resp.totals.a_book_net_lots),
-    b: Math.abs(resp.totals.b_book_net_lots),
-    c: Math.abs(resp.totals.c_book_net_lots),
+    a: Math.abs(data.totals.a_book_net_lots),
+    b: Math.abs(data.totals.b_book_net_lots),
+    c: Math.abs(data.totals.c_book_net_lots),
   };
   const maxAbs = Math.max(rawAbs.a, rawAbs.b, rawAbs.c);
   const placeholder = Math.max(maxAbs * 0.05, 1);
@@ -176,21 +124,21 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
       key:    'a',
       name:   'A-Book',
       value:  rawAbs.a > 0 ? rawAbs.a : placeholder,
-      signed: resp.totals.a_book_net_lots,
+      signed: data.totals.a_book_net_lots,
       color:  COLOR_A,
     },
     {
       key:    'b',
       name:   'B-Book',
       value:  rawAbs.b > 0 ? rawAbs.b : placeholder,
-      signed: resp.totals.b_book_net_lots,
+      signed: data.totals.b_book_net_lots,
       color:  COLOR_B,
     },
     {
       key:    'c',
       name:   'C-Book',
       value:  rawAbs.c > 0 ? rawAbs.c : placeholder,
-      signed: resp.totals.c_book_net_lots,
+      signed: data.totals.c_book_net_lots,
       color:  COLOR_C,
     },
   ];
@@ -199,27 +147,30 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
 
   return (
     <div className="h-full w-full flex flex-col">
-      {/* ── Top bar: as_of timestamp + manual refresh button ───── */}
+      {/* ── Top-right: live indicator ────────────────────────────── */}
       <div
         className="flex items-center justify-end gap-2 px-2 py-1 font-mono text-[10px]"
         style={{ color: '#808080' }}
       >
-        <span>as_of: {fmtTime(resp.as_of)}</span>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="px-2 py-0.5 rounded font-mono text-[10px]"
+        <span
           style={{
-            backgroundColor: '#252429',
-            border:          '1px solid #3a3a3c',
-            color:           refreshing ? '#808080' : '#d2d6e2',
-            cursor:          refreshing ? 'wait' : 'pointer',
+            display:      'inline-block',
+            width:        6,
+            height:       6,
+            borderRadius: '50%',
+            background:   status === 'open'
+              ? '#6aaa78'
+              : status === 'connecting'
+                ? '#d2d6e2'
+                : '#d07070',
           }}
-          title="Force a fresh ExposureEngine snapshot"
-        >
-          {refreshing ? 'Refreshing…' : '↻ Refresh'}
-        </button>
+        />
+        <span>
+          {status === 'open'       ? 'live'
+            : status === 'connecting' ? 'connecting'
+            : status === 'error'      ? 'error'
+            :                           'disconnected'}
+        </span>
       </div>
 
       {/* ── Pie ─────────────────────────────────────────────────── */}
@@ -233,11 +184,9 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
                 data={pieData}
                 dataKey="value"
                 nameKey="name"
-                // Center + radius — keep some breathing room for labels.
                 cx="50%"
                 cy="50%"
                 outerRadius="75%"
-                // Slice labels show signed values: "A-Book: +1240"
                 label={({ payload }) => {
                   const p = payload as PieDatum;
                   return `${p.name}: ${fmtLots(p.signed)}`;
@@ -247,7 +196,6 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
                 onClick={(slice: any) => {
                   const key = slice?.payload?.key as BookKey | undefined;
                   if (!key) return;
-                  // Toggle: click same slice again to clear selection.
                   setSelectedBook(prev => (prev === key ? null : key));
                 }}
                 style={{ cursor: 'pointer' }}
@@ -283,7 +231,7 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
       {selectedBook && (
         <BookSymbolTable
           book={selectedBook}
-          rows={resp.by_symbol}
+          rows={data.by_symbol}
           onClose={() => setSelectedBook(null)}
         />
       )}
@@ -294,43 +242,28 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
 // ── BookSymbolTable — drill-down detail ────────────────────────
 interface BookSymbolTableProps {
   book:    BookKey;
-  rows:    NetSymbolRow[];
+  rows:    PortfolioExposureSymbolRow[];
   onClose: () => void;
 }
 
 function BookSymbolTable({ book, rows, onClose }: BookSymbolTableProps) {
-  // C-Book has no per-symbol breakdown from the backend.
-  if (book === 'c') {
-    return (
-      <div
-        className="border-t px-3 py-3 font-mono text-xs"
-        style={{ borderColor: '#3a3a3c', color: '#808080' }}
-      >
-        <div className="flex items-center justify-between mb-2">
-          <span style={{ color: COLOR_C }}>C-Book contributors</span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-[10px] px-1"
-            style={{ color: '#808080' }}
-          >
-            ✕ close
-          </button>
-        </div>
-        Per-symbol C-Book breakdown not available — see total in the slice tooltip.
-      </div>
-    );
-  }
+  // For each book, filter to symbols whose corresponding column is
+  // non-zero, then sort by absolute value descending.
+  //
+  // C-Book is now a first-class citizen here — the broadcaster emits
+  // c_book_lots per symbol, unlike the legacy REST shape which had
+  // only A/B per-symbol breakdown.
+  const colKey: keyof PortfolioExposureSymbolRow =
+    book === 'a' ? 'a_book_lots'
+      : book === 'b' ? 'b_book_lots'
+      :                'c_book_lots';
 
-  // A/B-Book: filter to symbols whose corresponding column is non-zero,
-  // then sort by absolute value descending.
-  const colKey: keyof NetSymbolRow = book === 'a' ? 'a_book_lots' : 'b_book_lots';
   const filtered = rows
     .filter(r => (r[colKey] as number) !== 0)
     .sort((a, b) => Math.abs(b[colKey] as number) - Math.abs(a[colKey] as number));
 
-  const headerColor = book === 'a' ? COLOR_A : COLOR_B;
-  const bookLabel   = book === 'a' ? 'A-Book' : 'B-Book';
+  const headerColor = book === 'a' ? COLOR_A : book === 'b' ? COLOR_B : COLOR_C;
+  const bookLabel   = book === 'a' ? 'A-Book' : book === 'b' ? 'B-Book' : 'C-Book';
 
   return (
     <div

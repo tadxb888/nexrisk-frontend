@@ -1023,6 +1023,90 @@ export function connectPortfolioWebSocket(
     ws.close(1000, 'Client disconnecting');
   };
 }
+
+// ============================================================================
+// SNIPPET — portfolio.exposure.symbols WebSocket topic (Chart 7)
+//
+// Per-symbol exposure breakdown, broadcast at the same 1 Hz cadence as the
+// portfolio.summary.{period} topics. Replaces the legacy REST polling +
+// snapshot-table read path that depended on the dead ExposureEngine writer.
+// Strictly additive — does not affect existing connectPortfolioWebSocket
+// or connectBBookWebSocket consumers.
+// ============================================================================
+
+/** Single row in the per-symbol exposure breakdown.
+ *  Lot values are BROKER VIEW (client BUY → broker short, etc.). */
+export interface PortfolioExposureSymbolRow {
+  symbol:            string;
+  /** Timestamp the broadcaster computed this row. Same as parent `as_of`. */
+  snapshot_time:     string;
+  /** Sum of broker-side long lots across A+B+C for this symbol. */
+  long_lots:         number;
+  /** Sum of broker-side short lots across A+B+C for this symbol. */
+  short_lots:        number;
+  /** long_lots − short_lots. Positive = broker net long this symbol. */
+  net_exposure_lots: number;
+  /** A-Book net (long − short) for this symbol, broker view. */
+  a_book_lots:       number;
+  /** B-Book net (long − short) for this symbol, broker view. */
+  b_book_lots:       number;
+  /** C-Book net (long − short) for this symbol, broker view.
+   *  NEW: previously absent from the legacy REST shape. */
+  c_book_lots:       number;
+}
+
+/** Push payload for topic "portfolio.exposure.symbols". */
+export interface PortfolioExposureSymbolsData {
+  /** ISO 8601 UTC. Moment the broadcaster built this snapshot. */
+  as_of:     string;
+  totals: {
+    a_book_net_lots: number;
+    b_book_net_lots: number;
+    c_book_net_lots: number;
+  };
+  /** Sorted by |net_exposure_lots| descending. Symbols with zero exposure
+   *  across all books are omitted by the broadcaster. */
+  by_symbol: PortfolioExposureSymbolRow[];
+}
+
+export type PortfolioExposureWsEvent =
+  | { type: 'SNAPSHOT';   data: PortfolioExposureSymbolsData }
+  | { type: 'subscribed'; data: { topics: string[] } }
+  | { type: 'pong';       data: { timestamp_ms: number } };
+
+/**
+ * Open a managed WebSocket to the per-symbol exposure feed (Chart 7).
+ * No period parameter — this is a snapshot of CURRENT open positions,
+ * refreshed on every Recompute pass (≈1 Hz under tick storms, debounced).
+ */
+export function connectPortfolioExposureWebSocket(
+  onMessage: (event: PortfolioExposureWsEvent) => void,
+  onStatus?: (status: 'open' | 'closed' | 'error') => void
+): () => void {
+  const ws    = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+  const topic = 'portfolio.exposure.symbols';
+
+  ws.onopen = () => {
+    onStatus?.('open');
+    ws.send(JSON.stringify({ type: 'subscribe', topics: [topic] }));
+  };
+
+  ws.onmessage = (ev: MessageEvent<string>) => {
+    try {
+      const envelope = JSON.parse(ev.data);
+      if (envelope.topic && envelope.topic !== topic) return;
+      onMessage({ type: envelope.type, data: envelope.data } as PortfolioExposureWsEvent);
+    } catch { /* ignore parse errors */ }
+  };
+
+  ws.onerror = () => onStatus?.('error');
+  ws.onclose = () => onStatus?.('closed');
+
+  return () => {
+    ws.onclose = null;
+    ws.close(1000, 'Client disconnecting');
+  };
+}
 /** REST endpoint that mirrors WebSocketManager::GetStatsJSON() */
 export const wsApi = {
   getStats: () =>
