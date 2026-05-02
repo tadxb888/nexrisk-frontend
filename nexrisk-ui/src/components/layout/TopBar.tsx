@@ -1,28 +1,34 @@
 // ============================================
-// TopBar — Primary Navigation
+// TopBar — Primary Navigation (Mode-based)
 //
-// Layout (per Portfolio-redesign spec):
-//   • Top strip (always visible): Pinned tabs on the left,
-//     clock + account dropdown on the right.
-//   • Main strip: Logo, primary nav sections, and a clickable
-//     Portfolio Card on the right (replaces the old KPI ticker).
-//     The Portfolio Card is the global aggregate (B + A + C + Cost,
-//     net of expenses and revenue) and navigates to /portfolio.
+// Three navigation modes:
+//   • Main:        Browse all top-level sections.
+//   • Drilldown:   Browse a section's children (with pin toggles).
+//   • Favourites:  Browse pinned items (with unpin toggles).
+//
+// Persistent on the left in every mode: Main button + Favourites button.
+// Favourites button is greyed when the pin list is empty.
+//
+// Layout:
+//   • Row 1 (height 56): Logo + mode-nav + clock + account dropdown
+//   • Row 2 (height 40): Reserved strip — empty for now; future home of
+//                        most-traded ticker, news releases, archetype
+//                        detection events (Scalper, BOT, etc.)
+//
+// Colour convention:
+//   #f5802c (orange) — Main-mode emphasis: active Main mode, drill-down
+//                      breadcrumb, active drill-down child, "you-are-here"
+//                      indicator on the section that owns the current page.
+//   #e9f244 (yellow) — Favourites-mode emphasis: active Favourites mode,
+//                      active favourite leaf.
 // ============================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/stores/AuthContext';
 import { clsx } from 'clsx';
-
-import {
-  usePortfolioStats,
-  fmtHdrMoney,
-  fmtHdrCompact,
-  pnlColor,
-} from '@/stores/PortfolioStatsContext';
-
-import { CardsPeriodSelector } from '@/components/portfolio/CardsPeriodSelector';
+import { PortfolioCard } from '@/components/portfolio/PortfolioCard';
+import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
 
 // ── Types ────────────────────────────────────────────────────
 export interface SubItem {
@@ -31,8 +37,7 @@ export interface SubItem {
   /** Shortcut for root+administrator only. Kept for backwards compat. */
   adminOnly?: boolean;
   /** When set, visible only to users whose role is in this list. Takes
-   *  precedence over adminOnly when both are present. Use this for
-   *  finer-grained control (e.g. Settings: root/admin/sysadmin/broker-dealer). */
+   *  precedence over adminOnly when both are present. */
   rolesAllowed?: string[];
 }
 
@@ -43,7 +48,7 @@ export interface NavSection {
 }
 
 // ── Navigation definition ────────────────────────────────────
-// Exported so SubNav and Layout can consume the same source
+// Single source of truth for sections + children. Unchanged from prior version.
 export const NAV_SECTIONS: NavSection[] = [
   {
     id: 'overview',
@@ -69,41 +74,65 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: '/b-book',              label: 'B-Book' },
       { path: '/coverage-book',       label: 'Coverage Book' },
-      { path: '/hedging-strategies',   label: 'Hedging Strategies' },
-      { path: '/execution-report',     label: 'Execution Report' },
+      { path: '/hedging-strategies',  label: 'Hedging Strategies' },
+      { path: '/execution-report',    label: 'Execution Report' },
     ],
   },
   {
     id: 'markets',
     label: 'Markets',
     items: [
-      { path: '/liquidity-providers',  label: 'Liquidity Providers' },
-      { path: '/symbol-mapping',       label: 'Symbol Mapping' },
-      { path: '/route-sanity',         label: 'Route Sanity' },
-      { path: '/price-rules',          label: 'Price Rules Engine' },
+      { path: '/liquidity-providers', label: 'Liquidity Providers' },
+      { path: '/symbol-mapping',      label: 'Symbol Mapping' },
+      { path: '/route-sanity',        label: 'Route Sanity' },
+      { path: '/price-rules',         label: 'Price Rules Engine' },
     ],
   },
   {
     id: 'control',
     label: 'Control',
     items: [
-      { path: '/logs',          label: 'Logs' },
-      { path: '/reports',       label: 'Reports' },
-      { path: '/users',         label: 'Users',    adminOnly: true },
-      { path: '/settings',      label: 'Settings', rolesAllowed: ['root', 'administrator', 'sysadmin', 'broker_dealer'] },
+      { path: '/logs',     label: 'Logs' },
+      { path: '/reports',  label: 'Reports' },
+      { path: '/users',    label: 'Users',    adminOnly: true },
+      { path: '/settings', label: 'Settings', rolesAllowed: ['root', 'administrator', 'sysadmin', 'broker_dealer'] },
     ],
   },
   {
     id: 'system',
     label: 'System',
     items: [
-      { path: '/mt5-servers',  label: 'MT5 Servers' },
+      { path: '/mt5-servers', label: 'MT5 Servers' },
     ],
   },
 ];
 
+// ── Mode colours ─────────────────────────────────────────────
+const COLOR_MAIN          = '#f5802c'; // orange — Main mode
+const COLOR_FAVOURITES    = '#49b3b3'; // teal — Favourites mode
+const COLOR_BORDER_MUTED  = '#444';    // inactive button border
+const COLOR_BORDER_HOVER  = '#666';    // hover affordance
+const COLOR_TEXT_DEFAULT  = '#fff';
+const COLOR_TEXT_MUTED    = '#aaa';
+
 // ── Pin persistence ──────────────────────────────────────────
-const PIN_KEY = 'taiga:pinned-items';
+// Reuses the existing storage key so users with pre-redesign pins keep them.
+const PIN_KEY    = 'taiga:pinned-items';
+const SEEDED_KEY = 'taiga:favourites-seeded';
+
+/**
+ * Default favourites — seeded ONCE on first mount when SEEDED_KEY is unset.
+ * After that the user owns the list; clearing favourites stays cleared.
+ */
+const DEFAULT_FAVOURITES: string[] = [
+  '/b-book',
+  '/coverage-book',
+  '/net-exposure',
+  '/hedging-strategies',
+  '/execution-report',
+  '/flow',          // Trader Intelligence
+  '/portfolio',
+];
 
 function loadPins(): string[] {
   try {
@@ -116,9 +145,26 @@ function savePins(pins: string[]) {
   localStorage.setItem(PIN_KEY, JSON.stringify(pins));
 }
 
+/**
+ * One-time seed of default favourites.
+ *
+ * Runs only when SEEDED_KEY is unset. Respects any existing pins (e.g. from
+ * the previous "pinned tabs" UX) — does not overwrite. After this runs once,
+ * the user is in full control: clearing favourites stays cleared across
+ * sessions.
+ */
+function seedDefaultsIfNeeded() {
+  try {
+    if (localStorage.getItem(SEEDED_KEY)) return;
+    const existing = loadPins();
+    if (existing.length === 0) {
+      savePins(DEFAULT_FAVOURITES);
+    }
+    localStorage.setItem(SEEDED_KEY, '1');
+  } catch { /* localStorage unavailable; skip seeding */ }
+}
+
 // ── Role-based item visibility ───────────────────────────────
-// Single source of truth for "should this user see this nav item".
-// Consulted by both TopBar's section filter and SubNav's items filter.
 export function canSeeItem(item: SubItem, role: string | undefined): boolean {
   if (item.rolesAllowed) {
     return !!role && item.rolesAllowed.includes(role);
@@ -135,7 +181,7 @@ export function sectionForPath(pathname: string): NavSection | undefined {
   for (const s of NAV_SECTIONS) {
     if (s.items.some(i => i.path === pathname)) return s;
   }
-  // Prefix match (e.g. /settings/security still lands in system)
+  // Prefix match (e.g. /settings/security still lands in control)
   for (const s of NAV_SECTIONS) {
     if (s.items.some(i => pathname.startsWith(i.path) && i.path !== '/')) return s;
   }
@@ -154,8 +200,6 @@ function findItem(path: string): SubItem | undefined {
 }
 
 // ── Account display helpers ──────────────────────────────────
-// Falls back gracefully when first_name / last_name are absent
-// (e.g. root@taiga.internal, legacy users before the name feature).
 function accountDisplayName(user: { email: string; first_name?: string; last_name?: string } | null): string {
   if (!user) return 'Account';
   const full = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
@@ -171,24 +215,36 @@ function accountInitials(user: { email: string; first_name?: string; last_name?:
   return user.email[0]?.toUpperCase() ?? 'U';
 }
 
+// ── Pin icon ─────────────────────────────────────────────────
+const PinIcon = ({ filled }: { filled: boolean }) => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
+    <path d="M9.068,16.347l4.9,4.9.707-.707a7.977,7.977,0,0,0,2.075-7.619l-.246-1,2.086-2.086.217.217a3.085,3.085,0,0,0,3.938.4,3,3,0,0,0,.38-4.565L18.2.954a3.085,3.085,0,0,0-3.938-.4,3,3,0,0,0-.38,4.565l.293.293L12.085,7.5,11.1,7.258A7.985,7.985,0,0,0,3.464,9.33l-.707.707,4.9,4.895L.293,22.293l1.414,1.414Z" />
+  </svg>
+);
+
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
+
+type Mode =
+  | { kind: 'main' }
+  | { kind: 'drilldown'; sectionId: string }
+  | { kind: 'favourites' };
+
 export function TopBar() {
   const location = useLocation();
-  const navigate = useNavigate();
   const { user, logout } = useAuth();
+
+  // One-time default seeding on first mount.
+  useEffect(() => { seedDefaultsIfNeeded(); }, []);
+
   const [pins, setPins] = useState<string[]>(loadPins);
+  const [mode, setMode] = useState<Mode>({ kind: 'main' });
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  // Global Portfolio Card stats. Sourced from PortfolioStatsContext (Layout-
-  // mounted) so the card stays live on every page. The provider owns the WS
-  // subscriptions; this component just reads `total` (B + A + C + Cost).
-  const { total: portfolioStats } = usePortfolioStats();
-
-  // Sync pins when SubNav toggles them
+  // Pin sync — kept in case any other component dispatches the event.
   useEffect(() => {
     const sync = () => setPins(loadPins());
     window.addEventListener('taiga:pins-changed', sync);
@@ -210,10 +266,7 @@ export function TopBar() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Active section
-  const activeSection = sectionForPath(location.pathname);
-
-  // Pin helpers
+  // Pin toggle
   const togglePin = useCallback((path: string) => {
     setPins(prev => {
       const next = prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path];
@@ -223,75 +276,200 @@ export function TopBar() {
     });
   }, []);
 
-  const isPinned = (path: string) => pins.includes(path);
+  // If pins drain to zero while in Favourites mode, drop back to Main.
+  // Belt-and-suspenders alongside disabling the Favourites button when empty.
+  useEffect(() => {
+    if (mode.kind === 'favourites' && pins.length === 0) {
+      setMode({ kind: 'main' });
+    }
+  }, [pins, mode.kind]);
 
-  // Section click → navigate to first sub-item
-  const handleSectionClick = (section: NavSection) => {
-    const first = section.items.find(i => canSeeItem(i, user?.role));
-    if (first) navigate(first.path);
-  };
+  // "You-are-here" cue: which section owns the current page
+  const activeSection = sectionForPath(location.pathname);
 
-  const fmt = (d: Date) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const fmt     = (d: Date) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
+  // Visible favourites — filter through canSeeItem so a role loss hides the pin.
+  const visibleFavourites: SubItem[] = pins
+    .map(findItem)
+    .filter((i): i is SubItem => !!i && canSeeItem(i, user?.role));
+
+  // ── Render helpers ─────────────────────────────────────────
+
+  /** Mode pill: Main / Favourites — persistent; fixed width via padding. */
+  const renderModePill = (
+    label: string,
+    isActive: boolean,
+    color: string,
+    onClick: () => void,
+    disabled = false,
+  ) => (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      className={clsx(
+        'px-3 py-1 text-[13px] rounded transition-colors',
+        disabled && 'cursor-not-allowed opacity-40',
+      )}
+      style={{
+        border: `1px solid ${isActive ? color : COLOR_BORDER_MUTED}`,
+        color: isActive ? color : COLOR_TEXT_DEFAULT,
+        backgroundColor: 'transparent',
+        minWidth: 92,
+      }}
+      onMouseEnter={e => {
+        if (!isActive && !disabled) e.currentTarget.style.borderColor = COLOR_BORDER_HOVER;
+      }}
+      onMouseLeave={e => {
+        if (!isActive && !disabled) e.currentTarget.style.borderColor = COLOR_BORDER_MUTED;
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  /** Section pill in Main mode — clicking enters drilldown. */
+  const renderSectionPill = (section: NavSection) => {
+    const ownsCurrentPage = activeSection?.id === section.id;
+    return (
+      <button
+        key={section.id}
+        onClick={() => setMode({ kind: 'drilldown', sectionId: section.id })}
+        className="relative px-3 py-1 text-[13px] rounded transition-colors"
+        style={{
+          border: `1px solid ${COLOR_BORDER_MUTED}`,
+          color: COLOR_TEXT_DEFAULT,
+          backgroundColor: 'transparent',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = COLOR_BORDER_HOVER; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = COLOR_BORDER_MUTED; }}
+      >
+        {section.label}
+        {ownsCurrentPage && (
+          <div
+            className="absolute h-[2px] rounded-full"
+            style={{ bottom: 1, left: 8, right: 8, backgroundColor: COLOR_MAIN }}
+          />
+        )}
+      </button>
+    );
+  };
+
+  /** Drilldown breadcrumb pill — shows the current section name in mode colour. */
+  const renderBreadcrumbPill = (label: string, color: string) => (
+    <span
+      className="px-3 py-1 text-[13px] rounded"
+      style={{
+        border: `1px solid ${color}`,
+        color,
+        backgroundColor: 'transparent',
+        cursor: 'default',
+      }}
+    >
+      {label}
+    </span>
+  );
+
+  /** Child item pill — used in Drilldown and Favourites modes. */
+  const renderChildPill = (item: SubItem, modeColor: string, alwaysShowPin: boolean) => {
+    const isActive = location.pathname === item.path;
+    const pinned = pins.includes(item.path);
+
+    return (
+      <NavLink
+        key={item.path}
+        to={item.path}
+        className="group relative flex items-center gap-1.5 px-3 py-1 text-[13px] rounded transition-colors"
+        style={{
+          border: `1px solid ${isActive ? modeColor : COLOR_BORDER_MUTED}`,
+          color: isActive ? modeColor : COLOR_TEXT_DEFAULT,
+        }}
+        onMouseEnter={e => {
+          if (!isActive) (e.currentTarget as HTMLAnchorElement).style.borderColor = COLOR_BORDER_HOVER;
+        }}
+        onMouseLeave={e => {
+          if (!isActive) (e.currentTarget as HTMLAnchorElement).style.borderColor = COLOR_BORDER_MUTED;
+        }}
+      >
+        <span>{item.label}</span>
+        <button
+          onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
+          className={clsx(
+            (alwaysShowPin || pinned) ? 'inline-flex' : 'hidden group-hover:inline-flex',
+            'items-center',
+          )}
+          style={{ color: pinned ? modeColor : COLOR_TEXT_DEFAULT, padding: 0, lineHeight: 1 }}
+          title={pinned ? 'Unpin from favourites' : 'Pin to favourites'}
+        >
+          <PinIcon filled={pinned} />
+        </button>
+      </NavLink>
+    );
+  };
+
+  // ── Render ─────────────────────────────────────────────────
   return (
     <div className="shrink-0 flex flex-col" style={{ userSelect: 'none' }}>
-      {/* ── Top strip — pinned tabs (left) + clock + account (right) ──
-          Always rendered so the clock and account dropdown have a stable
-          home regardless of whether the user has pinned anything. */}
-      <div
-        className="flex items-center gap-2 px-4 shrink-0"
-        style={{ height: 32, backgroundColor: '#1c1b1e', borderBottom: '1px solid #3a3a3e' }}
+      {/* ── Row 1: Mode-based nav ─────────────────────────────────── */}
+      <header
+        className="flex items-center px-4 shrink-0 gap-3"
+        style={{ height: 56, backgroundColor: '#232326', borderBottom: '1px solid #3a3a3e' }}
       >
-        {/* Left: PINNED label + tabs (only when pins exist) */}
-        {pins.length > 0 && (
-          <>
-            <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>
-              Pinned
-            </span>
-            {pins.map(path => {
-              const item = findItem(path);
-              if (!item) return null;
-              const isActive = location.pathname === path;
-              return (
-                <NavLink
-                  key={path}
-                  to={path}
-                  className="flex items-center gap-1.5 group"
-                  style={{
-                    fontSize: 11,
-                    padding: '2px 10px',
-                    borderRadius: 4,
-                    border: `1px solid #6B9AC4`,
-                    color: isActive ? '#c9b87c' : '#fff',
-                    backgroundColor: isActive ? '#2a1f14' : 'transparent',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  <span>{item.label}</span>
-                  <button
-                    onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(path); }}
-                    style={{
-                      fontSize: 9,
-                      color: '#fff',
-                      marginLeft: 2,
-                      lineHeight: 1,
-                      transition: 'color 0.15s',
-                    }}
-                    className="hover:!text-[#ff5c5c]"
-                    title="Unpin"
-                  >
-                    x
-                  </button>
-                </NavLink>
-              );
-            })}
-          </>
-        )}
+        {/* Logo */}
+        <div className="flex items-center shrink-0" style={{ marginRight: 12 }}>
+          <img src="/taiga-logo.png" alt="taiga" style={{ height: 28, objectFit: 'contain' }} draggable={false} />
+        </div>
 
-        {/* Right: clock + account dropdown */}
+        {/* Mode nav — Main and Favourites pills are always present on the left. */}
+        <nav className="flex items-center gap-2 flex-1 min-w-0 overflow-x-auto">
+          {/* Persistent: Main pill */}
+          {renderModePill(
+            mode.kind === 'main' ? 'Main' : 'Main…',
+            mode.kind === 'main',
+            COLOR_MAIN,
+            () => setMode({ kind: 'main' }),
+          )}
+
+          {/* Persistent: Favourites pill (greyed when no favourites) */}
+          {renderModePill(
+            'Favourites',
+            mode.kind === 'favourites',
+            COLOR_FAVOURITES,
+            () => setMode({ kind: 'favourites' }),
+            visibleFavourites.length === 0,
+          )}
+
+          {/* Mode-specific content */}
+          {mode.kind === 'main' && NAV_SECTIONS.map(section => {
+            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
+            if (visibleItems.length === 0) return null;
+            return renderSectionPill(section);
+          })}
+
+          {mode.kind === 'drilldown' && (() => {
+            const section = NAV_SECTIONS.find(s => s.id === mode.sectionId);
+            if (!section) return null;
+            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
+            return (
+              <>
+                {renderBreadcrumbPill(section.label, COLOR_MAIN)}
+                <span style={{ color: COLOR_TEXT_MUTED, fontSize: 13 }}>{'>>'}</span>
+                {visibleItems.map(item => renderChildPill(item, COLOR_MAIN, false))}
+              </>
+            );
+          })()}
+
+          {mode.kind === 'favourites' && (
+            <>
+              <span style={{ color: COLOR_TEXT_MUTED, fontSize: 13 }}>{'>>'}</span>
+              {visibleFavourites.map(item => renderChildPill(item, COLOR_FAVOURITES, true))}
+            </>
+          )}
+        </nav>
+
+        {/* Right — clock + account dropdown */}
         <div className="ml-auto flex items-center gap-3 shrink-0">
-          {/* Date & Time */}
           <div className="flex items-center gap-2 shrink-0" style={{ fontSize: 11 }}>
             <span style={{ color: '#bbb' }}>{fmtDate(currentTime)}</span>
             <span className="font-mono" style={{ color: '#fff' }}>{fmt(currentTime)}</span>
@@ -299,13 +477,11 @@ export function TopBar() {
 
           <div className="w-px h-4" style={{ backgroundColor: '#555' }} />
 
-          {/* Account dropdown */}
           <div ref={accountRef} className="relative">
             <button
               onClick={() => setAccountOpen(v => !v)}
               className="flex items-center gap-2 px-1.5 py-0.5 rounded transition-colors text-[#ccc] hover:text-white"
             >
-              {/* Avatar circle — slightly smaller to fit pinned bar height */}
               <div
                 className="flex items-center justify-center rounded-full"
                 style={{ width: 22, height: 22, backgroundColor: '#3a3a3e', fontSize: 10, fontWeight: 600, color: '#fff' }}
@@ -323,13 +499,8 @@ export function TopBar() {
             {accountOpen && (
               <div
                 className="absolute right-0 mt-1 rounded shadow-lg z-50"
-                style={{
-                  minWidth: 240,
-                  backgroundColor: '#2a292c',
-                  border: '1px solid #555',
-                }}
+                style={{ minWidth: 240, backgroundColor: '#2a292c', border: '1px solid #555' }}
               >
-                {/* Name header */}
                 <div className="px-3 py-2" style={{ borderBottom: '1px solid #3a3a3e' }}>
                   <div
                     style={{ fontSize: 13, color: '#fff', fontWeight: 500 }}
@@ -340,7 +511,6 @@ export function TopBar() {
                   </div>
                 </div>
 
-                {/* Details */}
                 <div className="px-3 py-2" style={{ borderBottom: '1px solid #3a3a3e' }}>
                   <div className="flex items-baseline justify-between gap-3" style={{ marginBottom: 6 }}>
                     <span style={{ fontSize: 9, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -364,7 +534,6 @@ export function TopBar() {
                   </div>
                 </div>
 
-                {/* Sign out */}
                 <button
                   onClick={() => { setAccountOpen(false); void logout(); }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors text-[#ccc] hover:text-[#ff5c5c] hover:bg-[#3a2020]"
@@ -379,137 +548,40 @@ export function TopBar() {
             )}
           </div>
         </div>
-      </div>
-
-      {/* ── Main top bar ─────────────────────────────────── */}
-      <header
-        className="flex items-center justify-between px-4 shrink-0"
-        style={{ height: 68, backgroundColor: '#232326', borderBottom: '1px solid #808080' }}
-      >
-        {/* Left — Logo */}
-        <div className="flex items-center shrink-0" style={{ marginRight: 24 }}>
-          <img
-            src="/taiga-logo.png"
-            alt="taiga"
-            style={{ height: 34, objectFit: 'contain' }}
-            draggable={false}
-          />
-        </div>
-
-        {/* Center — Primary nav sections */}
-        <nav className="flex items-center gap-1 flex-1">
-          {NAV_SECTIONS.map(section => {
-            // Hide sections whose only items the user can't see
-            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
-            if (visibleItems.length === 0) return null;
-
-            const isActive = activeSection?.id === section.id;
-            return (
-              <button
-                key={section.id}
-                onClick={() => handleSectionClick(section)}
-                className={clsx(
-                  'relative px-3 py-1.5 text-[15px] font-medium rounded transition-colors',
-                  isActive
-                    ? 'text-[#c9b87c]'
-                    : 'text-[#ccc] hover:text-white'
-                )}
-              >
-                {section.label}
-                {isActive && (
-                  <div
-                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
-                    style={{ backgroundColor: '#c9b87c' }}
-                  />
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Right — Cards Period Selector + Global Portfolio Card.
-
-            • Cards Period Selector (left): controls the period shown in
-              all 5 cards (B / A / C / Cost + this Portfolio Card).
-              Bound to PortfolioStatsContext so the same value drives
-              the page-level selector on Row 2 of the Portfolio page.
-
-            • Portfolio Card (right): clickable; navigates to /portfolio.
-              Yellow side line (#c9b87c) ties the card to the nav system —
-              same colour as the active section indicator and pinned-active
-              tabs. Background stays constant (#252429) on every route so
-              the card reads cleanly against the dark header bar; the
-              active-on-/portfolio cue is already handled by the SubNav
-              and the pinned-tab strip, no need to double up here. */}
-        <div className="flex items-center gap-2 shrink-0">
-          <CardsPeriodSelector compact />
-          <NavLink
-            to="/portfolio"
-            title="Open Portfolio (B + A + C + Cost — net of expenses and revenue)"
-            className="inline-flex items-stretch gap-2 rounded px-2 py-2 transition-colors hover:bg-[#2a292e]"
-            style={{
-              backgroundColor: '#252429',
-              border: '1px solid #c9b87c44',
-              borderLeft: '3px solid #c9b87c',
-            }}
-          >
-            <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Portfolio</div>
-              <div className="text-sm font-mono text-white">{portfolioStats.positions ?? 0} pos</div>
-            </div>
-            <div className="w-px self-stretch bg-[#3a3a3e]" />
-            <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Rev. & Exp.</div>
-              {portfolioStats.cost != null ? (
-                <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.cost) }}>
-                  {fmtHdrMoney(portfolioStats.cost)}
-                </div>
-              ) : (
-                <div className="text-sm font-mono text-[#d2d6e2]">—</div>
-              )}
-            </div>
-            <div className="w-px self-stretch bg-[#3a3a3e]" />
-            <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Volume</div>
-              <div className="text-sm font-mono text-white">
-                {portfolioStats.volume != null ? fmtHdrCompact(portfolioStats.volume) : '—'}
-              </div>
-            </div>
-            <div className="w-px self-stretch bg-[#3a3a3e]" />
-            <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Unrealized P/L (Net)</div>
-              {portfolioStats.unrealized != null ? (
-                <div className="text-sm font-mono" style={{ color: pnlColor(portfolioStats.unrealized) }}>
-                  {fmtHdrMoney(portfolioStats.unrealized)}
-                </div>
-              ) : (
-                <div className="text-sm font-mono text-[#d2d6e2]">—</div>
-              )}
-            </div>
-            <div className="w-px self-stretch bg-[#3a3a3e]" />
-            <div>
-              <div className="text-xs uppercase tracking-wider text-white mb-0.5">Realized P/L (Net)</div>
-              {portfolioStats.realized != null ? (() => {
-                // Net Realized = realized + cost (commissions + swaps + rebates).
-                // cost is positive when broker earned, negative when charged.
-                const netRealized = portfolioStats.realized + (portfolioStats.cost ?? 0);
-                return (
-                  <div className="text-sm font-mono" style={{ color: pnlColor(netRealized) }}>
-                    {fmtHdrMoney(netRealized)}
-                  </div>
-                );
-              })() : (
-                <div className="text-sm font-mono text-[#d2d6e2]">—</div>
-              )}
-            </div>
-          </NavLink>
-        </div>
       </header>
+
+      {/* ── Row 2: Reserved strip ────────────────────────────────────
+          Future content for the left side: most-traded symbols (streaming
+          Ask prices), news releases, trader-archetype detection events
+          (Scalper, BOT, etc.).
+
+          Right side is route-aware: on /portfolio we mount the M/D toggle
+          + PortfolioCard. Other routes leave the strip empty for now.
+
+          Bottom border uses #808080 to mark the page boundary, matching
+          the BBookPage reference. */}
+      <div
+        className="shrink-0 flex items-center px-4 gap-2"
+        style={{ height: 56, paddingTop: 8, paddingBottom: 8, backgroundColor: '#1c1b1e', borderBottom: '1px solid #808080' }}
+        aria-label="Reserved strip — ticker / news / archetype detections (left); portfolio card on /portfolio (right)"
+      >
+        {/* Left side — reserved for future ticker / news / archetype content. */}
+        <div className="flex-1 min-w-0" />
+
+        {/* Right side — Portfolio card on /portfolio only. */}
+        {location.pathname === '/portfolio' && (
+          <>
+            <CardsPeriodToggle title="Period applied to the Portfolio card" />
+            <PortfolioCard />
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-// Re-export pin helpers for SubNav
+// Re-export pin helpers for any future consumer that wants to read/write
+// favourites without going through the TopBar component itself.
 export { loadPins, savePins };
 
 export default TopBar;

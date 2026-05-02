@@ -1247,7 +1247,7 @@ export function ExecutionReportPage() {
                 onClick={() => {
                   if (p.data?.rule_id != null) {
                     sessionStorage.setItem('nexrisk:hedging:selected', String(p.data.rule_id));
-                    navigate('/hedge-rules');
+                    navigate('/hedging-strategies');
                   }
                 }}
                 title={`Rule #${p.data?.rule_id} — click to open in Hedging Strategies`}

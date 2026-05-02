@@ -8,6 +8,7 @@ import { clsx } from 'clsx';
 import { BBookCharts } from '@/components/charts/BBookCharts';
 import { mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAPI, type BBookWsEvent } from '@/services/api';
 import { fmtHdrMoney, fmtHdrCompact, pnlColor, usePortfolioStats } from '@/stores/PortfolioStatsContext';
+import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
 
 // ======================
 // THEME (Quartz dark)
@@ -501,24 +502,29 @@ export function BBookPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#232326' }}>
 
-      {/* Page Header — title on left, B-Book card right-aligned */}
+      {/* Page Header — title on left, M/D toggle + B-Book card right-aligned */}
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between gap-4">
         <div className="shrink-0">
           <h1 className="text-lg font-semibold text-white">B-Book</h1>
         </div>
 
-        {/* ── B-Book card — 7 cells: title | Long/Short | Volume | Unrealized | Realized | Cost | Hedge Ratio ──
-           Live cells (positions, Long/Short, Volume) reflect open positions right now.
-           Period cells (Unrealized/Realized/Cost/Hedge Ratio) follow the TopBar period selector. */}
-        <div
-          className="inline-flex items-stretch gap-2 rounded px-2 py-1 ml-auto"
-          style={{
-            backgroundColor: '#252429',
-            border: '1px solid #49b3b344',
-            borderLeft: '3px solid #49b3b3',
-          }}
-          title="B-Book card. Live cells reflect open positions; Unrealized/Realized P/L, Cost and Hedge Ratio follow the period selector in the top bar."
-        >
+        {/* M/D toggle + B-Book card grouped on the right.
+            Toggle replaces the legacy CardsPeriodSelector that used to sit on the TopBar. */}
+        <div className="ml-auto flex items-center gap-2">
+          <CardsPeriodToggle />
+
+          {/* ── B-Book card — 7 cells: title | Long/Short | Volume | Unrealized | Realized | Cost | Hedge Ratio ──
+             Live cells (positions, Long/Short, Volume) reflect open positions right now.
+             Period cells (Unrealized/Realized/Cost/Hedge Ratio) follow the M/D toggle. */}
+          <div
+            className="inline-flex items-stretch gap-2 rounded px-2 py-1"
+            style={{
+              backgroundColor: '#252429',
+              border: '1px solid #49b3b344',
+              borderLeft: '3px solid #49b3b3',
+            }}
+            title="B-Book card. Live cells reflect open positions; Unrealized/Realized P/L, Cost and Hedge Ratio follow the M/D toggle to the left."
+          >
           {/* Cell 1 — Card name + position count */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">B-Book</div>
@@ -610,6 +616,7 @@ export function BBookPage() {
                 {hedgeRatioPct.toFixed(1)}%
               </div>
             )}
+          </div>
           </div>
         </div>
       </div>
