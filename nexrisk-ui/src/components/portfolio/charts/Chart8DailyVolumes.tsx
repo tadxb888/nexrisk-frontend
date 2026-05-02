@@ -130,6 +130,9 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
     c:         false,
     portfolio: false,
   });
+  // Active hover state — captured from LineChart's onMouseMove. Drives
+  // the pinned tooltip card. null = not hovering, card hides.
+  const [active, setActive] = useState<{ row: ChartRow; index: number } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -216,15 +219,28 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
         </div>
       </div>
 
-      {/* ── Chart body — relative so the fixed-corner tooltip can
-          anchor inside the chart's bounding box. ─────────────── */}
+      {/* ── Chart body — relative so the fixed-corner tooltip card
+          can anchor inside the chart's bounding box. ─────────── */}
       <div className="flex-1 min-h-0 relative">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={data}
-            // Right margin pulled out to make room for the fixed
-            // tooltip card sitting in the top-right corner.
             margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
+            // Capture hover state into local React state. The chart
+            // itself only draws the vertical cursor line via Recharts'
+            // <Tooltip>; the card is rendered separately as an
+            // absolutely-positioned <div> that overlays the chart's
+            // top-right corner — sidesteps Recharts' tooltip
+            // positioning quirks entirely.
+            onMouseMove={(state: any) => {
+              const idx = state?.activeTooltipIndex;
+              if (idx == null || idx < 0 || idx >= data.length) {
+                setActive(null);
+                return;
+              }
+              setActive({ row: data[idx], index: idx });
+            }}
+            onMouseLeave={() => setActive(null)}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#3a3a3c" />
             <XAxis
@@ -250,33 +266,15 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
                 },
               }}
             />
-            {/* Custom tooltip — uses Recharts' standard cursor (vertical
-                line at the hovered X) but renders our own card OUT OF
-                the way of the lines via `position={{x:..,y:..}}` and a
-                custom content function. */}
+            {/* Recharts <Tooltip> is here ONLY to draw the vertical
+                cursor line on hover. The visible card is rendered
+                separately below as a plain absolutely-positioned div.
+                We force `content` to render nothing so Recharts'
+                default tooltip never appears. */}
             <Tooltip
               cursor={{ stroke: '#ffffff66', strokeWidth: 1 }}
-              // Anchor the tooltip card to a fixed position inside the
-              // chart bounding box (top-right corner). Recharts treats
-              // these coords as offsets from the chart container's
-              // top-left, so {x: 0, y: 0} would be top-left. We push it
-              // toward the right edge with a generous offset; the
-              // CustomTooltip itself uses absolute width so it doesn't
-              // depend on Recharts' overflow detection.
-              position={{ x: undefined as any, y: 8 }}
-              wrapperStyle={{
-                pointerEvents: 'none',
-                // Pin to the right edge of the chart container.
-                right: 8,
-                left:  'auto',
-              }}
-              content={(props) => (
-                <CustomTooltip
-                  {...(props as any)}
-                  unitLabel={unitLabel}
-                  hidden={hidden}
-                />
-              )}
+              content={() => null}
+              isAnimationActive={false}
             />
             {SERIES.map(s => (
               <Line
@@ -289,14 +287,23 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
                 dot={false}
                 isAnimationActive={false}
                 // Hide via opacity instead of unmounting so the Y-axis
-                // domain doesn't snap on each toggle. `connectNulls` is
-                // unaffected because we're not nulling values, just
-                // making the line invisible.
+                // domain doesn't snap on each toggle.
                 strokeOpacity={hidden[s.key] ? 0 : 1}
               />
             ))}
           </LineChart>
         </ResponsiveContainer>
+
+        {/* ── Pinned tooltip card ─────────────────────────────────
+            Always rendered top-right of the chart container. Shows
+            "no point" when the cursor isn't over the chart, and the
+            current row's values when it is. Independent of Recharts'
+            tooltip layout — won't overlap the lines, ever. */}
+        <PinnedTooltip
+          active={active}
+          unitLabel={unitLabel}
+          hidden={hidden}
+        />
       </div>
 
       {/* ── Custom legend — click chip to toggle that book's line ── */}
@@ -334,40 +341,41 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
   );
 }
 
-// ── CustomTooltip — fixed position card, all 4 books with labels + unit ──
-interface CustomTooltipProps {
-  active?:    boolean;
-  payload?:   Array<any>;
-  label?:     string | number;
+// ── PinnedTooltip — overlays chart's top-right corner on hover ──
+//
+// Independent of Recharts' tooltip system. Renders only when the
+// cursor is over the chart. Sits on top of the chart's lines (zIndex
+// 10), opaque dark background blocks the small section behind it —
+// the card itself is the answer to "what are the values here", so
+// not seeing the line behind it is an acceptable trade.
+interface PinnedTooltipProps {
+  active:     { row: ChartRow; index: number } | null;
   unitLabel:  string;
   hidden:     Record<BookKey, boolean>;
 }
 
-function CustomTooltip({ active, payload, label, unitLabel, hidden }: CustomTooltipProps) {
-  if (!active || !payload || payload.length === 0) return null;
-
-  // payload is [{ name, value, dataKey, ... }] per Line. Map dataKey → series.
-  const byDataKey = new Map<string, { value: number; color: string; name: string }>();
-  for (const p of payload) {
-    if (p?.dataKey == null) continue;
-    byDataKey.set(p.dataKey, { value: p.value as number, color: p.color, name: p.name });
-  }
+function PinnedTooltip({ active, unitLabel, hidden }: PinnedTooltipProps) {
+  if (active == null) return null;
 
   return (
     <div
       className="font-mono text-[12px]"
       style={{
+        position:        'absolute',
+        top:             8,
+        right:           8,
         backgroundColor: '#252429',
         border:          '1px solid #3a3a3c',
         borderRadius:    4,
         padding:         '6px 10px',
         minWidth:        180,
+        pointerEvents:   'none',  // never blocks chart hover
+        zIndex:          10,
       }}
     >
-      <div className="text-[#808080] mb-1">{label}</div>
+      <div className="text-[#808080] mb-1">{active.row.label}</div>
       {SERIES.map(s => {
-        const entry = byDataKey.get(s.dataKey);
-        const v     = entry?.value;
+        const v     = active.row[s.dataKey];
         const isHid = hidden[s.key];
         return (
           <div
