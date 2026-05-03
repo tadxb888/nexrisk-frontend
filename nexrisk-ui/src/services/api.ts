@@ -2066,3 +2066,150 @@ export const settingsApi = {
       }),
   },
 };
+// ════════════════════════════════════════════════════════════════════════════
+// Alerts Bar
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface AlertsBarCell {
+  cell_index:  number;
+  source_type: 'mt5';                     // 'lp' reserved for future, not exposed in v1
+  source_id:   string;                    // == MT5 node_name; opaque (may contain spaces)
+  symbol:      string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AlertsBarCellsResponse {
+  user_id:   string;
+  max_cells: number;
+  cells:     AlertsBarCell[];
+}
+
+export interface AlertsBarSaveResponse {
+  status:     'OK';
+  cell_count: number;
+  max_cells:  number;
+}
+
+export interface AlertsBarSavePayload {
+  cells: { source_type: 'mt5'; source_id: string; symbol: string }[];
+}
+
+export const alertsBarApi = {
+  /** Restore the current user's saved cells (sorted by cell_index ascending). */
+  getCells: () =>
+    fetchAPI<AlertsBarCellsResponse>('/api/v1/alerts-bar/cells'),
+
+  /**
+   * Replace the user's cells with the supplied array.
+   * cell_index is derived from array order. Empty array clears the bar.
+   */
+  saveCells: (payload: AlertsBarSavePayload) =>
+    fetchAPI<AlertsBarSaveResponse>('/api/v1/alerts-bar/cells', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+};
+
+// ── Quote / node-status WebSocket events ─────────────────────────────────────
+
+/** Tick payload published by the C++ MT5 publisher. Forward-compatible. */
+export interface QuoteTick {
+  symbol:        string;
+  bid:           number;
+  ask:           number;
+  last?:         number;
+  volume?:       number;
+  datetime?:     number;        // seconds
+  datetime_msc?: number;        // milliseconds
+  flags?:        number;
+  flag_names?:   string[];
+}
+
+export type AlertsBarWsEvent =
+  | { kind: 'quote';        sourceId: string; symbol: string; tick: QuoteTick; timestampMs: number }
+  | { kind: 'node_status';  nodeId: number; status: string };
+
+/**
+ * Open a managed WebSocket dedicated to the Alerts Bar.
+ *
+ * Receives all `quote.{source_id}.{symbol}` envelopes and `mt5.node_status`
+ * envelopes from the BFF (which fans out everything from the backend).
+ * Subscribe messages are sent for symmetry with the existing pattern; the
+ * BFF ignores them.
+ *
+ * Topic parsing uses the LAST dot to separate symbol so a source_id with a
+ * dot in it would still parse correctly. (MT5 symbols never contain dots.)
+ *
+ * @returns cleanup function — call it from useEffect cleanup to close.
+ */
+export function connectAlertsBarWebSocket(
+  onEvent: (event: AlertsBarWsEvent) => void,
+  onStatus?: (status: 'open' | 'closed' | 'error') => void
+): () => void {
+  let ws: WebSocket | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
+
+  const TOPIC_RE = /^quote\.(.+)\.([^.]+)$/;
+
+  function connect() {
+    if (destroyed) return;
+    ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+
+    ws.onopen = () => {
+      onStatus?.('open');
+      // Polite no-op: BFF fans out everything regardless. Kept for parity.
+      ws?.send(JSON.stringify({ type: 'subscribe', topics: ['mt5.node_status'] }));
+    };
+
+    ws.onmessage = (ev: MessageEvent<string>) => {
+      let env: { topic?: string; type?: string; data?: unknown; timestamp_ms?: number };
+      try { env = JSON.parse(ev.data); } catch { return; }
+      const topic = env.topic;
+      if (typeof topic !== 'string') return;
+
+      // Quote tick
+      if (topic.startsWith('quote.')) {
+        const m = topic.match(TOPIC_RE);
+        if (!m) return;
+        const [, sourceId, symbol] = m;
+        const tick = env.data as QuoteTick | undefined;
+        if (!tick || typeof tick.ask !== 'number') return;
+        onEvent({
+          kind: 'quote',
+          sourceId,
+          symbol,
+          tick,
+          timestampMs: env.timestamp_ms ?? Date.now(),
+        });
+        return;
+      }
+
+      // Node status change (offline/online detection)
+      if (topic === 'mt5.node_status') {
+        const data = env.data as { type?: string; node_id?: number; status?: string } | undefined;
+        if (data?.type === 'NODE_STATUS_CHANGE' && typeof data.node_id === 'number' && data.status) {
+          onEvent({ kind: 'node_status', nodeId: data.node_id, status: data.status });
+        }
+      }
+    };
+
+    ws.onerror = () => onStatus?.('error');
+    ws.onclose = () => {
+      onStatus?.('closed');
+      if (!destroyed) retryTimer = setTimeout(connect, 5000);
+    };
+  }
+
+  connect();
+
+  return () => {
+    destroyed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (ws) {
+      ws.onclose = null;
+      ws.close(1000, 'Client disconnecting');
+    }
+  };
+}

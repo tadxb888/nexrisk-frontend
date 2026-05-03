@@ -29,6 +29,7 @@ import { useAuth } from '@/stores/AuthContext';
 import { clsx } from 'clsx';
 import { PortfolioCard } from '@/components/portfolio/PortfolioCard';
 import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
+import { AlertsBar } from '@/components/market/AlertsBar';
 
 // ── Types ────────────────────────────────────────────────────
 export interface SubItem {
@@ -565,7 +566,10 @@ export function TopBar() {
         style={{ height: 56, paddingTop: 8, paddingBottom: 8, backgroundColor: '#1c1b1e', borderBottom: '1px solid #808080' }}
         aria-label="Reserved strip — ticker / news / archetype detections (left); portfolio card on /portfolio (right)"
       >
-        {/* Left side — reserved for future ticker / news / archetype content. */}
+        {/* Left side — Alerts Bar (FX cells, ≤50% of bar width). */}
+        <AlertsBar />
+
+        {/* Spacer — fills the gap between cells and the route-aware right-hand content. */}
         <div className="flex-1 min-w-0" />
 
         {/* Right side — Portfolio card on /portfolio only. */}
