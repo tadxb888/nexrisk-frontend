@@ -26,6 +26,7 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 // ── Types ─────────────────────────────────────────────────────
 interface LPMapping {
   id: number;
+  node_id: number;
   mt5_symbol: string;
   lp_id: string;
   lp_name: string;
@@ -61,8 +62,57 @@ interface RowEdit {
   lp_trades_in_lots: string; lp_trades_in_units: string;
   min_size: string; step_size: string; lp_std_lot: string;
 }
-interface SnapQuoteSide { price: number; source: 'lp' | 'mt5'; }
-interface SnapQuote { mt5?: SnapQuoteSide | 'loading' | 'error'; lp?: SnapQuoteSide | 'loading' | 'error'; }
+interface SnapQuoteEnvelope {
+  mt5: {
+    available: boolean;
+    bid?: number | null;
+    ask?: number | null;
+    last?: number;
+    contract_size?: number;
+    volume_min?: number;
+    digits?: number;
+    calc_mode?: number;
+    currency_base?: string;
+    currency_profit?: string;
+    tick_ts_ms?: number;
+    stale?: boolean;
+    tick_unavailable?: boolean;
+    reason?: string;
+  };
+  lp: {
+    available: boolean;
+    bid?: number | null;
+    ask?: number | null;
+    contract_multiplier?: number;
+    min_trade_vol?: number;
+    round_lot?: number;
+    price_precision?: number;
+    min_price_increment?: number;
+    book_state?: string;
+    last_update_ts_ms?: number;
+    retry_after_ms?: number;
+    book_error?: string;
+    reason?: string;
+  };
+  derived: {
+    confidence: 'high' | 'partial' | 'none';
+    calc_mode_name: string;
+    family: string;
+    mt5_volume_unit: 'LOTS' | 'UNITS';
+    lp_volume_unit: 'LOTS' | 'UNITS';
+    volume_multiplier: number;
+    price_multiplier: number;
+    lp_std_lot: number;
+    min_size: number;
+    lp_price_precision: number;
+    warnings: string[];
+  };
+}
+type SnapQuote =
+  | { status: 'loading' }
+  | { status: 'cold';  data: SnapQuoteEnvelope }   // LP book warming, retry pending
+  | { status: 'ready'; data: SnapQuoteEnvelope }
+  | { status: 'error'; error: string };
 interface ReviewRow { mt5_symbol: string; lp_symbol: string; confidence: 'exact' | 'derived' | 'fallback'; trader_count: number; total_volume: number; }
 // ── Helpers ───────────────────────────────────────────────────
 function computeMultiplier(mt5cs?: number, lpCm?: number): number | undefined {
@@ -451,8 +501,12 @@ export function SymbolMappingPage() {
 
   // ── Queries ────────────────────────────────────────────────
   const { data: mappingData, isLoading: loadingMaps, error: mapsErr, refetch } = useQuery({
-    queryKey: ['mappings-lp'],
-    queryFn:  () => api<{ mappings: LPMapping[] }>('/api/v1/symbol-mappings'),
+    queryKey: ['mappings-lp', nodeId],
+    queryFn:  () => api<{ mappings: LPMapping[] }>(
+      nodeId !== null
+        ? `/api/v1/symbol-mappings?node_id=${nodeId}`
+        : '/api/v1/symbol-mappings'
+    ),
     staleTime: 10_000,
   });
   const { data: nodeData } = useQuery({
@@ -490,8 +544,12 @@ export function SymbolMappingPage() {
     enabled: !!lpId, staleTime: 15_000, refetchInterval: 20_000, retry: false,
   });
   const { data: unmappedData } = useQuery({
-    queryKey: ['mappings-lp-unmapped'],
-    queryFn:  () => api<{ unmapped: string[] }>('/api/v1/symbol-mappings/unmapped'),
+    queryKey: ['mappings-lp-unmapped', nodeId],
+    queryFn:  () => api<{ unmapped: string[] }>(
+      nodeId !== null
+        ? `/api/v1/symbol-mappings/unmapped?node_id=${nodeId}`
+        : '/api/v1/symbol-mappings/unmapped'
+    ),
     staleTime: 30_000,
   });
 
@@ -574,10 +632,16 @@ export function SymbolMappingPage() {
     if (!addMt5.trim())   { setAddErr('Select an MT5 symbol'); return; }
     if (!addLpSym.trim()) { setAddErr('Enter LP symbol'); return; }
     if (!lpId)            { setAddErr('Select a Liquidity Provider'); return; }
+    if (nodeId === null)  { setAddErr('Select an MT5 node — mappings are per-node'); return; }
     setAddBusy(true); setAddErr('');
     try {
       const toBool = (v: string) => v === 'yes' ? true : v === 'no' ? false : undefined;
-      const existing = mappings.find(m => m.mt5_symbol === addMt5.trim() && m.lp_id === lpId);
+      // Duplicate lookup is now scoped by (node_id, mt5_symbol, lp_id) — the
+      // same composite key the DB unique constraint uses (Migration 029).
+      const existing = mappings.find(m =>
+        m.node_id === nodeId &&
+        m.mt5_symbol === addMt5.trim() &&
+        m.lp_id === lpId);
       if (existing) {
         await api(`/api/v1/symbol-mappings/${existing.id}`, { method: 'PUT', body: JSON.stringify({
           lp_symbol: addLpSym.trim(),
@@ -591,6 +655,7 @@ export function SymbolMappingPage() {
         })});
       } else {
         await api('/api/v1/symbol-mappings', { method: 'POST', body: JSON.stringify({
+          node_id: nodeId,
           mt5_symbol: addMt5.trim(), lp_id: lpId, lp_symbol: addLpSym.trim(),
           volume_multiplier: addMult   ? parseFloat(addMult)   : undefined,
           price_multiplier:  addPriceX ? parseFloat(addPriceX) : undefined,
@@ -656,67 +721,56 @@ export function SymbolMappingPage() {
 
   const cancelEdit  = useCallback(() => { setEditingId(null); setEditForm(null); setRowErr(null); }, []);
 
+  // Single-endpoint snap-quote fetch (commit 2 backend):
+  // GET /api/v1/symbol-mappings/snap-quote?node_id&mt5_symbol&lp_id&lp_symbol
+  // → { mt5, lp, derived } envelope.
+  // Cold-LP path: response carries lp.retry_after_ms; we auto-retry up to twice.
+  // Uses m.node_id (per-row) post-029, falling back to page lpId only if row
+  // missing lp_id (legacy data).
   const fetchSnapQuote = useCallback(async (m: LPMapping) => {
-    // Start both sides loading simultaneously
-    setSnapQuotes(p => { const n = new Map(p); n.set(m.id, { mt5: 'loading', lp: 'loading' }); return n; });
-
-    // ── LP side: subscribe → poll book up to 3 attempts ──────
-    async function fetchLP(): Promise<SnapQuoteSide> {
-      // m.lp_id may be absent depending on which mappings endpoint is in use —
-      // fall back to the LP selected in the page dropdown (lpId)
-      const lid = m.lp_id || lpId;
-      if (!lid) throw new Error('no LP');
-      await api(`/api/v1/fix/lp/${lid}/md/subscribe`, {
-        method: 'POST',
-        body: JSON.stringify({ symbol: m.lp_symbol, depth: 1 }),
-      }).catch(() => undefined);
-      for (let attempt = 0; attempt < 5; attempt++) {
-        await new Promise(r => setTimeout(r, 1000));
-        try {
-          const res = await api<any>(
-            `/api/v1/fix/lp/${lid}/md/book/${encodeURIComponent(m.lp_symbol)}`
-          );
-          // C++ may return { success, data: { best_ask } } or { best_ask } directly
-          const book = (res?.data && typeof res.data === 'object') ? res.data : res;
-          const ask = book?.best_ask;
-          const bid = book?.best_bid;
-          if (ask != null && ask > 0) return { price: ask, source: 'lp' };
-          if (bid != null && bid > 0) return { price: bid, source: 'lp' };
-        } catch { /* try again */ }
-      }
-      throw new Error('no price');
+    const lpIdToUse = m.lp_id || lpId;
+    if (!lpIdToUse) {
+      setSnapQuotes(p => { const n = new Map(p); n.set(m.id, { status: 'error', error: 'no LP id on row' }); return n; });
+      return;
+    }
+    if (!m.node_id) {
+      setSnapQuotes(p => { const n = new Map(p); n.set(m.id, { status: 'error', error: 'no node_id on row' }); return n; });
+      return;
     }
 
-    // ── MT5 side: read price_current from positions ───────────
-    async function fetchMT5(): Promise<SnapQuoteSide> {
-      let targetNodeId = nodeId;
-      if (targetNodeId === null) {
-        // All Servers mode — find master or any connected node
-        const nodesRes = await api<{ nodes: MT5Node[] }>('/api/v1/mt5/nodes/status');
-        const connected = (nodesRes.nodes ?? []).filter(n => n.connection_status === 'CONNECTED' && n.is_enabled);
-        const master = connected.find(n => n.is_master) ?? connected[0];
-        if (!master) throw new Error('no node');
-        // C++ returns `id` on the node object; MT5Node interface uses node_id — accept both
-        targetNodeId = (master as any).id ?? master.node_id;
-      }
-      const posRes = await api<{ positions: { symbol: string; price_current: number }[] }>(
-        `/api/v1/mt5/nodes/${targetNodeId}/positions`
-      );
-      const pos = (posRes.positions ?? []).find(p => p.symbol === m.mt5_symbol);
-      if (!pos) throw new Error('no positions');
-      return { price: pos.price_current, source: 'mt5' };
-    }
-
-    const [mt5Result, lpResult] = await Promise.allSettled([fetchMT5(), fetchLP()]);
-    setSnapQuotes(p => {
-      const n = new Map(p);
-      n.set(m.id, {
-        mt5: mt5Result.status === 'fulfilled' ? mt5Result.value : 'error',
-        lp:  lpResult.status  === 'fulfilled' ? lpResult.value  : 'error',
-      });
-      return n;
+    const params = new URLSearchParams({
+      node_id:    String(m.node_id),
+      mt5_symbol: m.mt5_symbol,
+      lp_id:      lpIdToUse,
+      lp_symbol:  m.lp_symbol,
     });
-  }, [lpId, nodeId]);
+    const url = `/api/v1/symbol-mappings/snap-quote?${params.toString()}`;
+
+    const fetchOnce = async (attempt: number): Promise<void> => {
+      if (attempt === 0) {
+        setSnapQuotes(p => { const n = new Map(p); n.set(m.id, { status: 'loading' }); return n; });
+      }
+      try {
+        const env = await api<SnapQuoteEnvelope>(url);
+        const retryMs = env.lp?.retry_after_ms;
+        if (retryMs && attempt < 2) {
+          // LP book warming — show MT5 side now, schedule LP retry
+          setSnapQuotes(p => { const n = new Map(p); n.set(m.id, { status: 'cold', data: env }); return n; });
+          setTimeout(() => { void fetchOnce(attempt + 1); }, retryMs);
+        } else {
+          setSnapQuotes(p => { const n = new Map(p); n.set(m.id, { status: 'ready', data: env }); return n; });
+        }
+      } catch (e) {
+        setSnapQuotes(p => {
+          const n = new Map(p);
+          n.set(m.id, { status: 'error', error: e instanceof Error ? e.message : 'fetch failed' });
+          return n;
+        });
+      }
+    };
+
+    await fetchOnce(0);
+  }, [lpId]);
 
   async function handleDelete() {
     if (!deleteTarget) return;
@@ -726,9 +780,17 @@ export function SymbolMappingPage() {
     setDeleteTarget(null);
   }
 
-  async function commitAutoMap(rows: ReviewRow[], _nId: number | null, _lId: string | null) {
+  async function commitAutoMap(rows: ReviewRow[], reviewNodeId: number | null, _lId: string | null) {
+    // Prefer the node selected inside the review modal; fall back to the page's
+    // current nodeId. If neither is set, abort with a clear error.
+    const targetNodeId = reviewNodeId ?? nodeId;
+    if (targetNodeId === null) {
+      throw new Error('Select an MT5 node before committing — mappings are per-node');
+    }
     await api<BulkResult>('/api/v1/symbol-mappings/import', { method: 'POST', body: JSON.stringify({
-      lp_id: lpId ?? '', rows: rows.map(r => ({ mt5_symbol: r.mt5_symbol, lp_symbol: r.lp_symbol })),
+      node_id: targetNodeId,
+      lp_id: lpId ?? '',
+      rows: rows.map(r => ({ mt5_symbol: r.mt5_symbol, lp_symbol: r.lp_symbol })),
     })});
     await qc.invalidateQueries({ queryKey: ['mappings-lp'] });
     await qc.invalidateQueries({ queryKey: ['mappings-lp-unmapped'] });
@@ -736,7 +798,14 @@ export function SymbolMappingPage() {
   }
 
   async function handleBulk(rows: BulkRow[], filename: string) {
-    const r = await api<BulkResult>('/api/v1/symbol-mappings/import', { method: 'POST', body: JSON.stringify({ lp_id: lpId ?? '', rows }) });
+    if (nodeId === null) {
+      throw new Error('Select an MT5 node before bulk uploading — mappings are per-node');
+    }
+    const r = await api<BulkResult>('/api/v1/symbol-mappings/import', { method: 'POST', body: JSON.stringify({
+      node_id: nodeId,
+      lp_id: lpId ?? '',
+      rows,
+    })});
     await qc.invalidateQueries({ queryKey: ['mappings-lp'] });
     await qc.invalidateQueries({ queryKey: ['mappings-lp-unmapped'] });
     return r;
@@ -970,7 +1039,7 @@ export function SymbolMappingPage() {
                 {th('Price ×', { w: 72, center: true, sl: 641 })}
                 {th('LP Symbol', { w: 120, sr: 170, style: { borderRight: '2px solid #4a4a5a' } })}
                 {th('Snap Quote', { w: 95, right: true })}
-                {th('Server', { w: 150 })}
+                {th('LP', { w: 150 })}
                 {th('Std Lot', { w: 88, right: true })}
                 {th('Lots', { w: 68, center: true })}
                 {th('Units', { w: 68, center: true })}
@@ -999,12 +1068,15 @@ export function SymbolMappingPage() {
 
                     {/* MT5 Server group — left scrollable */}
                     {td((() => {
-                      const s = sq?.mt5;
-                      if (s === 'loading') return <span style={{ color: '#888' }}>…</span>;
-                      if (s === 'error' || s == null) return <span style={{ color: '#666' }}>—</span>;
-                      return <span style={{ color: '#c09030', fontFamily: 'IBM Plex Mono, monospace' }}>{s.price.toFixed(5)}</span>;
+                      if (!sq) return <span style={{ color: '#666' }}>—</span>;
+                      if (sq.status === 'loading') return <span style={{ color: '#888' }}>…</span>;
+                      if (sq.status === 'error')   return <span style={{ color: '#666' }}>—</span>;
+                      // cold or ready — MT5 side is settled either way
+                      const price = sq.data.mt5.ask ?? sq.data.mt5.bid;
+                      if (!sq.data.mt5.available || price == null) return <span style={{ color: '#666' }}>—</span>;
+                      return <span style={{ color: '#c09030', fontFamily: 'IBM Plex Mono, monospace' }}>{price.toFixed(5)}</span>;
                     })(), { w: 95, right: true, bg: rowBg })}
-                    {td(<span style={{ color: '#fff' }}>{connNodes.find(n => n.node_id === nodeId)?.node_name ?? '—'}</span>, { w: 130, bg: rowBg })}
+                    {td(<span style={{ color: '#fff' }}>{connNodes.find(n => n.node_id === m.node_id)?.node_name ?? `node=${m.node_id}`}</span>, { w: 130, bg: rowBg })}
                     {td(mt5Info?.contract_size != null ? <span style={{ color: '#fff' }}>{mt5Info.contract_size.toLocaleString()}</span> : <span style={{ color: '#666' }}>—</span>, { w: 88, right: true, bg: rowBg })}
                     {td(isEd ? sel('mt5_trades_in_units') : yn(m.mt5_trades_in_units != null ? m.mt5_trades_in_units : (mt5Info?.calc_mode != null ? [2,6,7,8,10,12].includes(mt5Info.calc_mode) : undefined)), { w: 68, center: true, bg: rowBg })}
                     {td(isEd ? sel('mt5_trades_in_lots')  : yn(m.mt5_trades_in_lots  != null ? m.mt5_trades_in_lots  : (mt5Info?.calc_mode != null ? [0,1,3,4,5,9,11].includes(mt5Info.calc_mode) : undefined)), { w: 68, center: true, bg: rowBg, style: { borderRight: '2px solid #4a4a5a' } })}
@@ -1022,10 +1094,13 @@ export function SymbolMappingPage() {
 
                     {/* LP Server group — right scrollable */}
                     {td((() => {
-                      const s = sq?.lp;
-                      if (s === 'loading') return <span style={{ color: '#888' }}>…</span>;
-                      if (s === 'error' || s == null) return <span style={{ color: '#666' }}>—</span>;
-                      return <span style={{ color: '#c09030', fontFamily: 'IBM Plex Mono, monospace' }}>{s.price.toFixed(5)}</span>;
+                      if (!sq) return <span style={{ color: '#666' }}>—</span>;
+                      if (sq.status === 'loading') return <span style={{ color: '#888' }}>…</span>;
+                      if (sq.status === 'cold')    return <span style={{ color: '#888' }}>…</span>;  // LP still warming
+                      if (sq.status === 'error')   return <span style={{ color: '#666' }}>—</span>;
+                      const price = sq.data.lp.ask ?? sq.data.lp.bid;
+                      if (!sq.data.lp.available || price == null) return <span style={{ color: '#666' }}>—</span>;
+                      return <span style={{ color: '#c09030', fontFamily: 'IBM Plex Mono, monospace' }}>{price.toFixed(5)}</span>;
                     })(), { w: 95, right: true, bg: rowBg })}
                     {td(
                       isEd
@@ -1034,7 +1109,7 @@ export function SymbolMappingPage() {
                             <option value="">—</option>
                             {lpNameOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                           </select>
-                        : <span style={{ color: '#fff' }}>{m.lp_name || <span style={{ color: '#666' }}>—</span>}</span>,
+                        : <span style={{ color: '#fff' }}>{m.lp_name || m.lp_id || <span style={{ color: '#666' }}>—</span>}</span>,
                       { w: 150, bg: rowBg }
                     )}
                     {td(
@@ -1074,9 +1149,9 @@ export function SymbolMappingPage() {
                           </>
                         ) : (
                           <>
-                            <button onClick={() => fetchSnapQuote(m)} disabled={sq?.mt5 === 'loading' || sq?.lp === 'loading'} style={btnS({ backgroundColor: '#1e2020', color: '#49b3b3', borderColor: '#2a3838', opacity: (sq?.mt5 === 'loading' || sq?.lp === 'loading') ? 0.4 : 1 })}>
+                            <button onClick={() => fetchSnapQuote(m)} disabled={sq?.status === 'loading'} style={btnS({ backgroundColor: '#1e2020', color: '#49b3b3', borderColor: '#2a3838', opacity: sq?.status === 'loading' ? 0.4 : 1 })}>
                               <svg viewBox="0 0 24 24" fill="currentColor" width="9" height="9"><path d="M22,11h-3.28A6.993,6.993,0,0,0,13,5.28V2a1,1,0,0,0-2,0V5.28A6.993,6.993,0,0,0,5.28,11H2a1,1,0,0,0,0,2H5.28A6.993,6.993,0,0,0,11,18.72V22a1,1,0,0,0,2,0V18.72A6.993,6.993,0,0,0,18.72,13H22a1,1,0,0,0,0-2Z"/></svg>
-                              {(sq?.mt5 === 'loading' || sq?.lp === 'loading') ? '…' : 'Quote'}
+                              {sq?.status === 'loading' ? '…' : 'Quote'}
                             </button>
                             <button onClick={() => { setRowErr(null); startEdit(m); }} style={btnS({ backgroundColor: '#2a2a2c', color: '#fff', borderColor: '#404040' })}><IcoEdit />Edit</button>
                             <button onClick={() => setDeleteTarget(m)} style={btnS({ backgroundColor: '#2c1417', color: '#ff5c5c', borderColor: '#5a2530' })}><IcoTrash /></button>

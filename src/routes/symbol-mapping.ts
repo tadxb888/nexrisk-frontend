@@ -1,9 +1,21 @@
 // ============================================
-// Symbol Mapping BFF Routes
+// Symbol Mapping BFF Routes  (node-scoped — Migration 029)
 // Exposes:  /api/v1/symbol-mappings/*   (frontend calls these)
 // Proxies → /api/v1/mappings/lp/*       (C++ backend paths)
 // NexDay mapping routes live in predictions.ts
 // ============================================
+//
+// Change log for Patch 5 (Migration 029 frontend integration):
+//   - GET  /symbol-mappings        accepts ?node_id=N (forwards to C++)
+//   - POST /symbol-mappings        requires node_id in body
+//   - PUT  /symbol-mappings/:id    PUT-by-id; node_id is recovered from the
+//                                   existing row (we look it up before merge)
+//   - DELETE /symbol-mappings/:id  unchanged (C++ recovers node_id from DB)
+//   - POST /symbol-mappings/import requires node_id in body
+//   - GET  /symbol-mappings/unmapped accepts ?node_id=N
+//
+// Rationale: every LP write now scopes to a specific MT5 node so each broker
+// keeps its own symbol catalog. See migration 029 + SymbolMappingCache changes.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -16,6 +28,7 @@ const idParams = z.object({
 });
 
 const createBody = z.object({
+  node_id:             z.number().int().positive(),     // NEW: required
   mt5_symbol:          z.string().min(1).max(64),
   lp_id:               z.string().min(1).max(64).optional(),
   lp_symbol:           z.string().min(1).max(64),
@@ -33,6 +46,9 @@ const createBody = z.object({
   lp_std_lot:          z.number().positive().optional(),
 });
 
+// PUT body never carries node_id — node_id is bound to the row identity and
+// cannot be changed in-place. To move a mapping to a different node, delete
+// and re-create.
 const updateBody = z.object({
   lp_symbol:           z.string().min(1).max(64).optional(),
   lp_name:             z.string().max(128).optional(),
@@ -51,20 +67,35 @@ const updateBody = z.object({
 });
 
 const importBody = z.object({
-  lp_id: z.string().optional(),
-  rows:  z.array(z.object({
+  node_id: z.number().int().positive(),                 // NEW: required
+  lp_id:   z.string().optional(),
+  rows:    z.array(z.object({
     mt5_symbol:         z.string().min(1).max(64),
     lp_symbol:          z.string().min(1).max(64),
+    lp_id:              z.string().optional(),
     volume_multiplier:  z.number().positive().optional(),
+    price_multiplier:   z.number().positive().optional(),
     lp_price_precision: z.number().int().min(0).max(10).optional(),
+    mt5_volume_unit:    z.string().optional(),
+    lp_volume_unit:     z.string().optional(),
   })).min(1).max(5000),
 });
 
 const listQuery = z.object({
+  node_id: z.coerce.number().int().positive().optional(),  // NEW
   lp_id:   z.string().optional(),
   enabled: z.string().optional(),
   limit:   z.coerce.number().int().optional(),
   offset:  z.coerce.number().int().optional(),
+});
+
+// Snap-quote query — every field required (no fallbacks here; the C++
+// endpoint rejects partial requests with 400).
+const snapQuoteQuery = z.object({
+  node_id:    z.coerce.number().int().positive(),
+  mt5_symbol: z.string().min(1).max(64),
+  lp_id:      z.string().min(1).max(64),
+  lp_symbol:  z.string().min(1).max(64),
 });
 
 // ── Route Module ─────────────────────────────────────────────
@@ -111,16 +142,45 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
     }
   );
 
+  // GET /api/v1/symbol-mappings/snap-quote
+  //   ?node_id=N&mt5_symbol=X&lp_id=Y&lp_symbol=Z (all required)
+  // → C++: GET /api/v1/symbol-mappings/snap-quote (same path on 8090)
+  // Composes one MT5-side and one LP-side lookup; returns {mt5, lp, derived}.
+  fastify.get(
+    '/symbol-mappings/snap-quote',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = snapQuoteQuery.parse(request.query);
+      const params = new URLSearchParams({
+        node_id:    String(q.node_id),
+        mt5_symbol: q.mt5_symbol,
+        lp_id:      q.lp_id,
+        lp_symbol:  q.lp_symbol,
+      });
+      const response = await nexriskApi.get(
+        `/api/v1/symbol-mappings/snap-quote?${params.toString()}`
+      );
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
   // GET /api/v1/symbol-mappings/unmapped
-  // → C++: GET /api/v1/mappings/lp/unmapped
+  //   ?node_id=N (optional — passed through to C++ to scope the unmapped view)
+  // → C++: GET /api/v1/mappings/lp/unmapped[?node_id=N]
   fastify.get(
     '/symbol-mappings/unmapped',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
-    async (_request: FastifyRequest, reply: FastifyReply) => {
-      const response = await nexriskApi.get('/api/v1/mappings/lp/unmapped');
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = listQuery.parse(request.query);
+      const cppPath = q.node_id != null
+        ? `/api/v1/mappings/lp/unmapped?node_id=${q.node_id}`
+        : '/api/v1/mappings/lp/unmapped';
+      const response = await nexriskApi.get(cppPath);
       if (!response.ok) return reply.code(response.status).send(response.error);
-      // Normalise: C++ returns { unmapped_symbols: [...] } — items may be plain strings
-      // OR objects like { mt5_symbol: "GBPUSD", ... }. Always produce a string array.
+      // Normalise: C++ returns { unmapped_symbols: [...] } where items are
+      // objects with at least { mt5_symbol, node_id, ... }. Always produce a
+      // plain string array for backward compatibility with the frontend.
       const data = response.data as any;
       const rawList: any[] = data?.unmapped_symbols ?? data?.unmapped ?? [];
       const unmapped = rawList.map((item: any) =>
@@ -131,15 +191,22 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
   );
 
   // POST /api/v1/symbol-mappings/import — bulk
-  // → C++: POST /api/v1/mappings/lp/bulk
+  // Required: { node_id, rows: [...], lp_id? }
+  // → C++: POST /api/v1/mappings/lp/bulk { node_id, mappings, filename? }
   fastify.post(
     '/symbol-mappings/import',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = importBody.parse(request.body);
-      // C++ bulk endpoint expects { mappings: [...], filename? }
+      // If lp_id is supplied at the top level, propagate it onto any rows that
+      // don't already specify their own. This matches the prior shape the
+      // frontend produces (top-level lp_id in the import payload).
+      const rows = body.lp_id
+        ? body.rows.map(r => ({ ...r, lp_id: r.lp_id ?? body.lp_id }))
+        : body.rows;
       const response = await nexriskApi.post('/api/v1/mappings/lp/bulk', {
-        mappings: body.rows,
+        node_id:  body.node_id,
+        mappings: rows,
         filename: 'import',
       });
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -149,21 +216,29 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
 
   // ── CRUD ─────────────────────────────────────────────────────
 
-  // GET /api/v1/symbol-mappings — list all
-  // → C++: GET /api/v1/mappings/lp
+  // GET /api/v1/symbol-mappings — list
+  //   ?node_id=N (optional — filter to a specific node)
+  //   ?lp_id=X   (optional — filter to a specific LP)
+  // → C++: GET /api/v1/mappings/lp[?node_id=N][&lp_id=X]
   fastify.get(
     '/symbol-mappings',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
-    async (_request: FastifyRequest, reply: FastifyReply) => {
-      const response = await nexriskApi.get('/api/v1/mappings/lp');
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = listQuery.parse(request.query);
+      const params = new URLSearchParams();
+      if (q.node_id != null) params.set('node_id', String(q.node_id));
+      if (q.lp_id)           params.set('lp_id',   q.lp_id);
+      const cppPath = params.toString()
+        ? `/api/v1/mappings/lp?${params.toString()}`
+        : '/api/v1/mappings/lp';
+      const response = await nexriskApi.get(cppPath);
       if (!response.ok) return reply.code(response.status).send(response.error);
-      // Normalise: C++ returns { mappings: [...], total, generated_at }
-      // Frontend expects same shape — pass through
       return reply.send(response.data);
     }
   );
 
   // POST /api/v1/symbol-mappings — create / upsert
+  // Required: { node_id, mt5_symbol, lp_symbol } (+ optionals)
   // → C++: POST /api/v1/mappings/lp
   fastify.post(
     '/symbol-mappings',
@@ -177,8 +252,10 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
   );
 
   // PUT /api/v1/symbol-mappings/:id — update
-  // → C++: POST /api/v1/mappings/lp (upsert by mt5_symbol — C++ has no PUT by id yet)
-  // We fetch the existing mapping first so we can re-POST with merged fields.
+  // node_id is bound to the existing row and is not modifiable here. We fetch
+  // the existing row (which now carries node_id) and re-POST with the merged
+  // fields plus the row's own node_id so the C++ upsert lands on the same row.
+  // → C++: POST /api/v1/mappings/lp (node_id from existing row)
   fastify.put(
     '/symbol-mappings/:id',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
@@ -186,15 +263,26 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
       const { id }  = idParams.parse(request.params);
       const patch   = updateBody.parse(request.body);
 
-      // Fetch existing to merge
+      // Fetch existing to merge. We don't filter the GET by node_id since the
+      // mapping_id is globally unique; we simply find the row by id.
       const existing = await nexriskApi.get('/api/v1/mappings/lp');
       if (!existing.ok) return reply.code(existing.status).send(existing.error);
       const mappings = (existing.data as any)?.mappings ?? [];
       const row      = mappings.find((m: any) => m.id === id);
       if (!row) return reply.code(404).send({ error: 'Mapping not found' });
 
+      // Verify the existing row carries a node_id. After migration 029 every
+      // row must have one — if one is missing the DB is inconsistent.
+      if (typeof row.node_id !== 'number' || row.node_id <= 0) {
+        return reply.code(500).send({
+          error: 'Existing mapping is missing node_id — DB state inconsistent with migration 029',
+        });
+      }
+
       const merged = {
+        node_id:             row.node_id,             // bound to existing row
         mt5_symbol:          row.mt5_symbol,
+        lp_id:               row.lp_id,
         lp_symbol:           patch.lp_symbol           ?? row.lp_symbol,
         lp_name:             patch.lp_name              ?? row.lp_name,
         volume_multiplier:   patch.volume_multiplier    ?? row.volume_multiplier,
@@ -217,6 +305,8 @@ export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<voi
   );
 
   // DELETE /api/v1/symbol-mappings/:id
+  // C++ recovers node_id from the row itself (RETURNING clause) for cache
+  // invalidation. No client input changes here.
   // → C++: DELETE /api/v1/mappings/lp/:id
   fastify.delete(
     '/symbol-mappings/:id',
