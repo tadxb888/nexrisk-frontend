@@ -1449,10 +1449,20 @@ export function HedgeRulesPage() {
     return map;
   }, [escalations]);
 
-  // Escalations filtered to currently selected rule
-  const ruleEscalations = useMemo(() =>
-    selectedId !== null ? escalations.filter(e => e.rule_id === selectedId) : [],
-  [escalations, selectedId]);
+  // Escalations for the currently selected rule, newest first.
+  // TIMEOUT_ESCALATED / REJECTED_ESCALATED rows have escalated_at.
+  // NORMALIZER_ERROR rows have escalated_at = NULL — fall back to dispatched_at
+  // so the row's most recent lifecycle timestamp drives the order.
+  const ruleEscalations = useMemo(() => {
+    if (selectedId === null) return [];
+    return escalations
+      .filter(e => e.rule_id === selectedId)
+      .sort((a, b) => {
+        const aTime = a.escalated_at || a.dispatched_at || '';
+        const bTime = b.escalated_at || b.dispatched_at || '';
+        return bTime.localeCompare(aTime);  // descending — newest first
+      });
+  }, [escalations, selectedId]);
 
   // ── Completeness checklist — drives the "what's left to complete" banner
   //    at the top of the middle panel. Each item reports done/total for a
