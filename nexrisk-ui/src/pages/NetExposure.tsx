@@ -51,6 +51,7 @@ import type {
   FirstDataRenderedEvent,
   GridSizeChangedEvent,
   ColumnVisibleEvent,
+  ColumnResizedEvent,
   ColumnRowGroupChangedEvent,
 } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
@@ -109,7 +110,18 @@ const gridTheme = themeQuartz.withParams({
 // ======================
 interface HedgeExposureRow {
   id: string;
+  // Display symbol — what the leaf row's Symbol cell shows. For B-Book leaves,
+  // this is the broker-side mt5_symbol (e.g. 'Gold' on Highness MT5). For
+  // Coverage leaves, this is the LP-side lp_symbol (e.g. 'XAUUSD' on TE) —
+  // the leaf row identifies the venue-specific instrument as it actually
+  // exists on that venue's books.
   symbol: string;
+  // Grouping key — drives AG Grid's row grouping so that B-Book and Coverage
+  // legs of the same logical instrument fall under one parent. For B-Book
+  // this is the same as `symbol`. For Coverage with an active LP mapping
+  // (e.g. TE 'XAUUSD' → MT5 'Gold'), this is the mapped mt5_symbol; for
+  // Coverage with no mapping it equals `symbol` as a passthrough.
+  groupSymbol: string;
   lp: string;
   lpAccount: string;
   clientNetVol: number;
@@ -128,7 +140,6 @@ interface HedgeExposureRow {
   marketMovePercent: number;
   plImpact: number;
   isBBook: boolean;
-  sortOrder: number;
 }
 
 interface FIXPosition {
@@ -152,6 +163,24 @@ interface FIXLpEntry {
   lp_name: string;
   state: string;
   provider_type: string;
+}
+
+// Subset of the LP-mapping row shape served by GET /api/v1/symbol-mappings
+// (the BFF route that proxies to C++ /api/v1/mappings/lp). Mirrors
+// SymbolMapping.tsx's LPMapping interface for the fields this page needs:
+// the join key (lp_id, lp_symbol) and the canonical mt5_symbol it points
+// to, plus `enabled` so disabled rows don't influence grouping.
+//
+// Note: SymbolMapping.tsx's interface declares an `approved: boolean` but
+// the C++ API does not currently emit that field. Filtering on `enabled`
+// alone matches what the backend exposes.
+interface LPMapping {
+  id:           number;
+  mt5_symbol:   string;
+  lp_id:        string;
+  lp_name:      string;
+  lp_symbol:    string;
+  enabled:      boolean;
 }
 
 // Backend-sourced Coverage-side daily aggregates (same endpoint CBookPage uses).
@@ -315,9 +344,21 @@ function applyBookMessage(data: any, type: string, bidsMap: Map<number, number>,
 }
 
 // ======================
-// B-BOOK AGGREGATOR (unchanged from original)
+// B-BOOK AGGREGATOR
 // ======================
-function aggregateBBookPositions(positions: MT5PositionWithNode[], lpLabel: string): HedgeExposureRow[] {
+// Class flags for an MT5 symbol — drives lotSize/pipValue lookup. Built from
+// LP mappings: a broker-specific name like 'Gold' on the MT5 server can be
+// resolved to 'XAUUSD' (its lp_symbol counterpart) which we then classify on
+// .includes('XAU'). Without this lookup, 'Gold'.includes('XAU') is false and
+// the symbol falls into the FX-default branch (lotSize=100,000), so 1.06 lots
+// of Gold renders as 106,000 units instead of the correct 106 oz.
+type Mt5SymbolClass = { isJPY: boolean; isXAU: boolean; isBTC: boolean };
+
+function aggregateBBookPositions(
+  positions: MT5PositionWithNode[],
+  lpLabel: string,
+  mt5SymbolClass?: Map<string, Mt5SymbolClass>,
+): HedgeExposureRow[] {
   if (!positions.length) return [];
   const riskLevels: Array<'Low' | 'Medium' | 'High' | 'Critical'> = ['Low', 'Medium', 'High', 'Critical'];
   const bySymbol = new Map<string, {
@@ -345,7 +386,13 @@ function aggregateBBookPositions(positions: MT5PositionWithNode[], lpLabel: stri
   const rows: HedgeExposureRow[] = [];
   let idx = 0;
   bySymbol.forEach((data, symbol) => {
-    const isJPY = symbol.includes('JPY'); const isXAU = symbol.includes('XAU'); const isBTC = symbol.includes('BTC');
+    // Class detection: prefer the LP-mapping-derived class (handles broker-
+    // specific names like 'Gold' → XAU). Fall back to the substring heuristic
+    // for symbols that don't have a mapping (e.g. NDX100, native EURUSD, etc.).
+    const cls = mt5SymbolClass?.get(symbol);
+    const isJPY = cls?.isJPY ?? symbol.includes('JPY');
+    const isXAU = cls?.isXAU ?? symbol.includes('XAU');
+    const isBTC = cls?.isBTC ?? symbol.includes('BTC');
     const lotSize  = isXAU ? 100 : isBTC ? 1 : 100000;
     const pipValue = isJPY ? 0.01 : isXAU ? 0.1 : isBTC ? 1 : 0.0001;
     const avgPrice       = data.totalVolForPrice > 0 ? data.weightedCurrentPriceSum / data.totalVolForPrice : 0;
@@ -366,7 +413,13 @@ function aggregateBBookPositions(positions: MT5PositionWithNode[], lpLabel: stri
     const brokerFloatingPL = Math.round(-(data.totalProfit + data.totalSwap + data.totalComm) * 100) / 100;
     const riskIdx = unhedgedLots > 5 ? 3 : unhedgedLots > 2 ? 2 : unhedgedLots > 0.5 ? 1 : 0;
     rows.push({
-      id: `bbook-${symbol}-${idx++}`, symbol, lp: lpLabel, lpAccount: 'Internal',
+      id: `bbook-${symbol}-${idx++}`,
+      // B-Book: display symbol IS the mt5 symbol (broker's name) AND the
+      // grouping key. They're identical because there's no LP-side rename
+      // for B-Book — Highness's MT5 server uses 'Gold', and the broker-
+      // side risk view groups by 'Gold'.
+      symbol, groupSymbol: symbol,
+      lp: lpLabel, lpAccount: 'Internal',
       clientNetVol, hedgeNetVol: 0, brokerNetVol,
       clientNetNotional, hedgeNetNotional: 0, brokerNetNotional,
       avgPrice: Math.round(avgPrice * 100000) / 100000,
@@ -375,7 +428,7 @@ function aggregateBBookPositions(positions: MT5PositionWithNode[], lpLabel: stri
       probableIdp30: 'Neutral', bevh: Math.round(unhedgedLots * 100) / 100,
       riskLevel: riskLevels[riskIdx], marketMovePercent: 0,
       plImpact: Math.round(unhedgedLots * lotSize * 0.001 * pipValue * 100) / 100,
-      isBBook: true, sortOrder: 0,
+      isBBook: true,
     });
   });
   return rows;
@@ -388,13 +441,102 @@ function aggregateBBookPositions(positions: MT5PositionWithNode[], lpLabel: stri
 // Mkt Px and Broker P/L reflect the current market, not the stale per-position
 // snapshot fields (which TE sandbox does not populate reliably).
 // ======================
+// Module-level latch for the AUDUSD diagnostic block below — flips true on
+// first observation so we get ONE rich console entry per page session, not
+// one per MD tick. Reset by reloading the page.
+let _audusdLogged = false;
+
+// Per-symbol latch for the missing-instrMap warning — entries are added the
+// first time we see a Coverage position whose lp_symbol has no entry in the
+// instruments map. When this fires for a symbol, the aggregator falls back
+// to the FX-default min_trade_vol=100000 / lotSize=100000, which only happens
+// to be correct when TE actually uses 100000 as min_trade_vol for that
+// symbol (true for some FX majors, e.g. GBPUSD; false for others, e.g.
+// AUDUSD which uses 50000 → produces 2× notional / 2× lots downstream).
+// The fix lives upstream — the C++ FIX bridge needs to surface ALL traded
+// symbols via /api/v1/fix/lp/{lpId}/instruments — but until that's done,
+// surfacing each missing symbol as a warning lets the operator see at a
+// glance which positions are at risk of mis-conversion.
+const _missingInstrMapWarned = new Set<string>();
+
 function aggregateCoverageBookPositions(
   positions: FIXPosition[],
   lpId: string,
   lpDisplayName: string,
   instrMap: Record<string, FIXInstrument>,
   livePrices: Map<string, number>,
+  lpToMt5Map?: Map<string, string[]>,
 ): HedgeExposureRow[] {
+  // ── Symbol mapping translation ────────────────────────────────────────
+  // A Coverage position lives on the LP-side symbol (e.g. 'XAUUSD' on
+  // TraderEvolution). The Net Exposure grid groups by the canonical
+  // broker-side `mt5_symbol` (e.g. 'Gold' on Highness MT5) so the operator
+  // sees the B-Book row and its hedge under one symbol group. If the broker
+  // has configured the LP mapping table to redirect (lp_id, lp_symbol) to
+  // one or more `mt5_symbol`s, expand the position into one entry per
+  // mapped MT5 symbol. Many-to-one is allowed (Symbol Mapping API §4) —
+  // a single LP symbol can be the hedge target for multiple MT5 symbols,
+  // which produces "as many leafs as combinations" per the deliberate
+  // broker setup. Future Symbol-Grouping (Main-Symbol) feature will
+  // reconcile those into a single roll-up. Positions without a mapping
+  // (or where the mapping table hasn't loaded yet) keep their original
+  // lp-side symbol — preserves today's behaviour for FX where mt5_symbol
+  // happens to equal lp_symbol naturally.
+  //
+  // IMPORTANT: do not rewrite p.symbol here. p.symbol is the LP-side symbol
+  // (e.g. 'XAUUSD' on TE) and must remain the source of truth for:
+  //   • Unit conversion. TE delivers net_qty in TE-lot units (XAUUSD: 1 TE
+  //     lot = 10 oz). The aggregator's (qtyContracts × minVol) / lotSize
+  //     formula converts that to MT5-lot units (XAUUSD: 1 MT5 lot = 100 oz),
+  //     which is the canonical unit for cross-venue comparison with the
+  //     B-Book row. Renaming p.symbol → 'Gold' would land the position in
+  //     the FX-default branch (identity math) and the Coverage row would
+  //     display in TE lots while the B-Book row displays in MT5 lots —
+  //     mixing units within the symbol group and making the hedge look
+  //     10× more covered than it actually is.
+  //   • Live-price lookup. MD ticks subscribed against TE are keyed by the
+  //     lp_symbol ('XAUUSD'), not the mt5 group symbol ('Gold').
+  // We carry the mt5 group key on a separate internal field so the bucket
+  // can group by it without disturbing p.symbol.
+  type FIXPositionWithGroup = FIXPosition & { _groupSymbol?: string };
+  const positionsToAggregate: FIXPositionWithGroup[] = (() => {
+    if (!lpToMt5Map || lpToMt5Map.size === 0) return positions;
+    const out: FIXPositionWithGroup[] = [];
+    for (const p of positions) {
+      const mapped = lpToMt5Map.get(`${lpId}:${p.symbol}`);
+      if (mapped && mapped.length > 0) {
+        for (const mt5Sym of mapped) out.push({ ...p, _groupSymbol: mt5Sym });
+      } else {
+        out.push(p);
+      }
+    }
+    return out;
+  })();
+
+  // [DIAGNOSTIC — remove once AUDUSD bug is root-caused] Net Exposure shows
+  // AUDUSD at -1.00M when TE Coverage Book has a single SELL 500,000 — exactly
+  // 2×. Three suspects: duplicate position in the FIX feed, duplicate row in
+  // the LP mapping table (now defended against in lpToMt5Map dedup), or TE
+  // delivering net_qty in unexpected units. This block logs ONCE per page
+  // session (module-level latch) with all three signals so we can read off
+  // which one is firing without scrolling through tick-rate spam.
+  if (!_audusdLogged) {
+    const audusdInOriginal = positions.filter((p) => p.symbol === 'AUDUSD');
+    const audusdInExpanded = positionsToAggregate.filter((p) => p.symbol === 'AUDUSD');
+    if (audusdInOriginal.length > 0 || audusdInExpanded.length > 0) {
+      _audusdLogged = true;
+      // eslint-disable-next-line no-console
+      console.log('[NetExposure DEBUG] AUDUSD diagnostic (once per session) →', {
+        lpId,
+        countInOriginalFeed: audusdInOriginal.length,
+        countAfterMappingExpansion: audusdInExpanded.length,
+        lpToMt5Map_AUDUSD_entry: lpToMt5Map?.get(`${lpId}:AUDUSD`),
+        instrMap_AUDUSD_entry: instrMap['AUDUSD'],
+        rawPositions: audusdInOriginal,
+      });
+    }
+  }
+
   const bySymbol = new Map<string, {
     hedgeNetLots: number;                 // MT5 lots (not TE contracts)
     // Legs: kept so we can compute P/L per-position once, then sum. Summing
@@ -405,9 +547,15 @@ function aggregateCoverageBookPositions(
     totalAbsLots: number;                 // MT5 lots
     account: string;
     lotSize: number;                      // MT5 lot size (units per 1 lot)
+    // Original LP-side symbol of the FIRST leg added to this bucket. Used by
+    // the outer forEach for live-price lookup (livePrices is keyed on lp_symbol)
+    // and instrument-class detection. In a future multi-LP convergence (e.g.
+    // both TE 'XAUUSD' and LMAX 'XAU/USD' mapped to MT5 'Gold'), this field
+    // would need to become per-leg; today's single-LP setup is fine with one.
+    lpSymbol: string;
   }>();
 
-  for (const p of positions) {
+  for (const p of positionsToAggregate) {
     if (!p.position_id || p.open_price <= 0) continue;
     // Direction — TE sandbox may return side='FLAT' with real qtys in long/short.
     // Prefer the side field, then fall back to long/short qty.
@@ -435,25 +583,48 @@ function aggregateCoverageBookPositions(
     // known defaults for the moment before the instrument map has loaded.
     const minVol  = ins?.min_trade_vol ?? (isXAU ? 10 : isBTC ? 1 : 100000);
 
+    // Surface incomplete instrument coverage from the FIX bridge. Without an
+    // instrMap entry the aggregator silently uses a fallback that's wrong
+    // for any symbol whose TE min_trade_vol differs from the assumed default
+    // (e.g. AUDUSD with TE min_trade_vol=50000 vs fallback 100000 → 2× notional).
+    if (!ins && !_missingInstrMapWarned.has(p.symbol)) {
+      _missingInstrMapWarned.add(p.symbol);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[NetExposure] instrMap missing entry for '${p.symbol}'. Using fallback minVol=${minVol}, lotSize=${lotSize}. ` +
+        `If TE's actual min_trade_vol for this symbol differs, brokerNetVol/Notional on this row will be off by that ratio. ` +
+        `Upstream fix: ensure /api/v1/fix/lp/${lpId}/instruments returns this symbol.`,
+      );
+    }
+
     const qtyContracts = Math.abs(p.net_qty) || Math.max(p.long_qty, p.short_qty);
     if (qtyContracts === 0) continue;
     const lots = (qtyContracts * minVol) / lotSize;  // MT5 lots
     const signedLots = lots * sign;
 
-    const cur = bySymbol.get(p.symbol);
+    // Bucket key = mt5 group symbol from the mapping (when present) or
+    // p.symbol (the lp_symbol, when no mapping applies). p.symbol itself is
+    // never overwritten by the expansion — it stays as the LP-side symbol
+    // so the unit math above used the right instrument-class branch.
+    const groupKey = p._groupSymbol ?? p.symbol;
+    const cur = bySymbol.get(groupKey);
     if (cur) {
       cur.hedgeNetLots    += signedLots;
       cur.legs.push({ openPrice: p.open_price, lots, sign });
       cur.weightedOpenSum += p.open_price * lots;
       cur.totalAbsLots    += lots;
     } else {
-      bySymbol.set(p.symbol, {
+      bySymbol.set(groupKey, {
         hedgeNetLots: signedLots,
         legs: [{ openPrice: p.open_price, lots, sign }],
         weightedOpenSum: p.open_price * lots,
         totalAbsLots: lots,
         account: p.account,
         lotSize,
+        // p.symbol is always the LP-side symbol (no rename in expansion),
+        // so this is unconditionally the correct lp_symbol for the outer
+        // forEach to feed into livePrices and instrument-class detection.
+        lpSymbol: p.symbol,
       });
     }
   }
@@ -462,14 +633,22 @@ function aggregateCoverageBookPositions(
   const rows: HedgeExposureRow[] = [];
   let idx = 0;
 
-  bySymbol.forEach((data, symbol) => {
-    const isJPY = symbol.includes('JPY'); const isXAU = symbol.includes('XAU'); const isBTC = symbol.includes('BTC');
+  bySymbol.forEach((data, groupSymbol) => {
+    // Instrument-class detection MUST use the LP-side symbol — that's the
+    // one livePrices is keyed on and the one whose suffix tells us metals
+    // vs crypto vs FX. groupSymbol may have been remapped (e.g. lp 'XAUUSD'
+    // → mt5 'Gold') and would mis-classify here.
+    const lpSym  = data.lpSymbol;
+    const isJPY  = lpSym.includes('JPY');
+    const isXAU  = lpSym.includes('XAU');
+    const isBTC  = lpSym.includes('BTC');
     const lotSize  = data.lotSize;        // authoritative — set at accumulation time
     const pipValue = isJPY ? 0.01 : isXAU ? 0.1 : isBTC ? 1 : 0.0001;
 
     // Live mid-price from MD ticks. Fall back to weighted-open if no tick yet.
-    const bid = livePrices.get(symbol + ':bid');
-    const ask = livePrices.get(symbol + ':ask');
+    // Keyed on lp_symbol — MD subscribed against TE for 'XAUUSD', not 'Gold'.
+    const bid = livePrices.get(lpSym + ':bid');
+    const ask = livePrices.get(lpSym + ':ask');
     const mid = (bid != null && ask != null) ? (bid + ask) / 2 : null;
     const avgPrice       = mid ?? (data.totalAbsLots > 0 ? data.weightedOpenSum / data.totalAbsLots : 0);
     const breakEvenPrice = data.totalAbsLots > 0 ? data.weightedOpenSum / data.totalAbsLots : 0;
@@ -501,8 +680,15 @@ function aggregateCoverageBookPositions(
     const riskIdx = unhedgedLots > 5 ? 3 : unhedgedLots > 2 ? 2 : unhedgedLots > 0.5 ? 1 : 0;
 
     rows.push({
-      id: `cbook-${lpId}-${symbol}-${idx++}`,
-      symbol, lp: lpDisplayName, lpAccount: data.account,
+      id: `cbook-${lpId}-${groupSymbol}-${idx++}`,
+      // Coverage: leaf row identifies the LP-side instrument (lp_symbol)
+      // because that's what actually exists on the LP venue's books and
+      // matches what the operator sees on Coverage Book / TE Terminal.
+      // The grouping key is the mapped mt5_symbol (when a mapping exists)
+      // so this row sits under the same parent as its B-Book counterpart.
+      symbol: lpSym,
+      groupSymbol,
+      lp: lpDisplayName, lpAccount: data.account,
       clientNetVol, hedgeNetVol, brokerNetVol,
       clientNetNotional, hedgeNetNotional, brokerNetNotional,
       avgPrice:        Math.round(avgPrice       * 100000) / 100000,
@@ -514,7 +700,7 @@ function aggregateCoverageBookPositions(
       riskLevel: riskLevels[riskIdx],
       marketMovePercent: 0,
       plImpact: Math.round(unhedgedLots * lotSize * 0.001 * pipValue * 100) / 100,
-      isBBook: false, sortOrder: 1,
+      isBBook: false,
     });
   });
 
@@ -595,6 +781,13 @@ export function NetExposurePage() {
 
   // ── LP list ───────────────────────────────────────────────────
   const [allLps, setAllLps] = useState<FIXLpEntry[]>(SEED_LPS);
+
+  // ── LP symbol-mapping table ───────────────────────────────────
+  // Loaded once on mount via /api/v1/symbol-mappings. Filtered to
+  // enabled+approved rows so half-configured mappings can't redirect
+  // grouping. Empty array on fetch failure → page falls back to grouping
+  // by raw lp-side symbol (current pre-mapping behaviour preserved).
+  const [lpMappings, setLpMappings] = useState<LPMapping[]>([]);
 
   // ── DOM / FIX ─────────────────────────────────────────────────
   const [domLpId,       setDomLpId]       = useState<string>('traderevolution');
@@ -728,7 +921,16 @@ export function NetExposurePage() {
           const k = keyOf(p);
           setBBookPositions((prev) => {
             const idx = prev.findIndex((q) => keyOf(q) === k);
-            if (idx >= 0) { const next = [...prev]; next[idx] = p; return next; }
+            // Merge — DO NOT replace. The C++ backend's POSITION_CHANGE is a
+            // delta event: it carries only the fields that change tick-to-tick
+            // (price_current, profit, swap, commission) and omits the static
+            // lifetime fields (action, volume_lots, price_open, time_create
+            // etc.). A naïve `next[idx] = p` would strip those from the row,
+            // turning Net Vol into NaN and Mkt Px / Break-Even Px into 0 the
+            // first time a tick arrives after the REST/SNAPSHOT bootstrap.
+            // Spreading the existing row first preserves the static fields;
+            // the delta then overwrites only what it actually contains.
+            if (idx >= 0) { const next = [...prev]; next[idx] = { ...next[idx], ...p }; return next; }
             return [...prev, p];
           });
           return;
@@ -818,6 +1020,24 @@ export function NetExposurePage() {
       })
       .catch(() => { /* seed data shown */ })
       .finally(() => { if (!cancelled) {} });
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── LP symbol mappings: one-shot fetch ────────────────────────
+  // Loaded once at mount. Deliberately NOT keyed on domLpId — mappings for
+  // every LP are needed at once so a Coverage-row symbol on LP A can be
+  // resolved even when DOM/order-entry is currently focused on LP B.
+  // No WS topic for mapping changes today, so a page refresh is required
+  // after editing on the Symbol Mapping page (acceptable: that page already
+  // operates on a refresh-to-see-changes model).
+  useEffect(() => {
+    let cancelled = false;
+    bff<{ mappings: LPMapping[] }>('/api/v1/symbol-mappings')
+      .then((r) => {
+        if (cancelled) return;
+        setLpMappings((r.mappings ?? []).filter((m) => m.enabled));
+      })
+      .catch(() => { /* table empty → page falls back to raw lp_symbol grouping */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -1255,6 +1475,52 @@ export function NetExposurePage() {
     if (!filterServer) setFilterServer(masterNode.node_name);
   }, [masterNode, filterServer]);
 
+  // Build the (lp_id, lp_symbol) → mt5_symbol[] lookup for the Coverage
+  // aggregator. Many-to-one is allowed: a single LP-side symbol may be the
+  // hedge target for multiple MT5 symbols (e.g. broker has both 'Gold' and
+  // 'XAUUSD' on the same MT5 server, both routed to LP 'XAUUSD'), so the
+  // value is an array. The aggregator emits one Coverage leaf per mapped
+  // mt5_symbol when this fans out.
+  const lpToMt5Map = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const mp of lpMappings) {
+      const key = `${mp.lp_id}:${mp.lp_symbol}`;
+      const cur = m.get(key);
+      if (cur) {
+        // Dedup: a duplicate (lp_id, lp_symbol, mt5_symbol) row in the
+        // mapping table would otherwise expand the position into multiple
+        // entries with the same bucket key, double-counting it in the
+        // aggregator and producing notional values 2× larger than reality.
+        if (!cur.includes(mp.mt5_symbol)) cur.push(mp.mt5_symbol);
+      } else {
+        m.set(key, [mp.mt5_symbol]);
+      }
+    }
+    return m;
+  }, [lpMappings]);
+
+  // mt5_symbol → instrument-class flags. Built from LP mappings: classify each
+  // mt5_symbol by its corresponding lp_symbol (which uses standardised names
+  // like 'XAUUSD' / 'EURJPY' / 'BTCUSD'). Lets the B-Book aggregator and the
+  // header-bar volume rollups apply the right lotSize/pipValue for broker-
+  // specific symbols like 'Gold' that don't include 'XAU' in their name.
+  // Ambiguous case (one mt5_symbol mapped to lp_symbols of different classes)
+  // is resolved first-write-wins; in practice that doesn't happen because a
+  // single instrument doesn't change asset class across LPs.
+  const mt5SymbolClass = useMemo(() => {
+    const m = new Map<string, Mt5SymbolClass>();
+    for (const mp of lpMappings) {
+      if (m.has(mp.mt5_symbol)) continue;
+      const lpSym = mp.lp_symbol;
+      m.set(mp.mt5_symbol, {
+        isJPY: lpSym.includes('JPY'),
+        isXAU: lpSym.includes('XAU'),
+        isBTC: lpSym.includes('BTC'),
+      });
+    }
+    return m;
+  }, [lpMappings]);
+
   const aBookLpName = useMemo(() => {
     const lp = allLps.find((l) => l.lp_id === domLpId);
     const base = lp?.lp_name ?? 'TraderEvolution';
@@ -1267,7 +1533,7 @@ export function NetExposurePage() {
     // priceTickCounter in deps so the memo re-evaluates on every MD tick — the
     // aggregator uses currentPricesRef.current to compute live Mkt Px and P/L.
     const livePrices = currentPricesRef.current;
-    const aBookRows = aggregateCoverageBookPositions(aBookPositions, domLpId, aBookLpName, instrMap, livePrices);
+    const aBookRows = aggregateCoverageBookPositions(aBookPositions, domLpId, aBookLpName, instrMap, livePrices, lpToMt5Map);
 
     // Refresh the per-position Coverage P/L cache used by the POSITION_CLOSED
     // handler to compute realised P/L at close time. Mirrors the aggregator's
@@ -1304,9 +1570,13 @@ export function NetExposurePage() {
       ? bBookPositions.filter((p) => p.nodeName === filterServer)
       : bBookPositions;
     const bBookRowsLabel = filterServer ? `B-Book-${filterServer}` : bBookLpLabel;
-    return [...aBookRows, ...aggregateBBookPositions(filtered, bBookRowsLabel)];
+    // Order matters: B-Book rows first, Coverage rows second. AG Grid
+    // preserves array order within row groups when no sort column is active,
+    // so this is what puts the broker's own book above its hedge inside each
+    // symbol group. (Replaces the previous hidden 'sortOrder' column.)
+    return [...aggregateBBookPositions(filtered, bBookRowsLabel, mt5SymbolClass), ...aBookRows];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aBookPositions, domLpId, aBookLpName, instrMap, bBookPositions, bBookLpLabel, filterServer, priceTickCounter]);
+  }, [aBookPositions, domLpId, aBookLpName, instrMap, bBookPositions, bBookLpLabel, filterServer, priceTickCounter, lpToMt5Map, mt5SymbolClass]);
 
   // ── Header-bar stats ──────────────────────────────────────────────────────
   // All P/L is broker-perspective:
@@ -1350,8 +1620,16 @@ export function NetExposurePage() {
     // Signed: broker long = +, broker short = −. Summed across the symbol so
     // B-Book and Coverage cancel where they offset.
     const symNet = new Map<string, { lots: number; notional: number; lotSize: number }>();
-    const getSymLotSize = (sym: string) =>
-      sym.includes('XAU') ? 100 : sym.includes('BTC') ? 1 : 100000;
+    // Class-aware lot-size resolver. Prefers mt5SymbolClass (built from LP
+    // mappings) so broker-specific names like 'Gold' resolve to XAU lotSize=100
+    // rather than falling into the FX default. Fallback is the original
+    // substring heuristic for symbols that don't have a mapping.
+    const getSymLotSize = (sym: string) => {
+      const cls = mt5SymbolClass.get(sym);
+      const isXAU = cls?.isXAU ?? sym.includes('XAU');
+      const isBTC = cls?.isBTC ?? sym.includes('BTC');
+      return isXAU ? 100 : isBTC ? 1 : 100000;
+    };
     const upsertSym = (sym: string, signedLots: number) => {
       const lotSize = getSymLotSize(sym);
       const cur = symNet.get(sym) ?? { lots: 0, notional: 0, lotSize };
@@ -1454,7 +1732,14 @@ export function NetExposurePage() {
     type SymAgg = { bLots: number; cLots: number; bPnl: number; cPnl: number };
     const perSymbolAgg = new Map<string, SymAgg>();
     for (const r of hedgeExposureData) {
-      const cur = perSymbolAgg.get(r.symbol) ?? { bLots: 0, cLots: 0, bPnl: 0, cPnl: 0 };
+      // Key on groupSymbol — the canonical mt5-side identifier — so the
+      // B-Book leg and the (possibly remapped) Coverage leg of one logical
+      // instrument land in the same bucket. Keying on r.symbol would split
+      // them whenever an LP mapping renames the lp_symbol (e.g. TE 'XAUUSD'
+      // ↔ MT5 'Gold'), and the Hedge Ratio column queried by group key
+      // ('Gold') would only see the B-Book side and read 0 % coverage.
+      const key = r.groupSymbol;
+      const cur = perSymbolAgg.get(key) ?? { bLots: 0, cLots: 0, bPnl: 0, cPnl: 0 };
       if (r.isBBook) {
         cur.bLots += r.brokerNetVol;            // signed, broker direction
         cur.bPnl  += r.brokerFloatingPL ?? 0;   // broker-side float
@@ -1462,7 +1747,7 @@ export function NetExposurePage() {
         cur.cLots += r.brokerNetVol;            // signed, LP direction
         cur.cPnl  += r.brokerFloatingPL ?? 0;
       }
-      perSymbolAgg.set(r.symbol, cur);
+      perSymbolAgg.set(key, cur);
     }
 
     const perSymbolMetrics = new Map<string, {
@@ -1508,7 +1793,15 @@ export function NetExposurePage() {
         } else {
           const matched = Math.min(bAbs, cAbs);
           matchedSum += matched;
-          hedgeRatio = matched / bAbs;
+          // Hedge Ratio = Coverage / B-Book (signed magnitudes).
+          //   100%  → matched (coverage equals book)
+          //   <100% → partial (broker still net-exposed in book direction)
+          //   >100% → over-hedge (broker has more LP coverage than book —
+          //                       creates exposure on the LP side)
+          // Earlier formula was min(b,c)/b which capped at 100% and hid over-
+          // hedge entirely; surfacing the actual ratio lets the operator see
+          // both directions of mismatch in a single number.
+          hedgeRatio = cAbs / bAbs;
           if (cAbs > bAbs)       status = 'OVER';
           else if (cAbs < bAbs)  status = 'PARTIAL';
           else                   status = 'MATCHED';
@@ -1569,7 +1862,7 @@ export function NetExposurePage() {
       isBBookRealisedEstimated: bbookRealised !== 0,
       hasCoverageRealised:      coverageDailyStats != null,
     };
-  }, [bBookPositions, aBookPositions, instrMap, filterServer, hedgeExposureData, coverageDailyStats, bBookDayStats, priceTickCounter]);
+  }, [bBookPositions, aBookPositions, instrMap, filterServer, hedgeExposureData, coverageDailyStats, bBookDayStats, priceTickCounter, mt5SymbolClass]);
 
   // ── STABILIZER FOR COLUMN DEFS ───────────────────────────────────────────
   // `headerStats.perSymbolMetrics` recomputes every MD tick (~10/sec under
@@ -1629,17 +1922,65 @@ export function NetExposurePage() {
 
   // ==========================================================================
   // GRID FIT HELPERS
-  // Per product decision: columns ALWAYS autosize to content. If the grid
-  // overflows the viewport, the user horizontally scrolls — we never compress
-  // columns below their content width. (The previous sizeColumnsToFit fallback
-  // would truncate values on narrow screens, which defeats the point.)
+  // Per product decision: columns autosize to content on initial render and
+  // on structural changes (column visibility, group toggle, mode toggle,
+  // viewport resize). If the grid overflows the viewport, the user
+  // horizontally scrolls — we never compress columns below their content
+  // width. (The previous sizeColumnsToFit fallback would truncate values
+  // on narrow screens, which defeats the point.)
+  //
+  // Manual-resize protection: once the user drags any column header to
+  // resize, fitColumns becomes a no-op for the rest of the session. The
+  // flag lives in a ref (no re-render on flip) and naturally resets when
+  // the component remounts on page reload — matching the "leave it alone
+  // until next refresh" semantic.
   // ==========================================================================
+  const userResizedRef = useRef(false);
+  // Module-level visible counter for the autosize diagnostic — module-scope
+  // means it persists across re-renders so we can read total invocation count
+  // off the last log line. Resets on page reload.
+  const fitCallCountRef = useRef(0);
   const fitColumns = useCallback(() => {
+    fitCallCountRef.current += 1;
+    const callId = fitCallCountRef.current;
+    if (userResizedRef.current) {
+      // eslint-disable-next-line no-console
+      console.log(`[NetExposure DEBUG] fitColumns #${callId} skipped: user has manually resized`);
+      return;
+    }
     const api = exposureGridRef.current?.api;
-    if (!api) return;
-    const eGrid = (exposureGridRef.current as any)?.eGridDiv as HTMLElement | undefined;
-    if ((eGrid?.clientWidth ?? 0) < 50) return;
-    try { api.autoSizeAllColumns(false); } catch { /* no-op */ }
+    if (!api) {
+      // eslint-disable-next-line no-console
+      console.log(`[NetExposure DEBUG] fitColumns #${callId} skipped: grid api not yet ready`);
+      return;
+    }
+    // No clientWidth gate. Earlier code aborted when the wrapper measured
+    // zero, but eGridDiv frequently reports 0 during initial layout settle
+    // (CSS flex resolution, off-screen mount, etc.) even though the grid is
+    // about to render and AG Grid's autoSizeAllColumns measures cell content
+    // via its own canvas — it does not depend on the wrapper having non-zero
+    // width to compute correct widths. Gating on clientWidth was blocking
+    // every retry in the staggered sequence and producing 17+ skipped calls
+    // per page load.
+    try {
+      api.autoSizeAllColumns(false);
+      // eslint-disable-next-line no-console
+      console.log(`[NetExposure DEBUG] fitColumns #${callId} OK (rows=${api.getDisplayedRowCount?.()})`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.log(`[NetExposure DEBUG] fitColumns #${callId} threw:`, err);
+    }
+  }, []);
+
+  // Manual-resize detector. AG Grid emits onColumnResized for many sources:
+  // autoSizeColumns (us), api programmatic, and uiColumnDragged (the user).
+  // We only flip the flag for genuine user drags AND only on the final
+  // event of a drag (event.finished === true), so dragging mid-motion
+  // doesn't latch us off prematurely.
+  const onColumnResized = useCallback((e: ColumnResizedEvent) => {
+    if (e.finished && e.source === 'uiColumnDragged') {
+      userResizedRef.current = true;
+    }
   }, []);
 
   // Initial group expansion — all symbols COLLAPSED by default. Runs once per
@@ -1673,8 +2014,29 @@ export function NetExposurePage() {
   }, [applyInitialGroupExpansion]);
 
   const onFirstDataRendered = useCallback((e: FirstDataRenderedEvent<HedgeExposureRow>) => {
+    // Staggered retry sequence — initial autosize is racey because
+    //   • REST bootstrap may have rendered before WS SNAPSHOT brings the
+    //     full set of symbols / longer P/L strings / new columns of data.
+    //   • IBM Plex Mono may not have finished loading at the moment AG Grid
+    //     measures cell content — it'll measure with the fallback font and
+    //     pick a width that's wrong once the real font swaps in.
+    //   • AG Grid theme CSS occasionally settles a tick after the grid
+    //     mounts (depends on bundling).
+    // Multiple retries cheaply cover all three. fitColumns() short-circuits
+    // if the user has already resized, so this never overwrites a manual
+    // drag — the retries here only ever fire before the user has had a
+    // chance to interact.
     requestAnimationFrame(fitColumns);
-    setTimeout(fitColumns, 50);
+    setTimeout(fitColumns, 100);
+    setTimeout(fitColumns, 300);
+    setTimeout(fitColumns, 800);
+    setTimeout(fitColumns, 1500);
+    setTimeout(fitColumns, 3000);
+    // Final pass after web fonts have actually loaded — handles the
+    // measure-with-fallback-font race specifically.
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(() => setTimeout(fitColumns, 50)).catch(() => { /* no-op */ });
+    }
     // Only apply initial expansion once per session AND only once real groups
     // have appeared — if the first render was before data arrived, we'd mark
     // the flag prematurely and the groups would then come up in whatever
@@ -1691,9 +2053,45 @@ export function NetExposurePage() {
 
   useEffect(() => { setTimeout(fitColumns, 50); }, [fitColumns]);
   useEffect(() => { setTimeout(fitColumns, 50); }, [volumeDisplayMode, fitColumns]);
-  // Refit on every data refresh so new values (longer strings, larger P/L
-  // numbers) don't get clipped inside existing column widths.
-  useEffect(() => { setTimeout(fitColumns, 50); }, [hedgeExposureData, fitColumns]);
+
+  // Symbol-set change detector — drives initial autosize (the first time
+  // non-empty data appears) and re-fits when the universe of symbols changes
+  // mid-session (new instrument, position fully closed). Skips trivial price-
+  // tick refreshes by keying off the displayed groupSymbol set rather than the
+  // hedgeExposureData reference itself, which churns on every MD tick.
+  //
+  // Why this is needed: onFirstDataRendered fires once per grid mount and can
+  // race ahead of the WS SNAPSHOT. If REST-bootstrapped rows render first,
+  // the staggered retries autosize to those (potentially empty / partial)
+  // widths, and then nothing re-fits when the WS SNAPSHOT arrives with the
+  // real set of symbols. This effect catches that case.
+  //
+  // The first-time path runs the full retry sequence (RAF + 100/300/800ms +
+  // fonts.ready) — same race conditions as initial render. Subsequent
+  // symbol-set changes get a single 50ms-delayed autosize, which is enough
+  // because fonts/theme/etc are settled by then.
+  //
+  // userResizedRef is checked inside fitColumns, so once the user manually
+  // resizes a column, none of these passes overwrite their drag.
+  const lastSymbolSetRef = useRef<string>('');
+  useEffect(() => {
+    if (hedgeExposureData.length === 0) return;
+    const symbolSetKey = [...new Set(hedgeExposureData.map((r) => r.groupSymbol))].sort().join('|');
+    if (symbolSetKey === lastSymbolSetRef.current) return;
+    const isFirstNonEmpty = lastSymbolSetRef.current === '';
+    lastSymbolSetRef.current = symbolSetKey;
+    if (isFirstNonEmpty) {
+      requestAnimationFrame(fitColumns);
+      setTimeout(fitColumns, 100);
+      setTimeout(fitColumns, 300);
+      setTimeout(fitColumns, 800);
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        document.fonts.ready.then(() => setTimeout(fitColumns, 50)).catch(() => { /* no-op */ });
+      }
+    } else {
+      setTimeout(fitColumns, 50);
+    }
+  }, [hedgeExposureData, fitColumns]);
 
   // Note: the previous `useEffect([hedgeExposureData])` that walked every node
   // and re-called node.setExpanded(true) has been removed. It fired on every MD
@@ -1727,11 +2125,14 @@ export function NetExposurePage() {
       return `${val < 0 ? '-' : ''}$${abs}`;
     };
     const fmtLots = (val: number) => `${val > 0 ? '+' : ''}${val.toFixed(2)}`;
+    // Notional column shows UNITS of the base instrument (oz for XAU, EUR for
+    // EURUSD, etc.), not USD value. So no $ prefix. K/M suffix kept for
+    // readability on large unit counts.
     const fmtNotional = (val: number) => {
       const abs = Math.abs(val);
-      if (abs >= 1_000_000) return `${val < 0 ? '-' : '+'}$${(abs / 1_000_000).toFixed(2)}M`;
-      if (abs >= 1_000)     return `${val < 0 ? '-' : '+'}$${(abs / 1_000).toFixed(1)}K`;
-      return `${val < 0 ? '-' : '+'}$${abs.toFixed(2)}`;
+      if (abs >= 1_000_000) return `${val < 0 ? '-' : '+'}${(abs / 1_000_000).toFixed(2)}M`;
+      if (abs >= 1_000)     return `${val < 0 ? '-' : '+'}${(abs / 1_000).toFixed(1)}K`;
+      return `${val < 0 ? '-' : '+'}${abs.toFixed(2)}`;
     };
     const volColor   = (val: number) => ({ color: val > 0 ? '#49b3b3' : val < 0 ? '#e0a020' : '#999' });
     const plColor    = (val: number) => ({ color: val > 0 ? '#6aaa78' : val < 0 ? '#d07070' : '#999' });
@@ -1739,7 +2140,16 @@ export function NetExposurePage() {
       signal.startsWith('Hdg') ? '#49b3b3' : signal.startsWith('Opp') ? '#c09060' : '#666';
 
     return [
-      { field: 'symbol', headerName: 'Symbol', rowGroup: true, hide: true },
+      // Grouping driver — hidden. Drives the parent rows so B-Book and Coverage
+      // legs of the same logical instrument land under one group, even when
+      // they have different lp/mt5 symbol strings (e.g. 'Gold' on MT5 ↔
+      // 'XAUUSD' on TraderEvolution).
+      { field: 'groupSymbol', rowGroup: true, hide: true, lockVisible: true },
+      // Visible Symbol column — shows the leaf row's actual venue-side symbol
+      // (mt5_symbol on B-Book, lp_symbol on Coverage). Group rows render blank
+      // here because the parent identity is already shown in the auto-group
+      // column to the left.
+      { field: 'symbol', headerName: 'Symbol' },
       {
         field: 'lp', headerName: 'Liquidity Provider',
         // No [B]/[C] badges — the LP name itself carries enough context
@@ -1781,31 +2191,39 @@ export function NetExposurePage() {
         cellStyle: (p) => p.value != null ? plColor(Number(p.value)) : {},
       },
 
-      // ── Hedge Ratio (per-symbol) ─────────────────────────────────────────
-      // Renders only on the symbol-group row — a single symbol-level metric,
-      // not a B-Book-vs-Coverage-row metric. Leaf rows show blank.
-      // Value read from perSymbolMetricsRef so the computation and display
-      // stay in one place and don't churn column-def identity.
+      // ── Hedge Ratio (per-symbol, group rows only) ────────────────────────
+      // A single symbol-level metric — not a B-Book-vs-Coverage-row metric —
+      // so it's blanked on leaf rows entirely. The value is the Coverage-to-
+      // B-Book magnitude ratio (see headerStats.perSymbolMetrics):
+      //   100%      → matched
+      //   below 100 → partial / under-hedged
+      //   above 100 → over-hedged (LP coverage exceeds the book)
+      // Colour bands flag both directions of mismatch:
+      //   95%–105% → green (effectively matched)
+      //   80%–94% under or 106%–120% over → amber (slight off)
+      //   anything else → red (significant)
       {
         colId: 'hedgeRatio',
         headerName: 'Hedge Ratio',
         cellClass: 'font-mono',
         valueGetter: (p) => {
-          const sym = (p.node?.group ? p.node.key : p.data?.symbol) as string | undefined;
+          if (!p.node?.group) return null;            // leaves: no value
+          const sym = p.node.key as string | undefined;
           if (!sym) return null;
           const m = perSymbolMetricsRef.current.get(sym);
           return m?.hedgeRatio ?? null;
         },
         valueFormatter: (p) => {
-          if (p.value == null) return p.node?.group ? '—' : '';
+          if (!p.node?.group)  return '';             // leaves: blank cell
+          if (p.value == null) return '—';
           return `${(Number(p.value) * 100).toFixed(1)}%`;
         },
         cellStyle: (p) => {
           if (p.value == null || !p.node?.group) return {};
           const v = Number(p.value);
-          return {
-            color: v >= 0.95 ? '#6aaa78' : v >= 0.80 ? '#c09060' : '#d07070',
-          };
+          if (v >= 0.95 && v <= 1.05)                              return { color: '#6aaa78' };
+          if ((v >= 0.80 && v < 0.95) || (v > 1.05 && v <= 1.20))  return { color: '#c09060' };
+          return { color: '#d07070' };
         },
       },
 
@@ -1899,7 +2317,6 @@ export function NetExposurePage() {
         },
         cellStyle: (p) => ({ color: signalColor(p.value || '—') }),
       },
-      { field: 'sortOrder', hide: true, initialSort: 'asc', sortable: true },
     ];
   }, [volumeDisplayMode, signalMap]);
 
@@ -2087,21 +2504,21 @@ export function NetExposurePage() {
   };
 
   // Notional formatter for the header card's Volume cells.
-  // Full precision with thousands separators — no K/M compaction, so a $500
-  // orphan sitting alongside a $1.8M gross is never silently rounded away:
-  //   $500.50
-  //   $1,800,500
-  //   $5,123,456
-  // Unsigned — Volume is always a magnitude, not a direction. Decimals only
-  // appear when the value has a fractional component (most lot-×-lotSize
-  // products are whole numbers; a fractional lot would round to 2 dp).
+  // Full precision with thousands separators — no K/M compaction, so a 500
+  // orphan sitting alongside a 1.8M gross is never silently rounded away:
+  //   500.50
+  //   1,800,500
+  //   5,123,456
+  // Unsigned — Volume is always a magnitude, not a direction. No $ prefix:
+  // these are UNITS of the base instrument (oz, EUR, etc.), not currency.
+  // Decimals only appear when the value has a fractional component.
   const fmtHdrNotional = (val: number) => {
     const abs = Math.abs(val);
     const hasFraction = Math.abs(abs - Math.round(abs)) > 0.001;
-    return `$${abs.toLocaleString('en-US', {
+    return abs.toLocaleString('en-US', {
       minimumFractionDigits: hasFraction ? 2 : 0,
       maximumFractionDigits: 2,
-    })}`;
+    });
   };
 
   // ==========================================================================
@@ -2304,6 +2721,17 @@ export function NetExposurePage() {
                 columnDefs={exposureColDefs}
                 defaultColDef={defaultColDef}
                 autoGroupColumnDef={autoGroupColumnDef}
+                // Size each column to its widest cell + header, then leave
+                // any leftover viewport space empty on the right. Without
+                // this, AG Grid's default behaviour distributes leftover
+                // width across columns ("spreads"), which on a 27"/32"
+                // monitor turns 1.5k pixels of content into 2.5k pixels of
+                // padded-out columns. fitColumns() also calls
+                // autoSizeAllColumns later for late-arriving data and
+                // post-mode-toggle re-fits — both produce the same
+                // content-fit result, so the strategy and the retries
+                // stay consistent.
+                autoSizeStrategy={{ type: 'fitCellContents' }}
                 groupDefaultExpanded={0}
                 suppressAggFuncInHeader={true}
                 // Stable row identity — AG Grid does an immutable diff on rowData
@@ -2329,6 +2757,7 @@ export function NetExposurePage() {
                 onRowDataUpdated={onRowDataUpdated}
                 onGridSizeChanged={onGridSizeChanged}
                 onColumnVisible={onColumnVisible}
+                onColumnResized={onColumnResized}
                 onColumnRowGroupChanged={onColumnRowGroupChanged}
                 onRowClicked={onExposureRowClicked}
                 onCellClicked={onExposureCellClicked}
