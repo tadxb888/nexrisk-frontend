@@ -669,6 +669,11 @@ export function CBookPage() {
   // DOM Trader (posOverrideRef) takes precedence over this map.
   const hedgeRecordMapRef = useRef<Map<string, string>>(new Map());
 
+  // Names of currently-ACTIVE hedge rules, refreshed alongside hedge records.
+  // Drives the Strategy card dropdown so configured-but-idle strategies are still
+  // selectable (independent of whether they have open positions or closes today).
+  const [activeStrategyNames, setActiveStrategyNames] = useState<Set<string>>(new Set());
+
   // rule_name → realized-P/L + closed-count for the current trading day.
   // Seeded from localStorage; survives page refresh. Cleared when dailyStats.trade_date rolls.
   // Keeps hedge strategy cards on-screen after the last position for the strategy has closed,
@@ -811,8 +816,30 @@ export function CBookPage() {
         })
         .catch(() => { /* non-fatal */ });
     };
+    // Active hedge rules — seeds the Strategy card dropdown with configured strategies
+    // even when they have no current positions. Envelope shape matches HedgingStrategies.tsx.
+    const loadActiveRules = () => {
+      fetch('/api/v1/hedge/rules')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (cancelled || !json) return;
+          const rules: { name?: string; status?: string }[] =
+            json.data ?? (Array.isArray(json) ? json : []);
+          const next = new Set<string>();
+          for (const r of rules) {
+            if (r.name && r.status === 'ACTIVE') next.add(r.name);
+          }
+          setActiveStrategyNames((prev) => {
+            // Avoid unnecessary re-renders when the active set is unchanged.
+            if (prev.size === next.size && [...next].every((n) => prev.has(n))) return prev;
+            return next;
+          });
+        })
+        .catch(() => { /* non-fatal */ });
+    };
     buildMap();
-    const timer = setInterval(buildMap, 30_000);
+    loadActiveRules();
+    const timer = setInterval(() => { buildMap(); loadActiveRules(); }, 30_000);
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
@@ -1568,6 +1595,27 @@ export function CBookPage() {
       });
     }
 
+    // Also seed configured-and-ACTIVE hedge rules so the dropdown lists them
+    // even when they have no positions or closes today. Skip names already
+    // present from the day-stats seed (which has authoritative numbers).
+    // firstSeen = MAX_SAFE_INTEGER places idle-active strategies after any
+    // with real activity in the firstSeen-ascending sort below.
+    for (const name of activeStrategyNames) {
+      if (strategies.has(name)) continue;
+      strategies.set(name, {
+        unrealized:    null,
+        realized:      0,
+        openCount:     0,
+        closedCount:   0,
+        totalLots:     0,
+        totalNotional: 0,
+        buys:          0,
+        sells:         0,
+        color:         TYPE_COLORS[name] ?? '#49b3b3',
+        firstSeen:     Number.MAX_SAFE_INTEGER,
+      });
+    }
+
     // A-Book / C-Book running totals.
     let aOpen = 0, aBuys = 0, aSells = 0, aLots = 0, aNotional = 0;
     let aUnrealized: number | null = null;
@@ -1655,7 +1703,7 @@ export function CBookPage() {
         realized:   lpRealized,
       },
     };
-  }, [gridRows, priceTickCounter, strategyDayStats, dailyStats]);
+  }, [gridRows, priceTickCounter, strategyDayStats, dailyStats, activeStrategyNames]);
 
   // Default strategy = user's pick if still present, else the most active one
   // (highest open count, tiebreak on notional). Keeps the card useful when a
