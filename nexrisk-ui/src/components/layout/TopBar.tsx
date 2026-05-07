@@ -30,6 +30,7 @@ import { clsx } from 'clsx';
 import { PortfolioCard } from '@/components/portfolio/PortfolioCard';
 import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
 import { AlertsBar } from '@/components/market/AlertsBar';
+import { AlertsBarNotifications } from '@/components/market/AlertsBarNotifications';
 
 // ── Types ────────────────────────────────────────────────────
 export interface SubItem {
@@ -244,6 +245,12 @@ export function TopBar() {
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Whether the AlertsBar notification slot is currently filled. Drives
+  // the /portfolio compact-mode swap of PortfolioCard (collapses to its
+  // first cell when a notification is showing; expands back on dismiss).
+  // Toggled by AlertsBarNotifications.onSlotFilledChange.
+  const [notificationActive, setNotificationActive] = useState(false);
 
   // Pin sync — kept in case any other component dispatches the event.
   useEffect(() => {
@@ -552,31 +559,39 @@ export function TopBar() {
       </header>
 
       {/* ── Row 2: Reserved strip ────────────────────────────────────
-          Future content for the left side: most-traded symbols (streaming
-          Ask prices), news releases, trader-archetype detection events
-          (Scalper, BOT, etc.).
+          Left half: Alerts Bar FX cells (≤ 4 user-chosen ticks).
+          Right half: app-wide notification slot (escalations, news,
+          node offline, etc.) — always visible; replaced on newest, can
+          be dismissed manually.
 
-          Right side is route-aware: on /portfolio we mount the M/D toggle
-          + PortfolioCard. Other routes leave the strip empty for now.
+          On /portfolio when a notification is active, PortfolioCard
+          renders compact (only its first cell) so the notification has
+          room. Dismissing the notification re-expands the card.
 
           Bottom border uses #808080 to mark the page boundary, matching
           the BBookPage reference. */}
       <div
         className="shrink-0 flex items-center px-4 gap-2"
         style={{ height: 56, paddingTop: 8, paddingBottom: 8, backgroundColor: '#1c1b1e', borderBottom: '1px solid #808080' }}
-        aria-label="Reserved strip — ticker / news / archetype detections (left); portfolio card on /portfolio (right)"
+        aria-label="Reserved strip — FX cells (left); app-wide notifications + portfolio card on /portfolio (right)"
       >
-        {/* Left side — Alerts Bar (FX cells, ≤50% of bar width). */}
+        {/* Left half — Alerts Bar (FX cells, ≤ 50% of bar width). */}
         <AlertsBar />
 
-        {/* Spacer — fills the gap between cells and the route-aware right-hand content. */}
-        <div className="flex-1 min-w-0" />
+        {/* Right half — app-wide notification slot. Replaces the bare
+            spacer; flex-1 + min-w-0 lets it both fill empty space and
+            shrink with ellipsis when PortfolioCard is also visible. */}
+        <AlertsBarNotifications
+          className="flex-1 min-w-0"
+          onSlotFilledChange={setNotificationActive}
+        />
 
-        {/* Right side — Portfolio card on /portfolio only. */}
+        {/* Right side — Portfolio card on /portfolio only. Collapses to
+            first cell while a notification is active. */}
         {location.pathname === '/portfolio' && (
           <>
             <CardsPeriodToggle title="Period applied to the Portfolio card" />
-            <PortfolioCard />
+            <PortfolioCard compact={notificationActive} />
           </>
         )}
       </div>

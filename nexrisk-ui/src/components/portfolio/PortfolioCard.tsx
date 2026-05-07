@@ -13,6 +13,11 @@
 // dividers between cells) but uses the muted-gold accent #c9b87c instead
 // of the book teal — distinguishes a portfolio-level card from a
 // book-specific one.
+//
+// Compact mode (driven by AlertsBarNotifications.onSlotFilledChange via
+// TopBar): when the notifications slot is filled, the card collapses to
+// just Cell 1 (PORTFOLIO + position count) so the notification has room
+// to render. Dismissing the notification re-expands the card.
 // ============================================
 
 import {
@@ -29,7 +34,16 @@ const DIVIDER     = '#3a3a3e';
 const TITLE_FG    = '#fff';
 const NEUTRAL     = '#d2d6e2';
 
-export function PortfolioCard() {
+interface Props {
+  /**
+   * When true, render only the first cell (PORTFOLIO + position count).
+   * Used by TopBar on /portfolio when an Alerts Bar notification is
+   * active in the right half of Row 2.
+   */
+  compact?: boolean;
+}
+
+export function PortfolioCard({ compact = false }: Props = {}) {
   const { total } = usePortfolioStats();
 
   // REV. & EXP. = commissions + swaps + rebates (per Ross — same as the
@@ -50,9 +64,13 @@ export function PortfolioCard() {
         border: `1px solid ${ACCENT_SOFT}`,
         borderLeft: `3px solid ${ACCENT}`,
       }}
-      title="Portfolio card. Aggregate across A-Book + B-Book + C-Book. Period follows the M/D toggle to the left."
+      title={
+        compact
+          ? 'Portfolio card (collapsed). Dismiss the active notification to expand.'
+          : 'Portfolio card. Aggregate across A-Book + B-Book + C-Book. Period follows the M/D toggle to the left.'
+      }
     >
-      {/* Cell 1 — Card name + position count */}
+      {/* Cell 1 — Card name + position count (always visible) */}
       <div>
         <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
           Portfolio
@@ -61,66 +79,72 @@ export function PortfolioCard() {
           {total.positions != null ? `${total.positions} pos` : '—'}
         </div>
       </div>
-      <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
 
-      {/* Cell 2 — REV. & EXP. (= commissions + swaps + rebates) */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
-          Rev. & Exp.
-        </div>
-        {revExp != null ? (
-          <div className="text-xs font-mono" style={{ color: pnlColor(revExp) }}>
-            {fmtHdrMoney(revExp)}
-          </div>
-        ) : (
-          <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
-        )}
-      </div>
-      <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
+      {/* Cells 2–5 are hidden in compact mode along with their dividers. */}
+      {!compact && (
+        <>
+          <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
 
-      {/* Cell 3 — Volume (lots, gross across A+B+C) */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
-          Volume
-        </div>
-        {total.volume != null ? (
-          <div className="text-xs font-mono text-white">
-            {fmtHdrCompact(total.volume, '')}
+          {/* Cell 2 — REV. & EXP. (= commissions + swaps + rebates) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
+              Rev. & Exp.
+            </div>
+            {revExp != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(revExp) }}>
+                {fmtHdrMoney(revExp)}
+              </div>
+            ) : (
+              <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
+            )}
           </div>
-        ) : (
-          <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
-        )}
-      </div>
-      <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
+          <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
 
-      {/* Cell 4 — Unrealized P/L (Net) */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
-          Unrealized P/L (Net)
-        </div>
-        {total.unrealized != null ? (
-          <div className="text-xs font-mono" style={{ color: pnlColor(total.unrealized) }}>
-            {fmtHdrMoney(total.unrealized)}
+          {/* Cell 3 — Volume (lots, gross across A+B+C) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
+              Volume
+            </div>
+            {total.volume != null ? (
+              <div className="text-xs font-mono text-white">
+                {fmtHdrCompact(total.volume, '')}
+              </div>
+            ) : (
+              <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
+            )}
           </div>
-        ) : (
-          <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
-        )}
-      </div>
-      <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
+          <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
 
-      {/* Cell 5 — Realized P/L (Net) */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
-          Realized P/L (Net)
-        </div>
-        {total.realized != null ? (
-          <div className="text-xs font-mono" style={{ color: pnlColor(total.realized) }}>
-            {fmtHdrMoney(total.realized)}
+          {/* Cell 4 — Unrealized P/L (Net) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
+              Unrealized P/L (Net)
+            </div>
+            {total.unrealized != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(total.unrealized) }}>
+                {fmtHdrMoney(total.unrealized)}
+              </div>
+            ) : (
+              <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
+            )}
           </div>
-        ) : (
-          <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
-        )}
-      </div>
+          <div className="w-px self-stretch" style={{ backgroundColor: DIVIDER }} />
+
+          {/* Cell 5 — Realized P/L (Net) */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: TITLE_FG }}>
+              Realized P/L (Net)
+            </div>
+            {total.realized != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(total.realized) }}>
+                {fmtHdrMoney(total.realized)}
+              </div>
+            ) : (
+              <div className="text-xs font-mono" style={{ color: NEUTRAL }}>—</div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

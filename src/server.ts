@@ -29,6 +29,8 @@ import { auditLogRoutes } from './routes/audit-log.js';
 import { reportsRoutes } from './routes/reports.js';
 import { chartsRoutes } from './routes/charts.js';
 import { alertsBarRoutes } from './routes/alerts-bar.js';
+import { alertsBarNotificationsRoutes } from './routes/alerts-bar-notifications.js';
+import { alertsBarWsRoutes } from './routes/alerts-bar-ws.js';
 /**
  * Create and configure Fastify server
  */
@@ -169,6 +171,7 @@ async function buildServer() {
       await api.register(reportsRoutes);
       await api.register(chartsRoutes);
       await api.register(alertsBarRoutes);
+      await api.register(alertsBarNotificationsRoutes);
     },
     { prefix: '/api/v1' }
   );
@@ -184,6 +187,8 @@ async function buildServer() {
 
   // FIX Bridge real-time WebSocket proxy — MD ticks, fills, account, positions
   await fastify.register(fixWsRoutes);
+  // Alerts Bar — app-wide TopBar notifications (right half of Row 2)
+  await fastify.register(alertsBarWsRoutes);
 
   // WebSocket stats endpoint (for monitoring)
   fastify.get(
