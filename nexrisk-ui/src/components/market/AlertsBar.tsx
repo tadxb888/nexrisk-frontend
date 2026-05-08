@@ -26,36 +26,63 @@ export function AlertsBar() {
 
   return (
     <>
+      {/* Reserved row of 4 slots. Each slot is a fixed minimum width so the
+          row's total footprint never changes regardless of how many cells
+          the user has saved. flexShrink: 0 on the row guarantees the
+          escalation banner can never push into this real estate. */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          flex: '0 1 50%',
-          maxWidth: '50%',
-          minWidth: 0,
-          overflow: 'hidden',
+          flexShrink: 0,
         }}
       >
-        {cells.map((cell, i) => {
-          const tick = getTick(cell);
-          return (
-            <FxAskCell
-              key={`${cell.source_id}|${cell.symbol}|${i}`}
-              sourceId={cell.source_id}
-              symbol={cell.symbol}
-              price={tick?.ask ?? null}
-              precision={getPrecision(cell)}
-              state={getState(cell)}
-              direction={getDirection(cell)}
-              onRemove={() => removeCell(i)}
-            />
-          );
-        })}
+        {[0, 1, 2, 3].map((slotIndex) => {
+          const cell = cells[slotIndex];
 
-        {!loading && cells.length < 4 && (
-          <AddTile onClick={() => setPickerOpen(true)} />
-        )}
+          // Slot wrapper: fixed minimum width, content centred. Renders
+          // either a cell, the add tile, or a transparent placeholder so
+          // empty slots still reserve their width.
+          const slotStyle: React.CSSProperties = {
+            minWidth: 215,
+            height: 38,
+            display: 'flex',
+            alignItems: 'stretch',
+            flexShrink: 0,
+          };
+
+          if (cell) {
+            const tick = getTick(cell);
+            return (
+              <div key={`${cell.source_id}|${cell.symbol}|${slotIndex}`} style={slotStyle}>
+                <FxAskCell
+                  sourceId={cell.source_id}
+                  symbol={cell.symbol}
+                  price={tick?.ask ?? null}
+                  precision={getPrecision(cell)}
+                  state={getState(cell)}
+                  direction={getDirection(cell)}
+                  onRemove={() => removeCell(slotIndex)}
+                />
+              </div>
+            );
+          }
+
+          // First empty slot after the saved cells gets the add tile
+          // (only after initial load so the picker button doesn't flash
+          // in before the saved cells arrive).
+          if (!loading && slotIndex === cells.length) {
+            return (
+              <div key={`add-${slotIndex}`} style={slotStyle}>
+                <AddTile onClick={() => setPickerOpen(true)} />
+              </div>
+            );
+          }
+
+          // Remaining slots: empty placeholders that hold the row width.
+          return <div key={`empty-${slotIndex}`} style={slotStyle} aria-hidden="true" />;
+        })}
       </div>
 
       <FxCellPicker
