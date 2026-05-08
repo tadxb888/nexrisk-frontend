@@ -83,6 +83,23 @@ const SEVERITY_COLORS: Record<Severity, { stripe: string; pillBg: string; pillTe
   INFO:     { stripe: '#707075', pillBg: '#252528', pillText: '#a8a8ad' },
 };
 
+// Notification type → short pill label. Raw enum strings (e.g.
+// 'PROFILE_DETECTED', 'ROUTE_SANITY_BREACH') are too wide once uppercased
+// with letter-spacing, especially at narrow widths when PortfolioCard is
+// also rendered on /portfolio. These labels stay ≤ 12 chars while keeping
+// each type unambiguous. Exhaustive Record<> ensures the linter flags any
+// new NotificationType added later.
+const TYPE_LABEL: Record<NotificationType, string> = {
+  ESCALATION:          'ESCALATION',
+  PROFILE_DETECTED:    'NEW PROFILE',
+  CLUSTER_FORMED:      'NEW CLUSTER',
+  NEWS_IMMINENT:       'NEWS SOON',
+  NEWS_RELEASED:       'NEWS OUT',
+  NODE_OFFLINE:        'NODE DOWN',
+  ROUTE_SANITY_BREACH: 'ROUTE BREACH',
+  ATR_BREACH:          'ATR BREACH',
+};
+
 const FONT_MONO = 'IBM Plex Mono, ui-monospace, monospace';
 
 // ============================================
@@ -205,14 +222,17 @@ export function useAlertsBarNotifications() {
       ws.onmessage = (event) => {
         try {
           const frame = JSON.parse(event.data) as NotificationWsFrame;
-          // Per the locked contract (§2), live frames carry topic exactly
-          // 'alerts_bar.notification' and type 'EVENT'. We pin both so a
-          // future SNAPSHOT or control frame on the same topic is not
-          // misread as a new notification.
+          // Topic pin guards against future SNAPSHOT / control frames on
+          // sibling topics. Type accepts either 'EVENT' (original ESCALATION
+          // milestone) or 'BROADCAST' (PROFILE_DETECTED milestone, per
+          // Profile_Detected_Notifications-Frontend_Integration.md §3 — and
+          // the standard WebSocketManager fan-out envelope). We accept both
+          // so the slot stays populated regardless of which value the
+          // C++ AlertsBarBroadcaster ends up emitting per type.
           if (
             frame.data &&
             frame.topic === 'alerts_bar.notification' &&
-            frame.type  === 'EVENT'
+            (frame.type === 'EVENT' || frame.type === 'BROADCAST')
           ) {
             ingest(frame.data);
           }
@@ -500,7 +520,7 @@ export function AlertsBarNotifications({ className, onSlotFilledChange }: Props)
           textTransform: 'uppercase',
         }}
       >
-        {latest.notification_type}
+        {TYPE_LABEL[latest.notification_type]}
       </span>
 
       {/* Title */}
