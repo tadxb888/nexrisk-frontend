@@ -441,22 +441,15 @@ function aggregateBBookPositions(
 // Mkt Px and Broker P/L reflect the current market, not the stale per-position
 // snapshot fields (which TE sandbox does not populate reliably).
 // ======================
-// Module-level latch for the AUDUSD diagnostic block below — flips true on
-// first observation so we get ONE rich console entry per page session, not
-// one per MD tick. Reset by reloading the page.
-let _audusdLogged = false;
-
 // Per-symbol latch for the missing-instrMap warning — entries are added the
 // first time we see a Coverage position whose lp_symbol has no entry in the
 // instruments map. When this fires for a symbol, the aggregator falls back
-// to the FX-default min_trade_vol=100000 / lotSize=100000, which only happens
-// to be correct when TE actually uses 100000 as min_trade_vol for that
-// symbol (true for some FX majors, e.g. GBPUSD; false for others, e.g.
-// AUDUSD which uses 50000 → produces 2× notional / 2× lots downstream).
-// The fix lives upstream — the C++ FIX bridge needs to surface ALL traded
-// symbols via /api/v1/fix/lp/{lpId}/instruments — but until that's done,
-// surfacing each missing symbol as a warning lets the operator see at a
-// glance which positions are at risk of mis-conversion.
+// to the FX-default min_trade_vol=100000 / lotSize=100000, which only
+// happens to be correct when TE actually uses 100000 as min_trade_vol for
+// that symbol. The fix lives upstream — the FIX bridge needs to surface
+// ALL traded symbols via /api/v1/fix/lp/{lpId}/instruments — but until
+// that's done, the warning lets the operator see at a glance which
+// positions are at risk of mis-conversion.
 const _missingInstrMapWarned = new Set<string>();
 
 function aggregateCoverageBookPositions(
@@ -512,30 +505,6 @@ function aggregateCoverageBookPositions(
     }
     return out;
   })();
-
-  // [DIAGNOSTIC — remove once AUDUSD bug is root-caused] Net Exposure shows
-  // AUDUSD at -1.00M when TE Coverage Book has a single SELL 500,000 — exactly
-  // 2×. Three suspects: duplicate position in the FIX feed, duplicate row in
-  // the LP mapping table (now defended against in lpToMt5Map dedup), or TE
-  // delivering net_qty in unexpected units. This block logs ONCE per page
-  // session (module-level latch) with all three signals so we can read off
-  // which one is firing without scrolling through tick-rate spam.
-  if (!_audusdLogged) {
-    const audusdInOriginal = positions.filter((p) => p.symbol === 'AUDUSD');
-    const audusdInExpanded = positionsToAggregate.filter((p) => p.symbol === 'AUDUSD');
-    if (audusdInOriginal.length > 0 || audusdInExpanded.length > 0) {
-      _audusdLogged = true;
-      // eslint-disable-next-line no-console
-      console.log('[NetExposure DEBUG] AUDUSD diagnostic (once per session) →', {
-        lpId,
-        countInOriginalFeed: audusdInOriginal.length,
-        countAfterMappingExpansion: audusdInExpanded.length,
-        lpToMt5Map_AUDUSD_entry: lpToMt5Map?.get(`${lpId}:AUDUSD`),
-        instrMap_AUDUSD_entry: instrMap['AUDUSD'],
-        rawPositions: audusdInOriginal,
-      });
-    }
-  }
 
   const bySymbol = new Map<string, {
     hedgeNetLots: number;                 // MT5 lots (not TE contracts)
@@ -1936,40 +1905,11 @@ export function NetExposurePage() {
   // until next refresh" semantic.
   // ==========================================================================
   const userResizedRef = useRef(false);
-  // Module-level visible counter for the autosize diagnostic — module-scope
-  // means it persists across re-renders so we can read total invocation count
-  // off the last log line. Resets on page reload.
-  const fitCallCountRef = useRef(0);
   const fitColumns = useCallback(() => {
-    fitCallCountRef.current += 1;
-    const callId = fitCallCountRef.current;
-    if (userResizedRef.current) {
-      // eslint-disable-next-line no-console
-      console.log(`[NetExposure DEBUG] fitColumns #${callId} skipped: user has manually resized`);
-      return;
-    }
+    if (userResizedRef.current) return;
     const api = exposureGridRef.current?.api;
-    if (!api) {
-      // eslint-disable-next-line no-console
-      console.log(`[NetExposure DEBUG] fitColumns #${callId} skipped: grid api not yet ready`);
-      return;
-    }
-    // No clientWidth gate. Earlier code aborted when the wrapper measured
-    // zero, but eGridDiv frequently reports 0 during initial layout settle
-    // (CSS flex resolution, off-screen mount, etc.) even though the grid is
-    // about to render and AG Grid's autoSizeAllColumns measures cell content
-    // via its own canvas — it does not depend on the wrapper having non-zero
-    // width to compute correct widths. Gating on clientWidth was blocking
-    // every retry in the staggered sequence and producing 17+ skipped calls
-    // per page load.
-    try {
-      api.autoSizeAllColumns(false);
-      // eslint-disable-next-line no-console
-      console.log(`[NetExposure DEBUG] fitColumns #${callId} OK (rows=${api.getDisplayedRowCount?.()})`);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.log(`[NetExposure DEBUG] fitColumns #${callId} threw:`, err);
-    }
+    if (!api) return;
+    try { api.autoSizeAllColumns(false); } catch { /* no-op */ }
   }, []);
 
   // Manual-resize detector. AG Grid emits onColumnResized for many sources:
