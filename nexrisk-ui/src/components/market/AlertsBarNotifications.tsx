@@ -45,6 +45,29 @@ export interface AlertsBarNotification {
   created_at: string;
 }
 
+/**
+ * Payload schema for NEWS_IMMINENT and NEWS_RELEASED notifications.
+ * Field names mirror GET /api/v1/calendar/events 1:1 (per
+ * Calendar_Notifications_Frontend_Integration.md §4). The C++ backend
+ * delivers numeric values as strings with units suffixed ("178K",
+ * "2.3%"); render as received, do not parse.
+ */
+export interface CalendarPayload {
+  calendar_id:    string;
+  event_name:     string;
+  country:        string;          // long-form, e.g. "United States"
+  currency:       string | null;   // ISO-3, e.g. "USD"; null for non-FX events
+  event_time_utc: string;          // ISO 8601 UTC, trailing 'Z'
+  importance:     2 | 3;
+  actual:         string | null;   // null for IMMINENT, populated for RELEASED
+  previous:       string | null;
+  consensus:      string | null;   // TE "Forecast" — market survey average
+  forecast:       string | null;   // TE "TEForecast" — TE proprietary model
+}
+
+const NEWS_TYPES = new Set<NotificationType>(['NEWS_IMMINENT', 'NEWS_RELEASED']);
+const isNewsType = (t: NotificationType): boolean => NEWS_TYPES.has(t);
+
 interface NotificationListResponse {
   count: number;
   max_count: number;
@@ -72,6 +95,15 @@ const REST_LIST          = '/api/v1/alerts-bar/notifications';
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS     = 30_000;
+
+// Strict hold for NEWS_RELEASED. Per spec: once a release lands in the slot
+// it cannot be replaced by anything (CRITICAL escalations included) for this
+// duration. Only the user's Dismiss action breaks the hold early. Incoming
+// frames during the hold are stored in pendingRef (newest wins) and drained
+// when the timer fires. NEWS_IMMINENT does NOT use this hold — it follows
+// the existing replace-on-newest path so a later release for the same event
+// (or any other notification) can supersede it cleanly.
+const NEWS_RELEASED_HOLD_MS = 10_000;
 
 // Severity → palette. Stripe is the left-edge accent; pillBg/pillText
 // frame the type label. Tuned to read cleanly on #1c1b1e (Row 2 bg).
@@ -150,6 +182,23 @@ export function useAlertsBarNotifications() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenIdsRef        = useRef<Set<number>>(new Set());
 
+  // ── News-specific state ───────────────────────────────────────
+  // seenNewsKeysRef: hard FE dedupe by (notification_type, calendar_id) per
+  //   spec §8 — backend dedupe window is 60s; a TE actual revision arriving
+  //   later still produces a second NEWS_RELEASED for the same calendar_id.
+  //   This Set guarantees once-per-event on the FE.
+  // holdTypeRef + latestSetAtRef: bookkeeping for the strict 10s hold.
+  //   When the slot's current type is NEWS_RELEASED and (now - setAt) <
+  //   NEWS_RELEASED_HOLD_MS, ingest() refuses to replace the slot.
+  // pendingRef: single-slot queue (newest wins) for frames arriving during
+  //   a hold. Drained when the holdTimer fires or when dismiss() is called.
+  // holdTimerRef: drain timer handle.
+  const seenNewsKeysRef   = useRef<Set<string>>(new Set());
+  const holdTypeRef       = useRef<NotificationType | null>(null);
+  const latestSetAtRef    = useRef<number>(0);
+  const pendingRef        = useRef<AlertsBarNotification | null>(null);
+  const holdTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ── REST seed: fetch initial 1000 on mount ──────────────────
   const seedQuery = useQuery({
     queryKey: ['alerts-bar', 'notifications', 'seed'],
@@ -168,23 +217,100 @@ export function useAlertsBarNotifications() {
     const seedNotifs = seedQuery.data.notifications ?? [];
     setHistory(seedNotifs);
     seenIdsRef.current = new Set(seedNotifs.map(n => n.id));
+    // Also seed the news (type, calendar_id) dedupe set so that a page
+    // reload immediately after a NEWS_RELEASED doesn't re-fire the slot
+    // when the same notification arrives over WS due to seed/WS overlap.
+    seenNewsKeysRef.current = new Set(
+      seedNotifs
+        .filter(n => isNewsType(n.notification_type))
+        .map(n => {
+          const calId = (n.payload as Partial<CalendarPayload> | undefined)?.calendar_id;
+          return calId ? `${n.notification_type}:${calId}` : null;
+        })
+        .filter((k): k is string => k !== null)
+    );
     if (seedNotifs.length > 0) {
       // Newest first per backend ORDER BY created_at DESC.
       setLatest(seedNotifs[0]);
+      latestSetAtRef.current = Date.now();
+      holdTypeRef.current    = seedNotifs[0].notification_type;
+      // Note: we do NOT arm the 10s hold timer for a seeded NEWS_RELEASED.
+      // The hold protects the user's read window for a *fresh* release;
+      // a seeded one was emitted before the page was open, so blocking
+      // subsequent live frames against it would be wrong.
     }
   }, [seedQuery.data]);
+
+  // ── Slot promotion: setLatest + arm 10s hold if needed ─────
+  // Recursive: when the hold drains, this is called again with the
+  // pending frame; if THAT is also a NEWS_RELEASED, a fresh hold is
+  // armed. Defined as a stable callback so refs are shared.
+  const promoteToSlot = useCallback((n: AlertsBarNotification) => {
+    setLatest(n);
+    latestSetAtRef.current = Date.now();
+    holdTypeRef.current    = n.notification_type;
+
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+
+    if (n.notification_type === 'NEWS_RELEASED') {
+      holdTimerRef.current = setTimeout(() => {
+        holdTimerRef.current = null;
+        holdTypeRef.current  = null;
+        const pending = pendingRef.current;
+        pendingRef.current = null;
+        if (pending) promoteToSlot(pending);
+      }, NEWS_RELEASED_HOLD_MS);
+    }
+  }, []);
 
   // ── WS ingest: prepend to history, replace latest slot ──────
   const ingest = useCallback((n: AlertsBarNotification) => {
     // Defensive de-dup against late seed/WS interleave.
     if (seenIdsRef.current.has(n.id)) return;
+
+    // News-specific dedupe by (type, calendar_id). Guards against a TE
+    // actual revision producing a second NEWS_RELEASED for the same
+    // event (spec §8). Only applies when the payload actually carries
+    // a calendar_id — defensive against malformed frames.
+    if (isNewsType(n.notification_type)) {
+      const calId = (n.payload as Partial<CalendarPayload> | undefined)?.calendar_id;
+      if (calId) {
+        const newsKey = `${n.notification_type}:${calId}`;
+        if (seenNewsKeysRef.current.has(newsKey)) return;
+        seenNewsKeysRef.current.add(newsKey);
+      }
+      // Diagnostic: log raw frame on first arrival per (type, calId).
+      // Keeps Ross's "console.log first" rule for new wire shapes.
+      console.log('[AlertsBar] NEWS frame:', n.notification_type, n.payload);
+    }
+
     seenIdsRef.current.add(n.id);
+
+    // History always grows — independent of slot hold. Audit/CSV must
+    // see every notification in arrival order even if the slot was
+    // locked when it arrived.
     setHistory(prev => {
       const next = [n, ...prev];
       return next.length > MAX_HISTORY ? next.slice(0, MAX_HISTORY) : next;
     });
-    setLatest(n);
-  }, []);
+
+    // Slot strict-hold check. If the current slot is a NEWS_RELEASED
+    // still inside its 10s window, queue this frame instead of
+    // promoting. pendingRef is single-slot (newest wins) — older
+    // queued frames are dropped from the slot but remain in history.
+    if (
+      holdTypeRef.current === 'NEWS_RELEASED' &&
+      Date.now() < latestSetAtRef.current + NEWS_RELEASED_HOLD_MS
+    ) {
+      pendingRef.current = n;
+      return;
+    }
+
+    promoteToSlot(n);
+  }, [promoteToSlot]);
 
   // ── WS connection with exponential backoff ──────────────────
   useEffect(() => {
@@ -244,12 +370,34 @@ export function useAlertsBarNotifications() {
     return () => {
       cancelled = true;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (holdTimerRef.current)      clearTimeout(holdTimerRef.current);
       wsRef.current?.close();
       wsRef.current = null;
     };
   }, [ingest]);
 
-  const dismiss = useCallback(() => setLatest(null), []);
+  // Dismiss: user-initiated slot clear. Per spec, dismiss breaks the
+  // strict hold immediately. If a frame was queued during the hold,
+  // promote it to the slot now — leaving the slot empty when fresh
+  // content is waiting would feel broken. The notification stays in
+  // history regardless; nothing is lost.
+  const dismiss = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    holdTypeRef.current = null;
+
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+
+    if (pending) {
+      promoteToSlot(pending);
+    } else {
+      setLatest(null);
+      latestSetAtRef.current = 0;
+    }
+  }, [promoteToSlot]);
 
   return { latest, history, dismiss, isConnected };
 }
@@ -327,6 +475,101 @@ function formatTime(iso: string): string {
  */
 function humanize(s: string): string {
   return s.replace(/_/g, ' ');
+}
+
+// ============================================
+// EcoCal helpers — country mapping + value formatting
+// ============================================
+
+/**
+ * TE-emitted long-form country names → ISO-2 (with two trader-friendly
+ * deviations: UK instead of GB, EU instead of fictional code for Euro Area).
+ * Backend confirmed it emits long-form ("United States", "United Kingdom",
+ * "Euro Area"); this map exists to fit those into the top bar slot.
+ *
+ * Add entries as new TE countries appear in production. Unmapped names
+ * fall back to the first 4 chars uppercased (see formatCountry below) —
+ * a deliberately ugly fallback so misses are visible and get added here.
+ */
+const COUNTRY_ISO2 = new Map<string, string>([
+  // Major FX
+  ['United States',         'US'],
+  ['Euro Area',             'EU'],
+  ['United Kingdom',        'UK'],
+  ['Japan',                 'JP'],
+  ['China',                 'CN'],
+  ['Germany',               'DE'],
+  ['France',                'FR'],
+  ['Italy',                 'IT'],
+  ['Spain',                 'ES'],
+  ['Canada',                'CA'],
+  ['Australia',             'AU'],
+  ['New Zealand',           'NZ'],
+  ['Switzerland',           'CH'],
+  // Asia-Pacific
+  ['South Korea',           'KR'],
+  ['India',                 'IN'],
+  ['Hong Kong',             'HK'],
+  ['Singapore',             'SG'],
+  ['Taiwan',                'TW'],
+  ['Indonesia',             'ID'],
+  ['Thailand',              'TH'],
+  ['Malaysia',              'MY'],
+  ['Philippines',           'PH'],
+  ['Vietnam',               'VN'],
+  ['Pakistan',              'PK'],
+  // Nordics + rest of Europe
+  ['Norway',                'NO'],
+  ['Sweden',                'SE'],
+  ['Denmark',               'DK'],
+  ['Finland',               'FI'],
+  ['Iceland',               'IS'],
+  ['Netherlands',           'NL'],
+  ['Belgium',               'BE'],
+  ['Austria',               'AT'],
+  ['Ireland',               'IE'],
+  ['Portugal',              'PT'],
+  ['Greece',                'GR'],
+  ['Poland',                'PL'],
+  ['Czech Republic',        'CZ'],
+  ['Hungary',               'HU'],
+  ['Romania',               'RO'],
+  ['Ukraine',               'UA'],
+  ['Russia',                'RU'],
+  ['Turkey',                'TR'],
+  // Middle East
+  ['Israel',                'IL'],
+  ['Saudi Arabia',          'SA'],
+  ['United Arab Emirates',  'AE'],
+  ['Qatar',                 'QA'],
+  ['Kuwait',                'KW'],
+  ['Egypt',                 'EG'],
+  // Latin America
+  ['Brazil',                'BR'],
+  ['Mexico',                'MX'],
+  ['Argentina',             'AR'],
+  ['Chile',                 'CL'],
+  ['Colombia',              'CO'],
+  ['Peru',                  'PE'],
+  // Africa
+  ['South Africa',          'ZA'],
+  ['Nigeria',               'NG'],
+]);
+
+/** Map long-form country to ISO-2; fallback first 4 chars uppercased. */
+function formatCountry(country: string | null | undefined): string {
+  if (!country) return '?';
+  return COUNTRY_ISO2.get(country) ?? country.slice(0, 4).toUpperCase();
+}
+
+/** Render TE numeric strings ("178K", "2.3%") verbatim; em-dash for null. */
+function formatNumeric(v: string | null | undefined): string {
+  return (v == null || v === '') ? '—' : v;
+}
+
+/** EcoCal pill secondary status word: '15 MIN' for IMMINENT, 'RELEASED' for RELEASED. */
+function ecoCalStatusLabel(t: NotificationType): string {
+  return t === 'NEWS_IMMINENT' ? '15 MIN' : 'RELEASED';
 }
 
 function buildClipboardText(n: AlertsBarNotification): string {
@@ -504,48 +747,110 @@ export function AlertsBarNotifications({ className, onSlotFilledChange }: Props)
         aria-label={`${latest.severity} severity`}
       />
 
-      {/* Type pill — humanize() strips the underscore from enum tokens
-          (CLUSTER_FORMED → CLUSTER FORMED). Display only; raw value
-          stays in payload, history, CSV, clipboard, and Telegram. */}
-      <span
-        style={{
-          fontSize: 11,
-          fontWeight: 500,
-          padding: '2px 6px',
-          letterSpacing: '0.06em',
-          flexShrink: 0,
-          background: colors.pillBg,
-          color: colors.pillText,
-          textTransform: 'uppercase',
-        }}
-      >
-        {humanize(latest.notification_type)}
-      </span>
+      {/* Type pill + content — branches on news type.
+          For NEWS_*, the pill reads "EcoCal" and the content row is a
+          pipe-delimited record of (status, country event_name, prev,
+          forecast, consensus, +actual on release). Severity colors
+          drive the pill (HIGH=amber, MEDIUM=yellow per existing palette).
+          For all other notification types, the original pill + title +
+          em-dash + message layout is preserved verbatim. */}
+      {isNewsType(latest.notification_type) ? (
+        <>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              padding: '2px 6px',
+              letterSpacing: '0.06em',
+              flexShrink: 0,
+              background: colors.pillBg,
+              color: colors.pillText,
+              textTransform: 'uppercase',
+            }}
+          >
+            EcoCal
+          </span>
 
-      {/* Title — humanized (e.g. "New REBATE ABUSE detected"). */}
-      <span style={{ fontSize: 13, color: '#fff', flexShrink: 0, fontWeight: 500 }}>
-        {humanize(latest.title)}
-      </span>
+          {(() => {
+            const p = (latest.payload ?? {}) as Partial<CalendarPayload>;
+            const status   = ecoCalStatusLabel(latest.notification_type);
+            const country  = formatCountry(p.country);
+            const evt      = p.event_name ?? '—';
+            const released = latest.notification_type === 'NEWS_RELEASED';
+            // Released rows surface Actual first; Imminent has no Actual yet.
+            const fields: string[] = [
+              status,
+              `${country} ${evt}`,
+              ...(released ? [`Actual ${formatNumeric(p.actual)}`] : []),
+              `Prev ${formatNumeric(p.previous)}`,
+              `Fcst ${formatNumeric(p.forecast)}`,
+              `Cons ${formatNumeric(p.consensus)}`,
+            ];
+            const text = fields.join(' | ');
+            return (
+              <span
+                style={{
+                  fontSize: 13,
+                  color: '#fff',
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={text}
+              >
+                {text}
+              </span>
+            );
+          })()}
+        </>
+      ) : (
+        <>
+          {/* Type pill — humanize() strips the underscore from enum tokens
+              (CLUSTER_FORMED → CLUSTER FORMED). Display only; raw value
+              stays in payload, history, CSV, clipboard, and Telegram. */}
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              padding: '2px 6px',
+              letterSpacing: '0.06em',
+              flexShrink: 0,
+              background: colors.pillBg,
+              color: colors.pillText,
+              textTransform: 'uppercase',
+            }}
+          >
+            {humanize(latest.notification_type)}
+          </span>
 
-      <span style={{ color: '#555', flexShrink: 0, fontSize: 13 }}>—</span>
+          {/* Title — humanized (e.g. "New REBATE ABUSE detected"). */}
+          <span style={{ fontSize: 13, color: '#fff', flexShrink: 0, fontWeight: 500 }}>
+            {humanize(latest.title)}
+          </span>
 
-      {/* Message — fills remaining space, ellipsises at narrow widths.
-          Humanized in both visible text and the hover tooltip so the
-          full row reads "Cluster 4 · 14 traders · SCALPER LIKE". */}
-      <span
-        style={{
-          fontSize: 13,
-          color: '#bbb',
-          flex: 1,
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-        title={humanize(latest.message)}
-      >
-        {humanize(latest.message)}
-      </span>
+          <span style={{ color: '#555', flexShrink: 0, fontSize: 13 }}>—</span>
+
+          {/* Message — fills remaining space, ellipsises at narrow widths.
+              Humanized in both visible text and the hover tooltip so the
+              full row reads "Cluster 4 · 14 traders · SCALPER LIKE". */}
+          <span
+            style={{
+              fontSize: 13,
+              color: '#bbb',
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={humanize(latest.message)}
+          >
+            {humanize(latest.message)}
+          </span>
+        </>
+      )}
 
       {/* Timestamp */}
       <span style={{ fontSize: 12, color: '#707075', flexShrink: 0 }}>
