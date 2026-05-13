@@ -361,25 +361,39 @@ function aggregateBBookPositions(
 ): HedgeExposureRow[] {
   if (!positions.length) return [];
   const riskLevels: Array<'Low' | 'Medium' | 'High' | 'Critical'> = ['Low', 'Medium', 'High', 'Critical'];
+  // bidSample / askSample: the latest non-zero price_current observed in this
+  // bucket from a BUY position (= current Bid, close-at-bid) and from a SELL
+  // position (= current Ask, close-at-ask) respectively. These drive the live
+  // Mkt Px below — Mkt Px is the actual close-out market price for the
+  // broker's net position, NOT a volume-weighted average.
   const bySymbol = new Map<string, {
     netVol: number; totalProfit: number; totalSwap: number; totalComm: number;
-    weightedCurrentPriceSum: number; weightedOpenPriceSum: number; totalVolForPrice: number;
+    weightedOpenPriceSum: number; totalVolForPrice: number;
+    bidSample: number; askSample: number;
   }>();
   for (const p of positions) {
     const sign = p.action === 'BUY' ? 1 : -1;
     const vol  = p.volume_lots * sign;
     const cur  = bySymbol.get(p.symbol);
+    // BUY position's price_current = current Bid (broker closes a client BUY at Bid).
+    // SELL position's price_current = current Ask (broker closes a client SELL at Ask).
+    const isBuy = p.action === 'BUY';
+    const hasPx = p.price_current > 0;
     if (cur) {
       cur.netVol += vol; cur.totalProfit += p.profit; cur.totalSwap += p.swap; cur.totalComm += p.commission;
-      cur.weightedCurrentPriceSum += p.price_current * p.volume_lots;
-      cur.weightedOpenPriceSum    += p.price_open    * p.volume_lots;
-      cur.totalVolForPrice        += p.volume_lots;
+      cur.weightedOpenPriceSum += p.price_open * p.volume_lots;
+      cur.totalVolForPrice     += p.volume_lots;
+      if (hasPx) {
+        if (isBuy) cur.bidSample = p.price_current;
+        else       cur.askSample = p.price_current;
+      }
     } else {
       bySymbol.set(p.symbol, {
         netVol: vol, totalProfit: p.profit, totalSwap: p.swap, totalComm: p.commission,
-        weightedCurrentPriceSum: p.price_current * p.volume_lots,
-        weightedOpenPriceSum:    p.price_open    * p.volume_lots,
+        weightedOpenPriceSum: p.price_open * p.volume_lots,
         totalVolForPrice: p.volume_lots,
+        bidSample: (isBuy  && hasPx) ? p.price_current : 0,
+        askSample: (!isBuy && hasPx) ? p.price_current : 0,
       });
     }
   }
@@ -395,8 +409,7 @@ function aggregateBBookPositions(
     const isBTC = cls?.isBTC ?? symbol.includes('BTC');
     const lotSize  = isXAU ? 100 : isBTC ? 1 : 100000;
     const pipValue = isJPY ? 0.01 : isXAU ? 0.1 : isBTC ? 1 : 0.0001;
-    const avgPrice       = data.totalVolForPrice > 0 ? data.weightedCurrentPriceSum / data.totalVolForPrice : 0;
-    const breakEvenPrice = data.totalVolForPrice > 0 ? data.weightedOpenPriceSum    / data.totalVolForPrice : 0;
+    const breakEvenPrice = data.totalVolForPrice > 0 ? data.weightedOpenPriceSum / data.totalVolForPrice : 0;
     const clientNetVol  = Math.round(data.netVol * 100) / 100;
     // Net Vol convention on this page — signs are what the user sees on screen:
     //   B-Book row:        broker's side of the internal book = INVERSE of client direction.
@@ -407,6 +420,23 @@ function aggregateBBookPositions(
     // When the broker is fully hedged, the two signs are opposites of equal magnitude,
     // so the symbol-group parent (aggFunc:'sum') reads zero.
     const brokerNetVol  = Math.round(-clientNetVol * 100) / 100;
+    // Mkt Px: live close-out market price for the broker's net position.
+    //   +brokerNetVol (broker is long)   → BID  (broker closes by selling at bid)
+    //   −brokerNetVol (broker is short)  → ASK  (broker closes by buying at ask)
+    //   net flat                         → BID by convention
+    // bidSample/askSample refresh tick-to-tick because PositionPnLBroadcaster
+    // re-publishes every position's price_current on every tick (BUY→bid, SELL→ask).
+    // If the bucket has only one side (e.g. every client is long on this symbol so
+    // there are no client SELL positions to source Ask from), fall back to the side
+    // that is available — a same-side close-out price is still informative.
+    let mktPx: number;
+    if (brokerNetVol > 0) {
+      mktPx = data.bidSample > 0 ? data.bidSample : data.askSample;
+    } else if (brokerNetVol < 0) {
+      mktPx = data.askSample > 0 ? data.askSample : data.bidSample;
+    } else {
+      mktPx = data.bidSample > 0 ? data.bidSample : data.askSample;
+    }
     const clientNetNotional = Math.round(clientNetVol * lotSize);
     const brokerNetNotional = Math.round(brokerNetVol * lotSize);
     const unhedgedLots = Math.abs(brokerNetVol);
@@ -422,7 +452,7 @@ function aggregateBBookPositions(
       lp: lpLabel, lpAccount: 'Internal',
       clientNetVol, hedgeNetVol: 0, brokerNetVol,
       clientNetNotional, hedgeNetNotional: 0, brokerNetNotional,
-      avgPrice: Math.round(avgPrice * 100000) / 100000,
+      avgPrice: Math.round(mktPx * 100000) / 100000,
       brokerFloatingPL, unhedgedLots,
       breakEvenPrice: Math.round(breakEvenPrice * 100000) / 100000,
       probableIdp30: 'Neutral', bevh: Math.round(unhedgedLots * 100) / 100,
@@ -2119,7 +2149,76 @@ export function NetExposurePage() {
       },
       {
         field: 'avgPrice', headerName: 'Mkt Px',
-        aggFunc: 'avg',
+        // Parent (group) Mkt Px: live close-out market price for the
+        // aggregate net position — NOT a weighted/simple average of the
+        // children's Mkt Px (which mixes BID and ASK across B-Book and
+        // Coverage children and produces a meaningless mid-of-mids).
+        //
+        // Rule (matches the leaf logic):
+        //   sum(brokerNetVol) > 0  (broker net long)  → BID
+        //   sum(brokerNetVol) < 0  (broker net short) → ASK
+        //   sum(brokerNetVol) = 0  (flat)             → BID by convention
+        //
+        // Source of BID/ASK: live FIX MD subscription in currentPricesRef,
+        // keyed on the LP-side symbol. We find that LP symbol by looking
+        // at a Coverage leaf child (whose `symbol` is the LP-side identifier
+        // by construction — see aggregateCoverageBookPositions row build).
+        // For orphan B-Book groups with no Coverage leg, currentPricesRef
+        // has no entry, so we fall back to a leaf's already-resolved
+        // avgPrice (which is itself BID-or-ASK aligned to that leaf's own
+        // net direction via aggregateBBookPositions).
+        aggFunc: (params: any) => {
+          const node = params?.rowNode;
+          const leaves = (node && node.allLeafChildren) || [];
+          if (leaves.length === 0) return null;
+
+          let sumNet = 0;
+          let lpSymbol: string | null = null;
+          for (const lf of leaves) {
+            const d = lf?.data;
+            if (!d) continue;
+            sumNet += (d.brokerNetVol as number) || 0;
+            if (lpSymbol === null && d.isBBook === false && typeof d.symbol === 'string') {
+              lpSymbol = d.symbol;
+            }
+          }
+
+          let bid: number | undefined;
+          let ask: number | undefined;
+          if (lpSymbol) {
+            bid = currentPricesRef.current.get(lpSymbol + ':bid');
+            ask = currentPricesRef.current.get(lpSymbol + ':ask');
+          }
+
+          // Pick BID/ASK from live MD per the rule.
+          if (sumNet > 0) {
+            if (bid != null && bid > 0) return bid;
+            if (ask != null && ask > 0) return ask;   // one-sided LP feed fallback
+          } else if (sumNet < 0) {
+            if (ask != null && ask > 0) return ask;
+            if (bid != null && bid > 0) return bid;   // one-sided LP feed fallback
+          } else {
+            if (bid != null && bid > 0) return bid;
+            if (ask != null && ask > 0) return ask;
+          }
+
+          // No LP MD for this symbol (orphan). Pick a leaf whose own
+          // direction matches the parent's net; otherwise just the first leaf.
+          if (sumNet !== 0) {
+            for (const lf of leaves) {
+              const lfNet = (lf?.data?.brokerNetVol as number) || 0;
+              if ((sumNet > 0 && lfNet > 0) || (sumNet < 0 && lfNet < 0)) {
+                const v = lf?.data?.avgPrice;
+                if (typeof v === 'number' && v > 0) return v;
+              }
+            }
+          }
+          for (const lf of leaves) {
+            const v = lf?.data?.avgPrice;
+            if (typeof v === 'number' && v > 0) return v;
+          }
+          return null;
+        },
         cellClass: 'font-mono',
         valueFormatter: (p) => p.value != null ? Number(p.value).toFixed(5) : '',
       },
