@@ -662,13 +662,17 @@ export function BBookPage() {
           </datalist>
         </div>
 
-        <select
+        {/* Server selector intentionally hidden — single Master node only.
+            filterServer defaults to the master node_name in the activeNodes effect
+            above, so the positions list stays narrowed to the master B-Book.
+            Re-enable only if/when multi-node B-Book selection becomes a requirement. */}
+        {/* <select
           value={filterServer}
           onChange={(e) => setFilterServer(e.target.value)}
           className="w-[200px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
         >
           {uniqueServers.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        </select> */}
 
         {hasActiveFilters && (
           <button
