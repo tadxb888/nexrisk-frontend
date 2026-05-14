@@ -2213,3 +2213,114 @@ export function connectAlertsBarWebSocket(
     }
   };
 }
+// ════════════════════════════════════════════════════════════════════════════
+// System Health (system.health topic) — see system_health_ws_api.md
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface SystemHealthMaster {
+  name:      string;   // empty string when unconfigured
+  connected: boolean;
+}
+
+export interface SystemHealthMetrics {
+  cpu_saturation_pct:   number;
+  memory_pressure_pct:  number;
+  disk_io_latency_ms:   number;
+  mt5_rtt_ms:           number;
+  lp_execution_rtt_ms:  number | null;
+  lp_execution_lp_id:   string | null;
+  lp_execution_age_ms:  number | null;
+  packet_loss_pct:      number;
+}
+
+export interface SystemHealthThreshold {
+  warn:  number;
+  alert: number;
+}
+
+export interface SystemHealthThresholds {
+  cpu_saturation_pct:   SystemHealthThreshold;
+  memory_pressure_pct:  SystemHealthThreshold;
+  disk_io_latency_ms:   SystemHealthThreshold;
+  mt5_rtt_ms:           SystemHealthThreshold;
+  lp_execution_rtt_ms:  SystemHealthThreshold;
+  packet_loss_pct:      SystemHealthThreshold;
+}
+
+export interface SystemHealthPayload {
+  type:       'SNAPSHOT';
+  as_of:      string;
+  master:     SystemHealthMaster;
+  metrics:    SystemHealthMetrics;
+  thresholds: SystemHealthThresholds;
+}
+
+export type SystemHealthWsStatus = 'open' | 'closed' | 'error';
+
+/**
+ * Open a managed WebSocket dedicated to the `system.health` feed.
+ *
+ * Receives 1 Hz SNAPSHOT envelopes from the C++ SystemHealthMonitor via the
+ * BFF proxy. The subscribe message is a polite no-op — the BFF holds a shared
+ * backend subscription and fans out everything from it.
+ *
+ * Reconnect: exponential backoff 1s → 2s → 4s … cap 30s (per spec §7.1).
+ *
+ * @returns cleanup function — call from useEffect cleanup to close.
+ */
+export function connectSystemHealthWebSocket(
+  onPayload: (payload: SystemHealthPayload) => void,
+  onStatus?: (status: SystemHealthWsStatus) => void,
+): () => void {
+  let ws: WebSocket | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
+  let attempt = 0;
+
+  function backoffMs(): number {
+    // 1s, 2s, 4s, 8s, 16s, 30s cap
+    return Math.min(1000 * Math.pow(2, attempt), 30000);
+  }
+
+  function connect() {
+    if (destroyed) return;
+    ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+
+    ws.onopen = () => {
+      attempt = 0;
+      onStatus?.('open');
+      // Polite no-op: BFF fans out everything regardless. Kept for parity.
+      ws?.send(JSON.stringify({ type: 'subscribe', topics: ['system.health'] }));
+    };
+
+    ws.onmessage = (ev: MessageEvent<string>) => {
+      let env: { topic?: string; type?: string; data?: unknown };
+      try { env = JSON.parse(ev.data); } catch { return; }
+      if (env.topic !== 'system.health') return;
+      const payload = env.data as SystemHealthPayload | undefined;
+      if (!payload || typeof payload !== 'object') return;
+      onPayload(payload);
+    };
+
+    ws.onerror = () => onStatus?.('error');
+    ws.onclose = () => {
+      onStatus?.('closed');
+      if (!destroyed) {
+        const wait = backoffMs();
+        attempt += 1;
+        retryTimer = setTimeout(connect, wait);
+      }
+    };
+  }
+
+  connect();
+
+  return () => {
+    destroyed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (ws) {
+      ws.onclose = null;
+      ws.close(1000, 'Client disconnecting');
+    }
+  };
+}
