@@ -36,7 +36,8 @@ function connectBackend() {
       topics: ['mt5.position', 'mt5.node_status', 'mt5.deal',
                'portfolio.summary.today', 'portfolio.summary.month',
                'portfolio.exposure.symbols',
-               'quote']
+               'quote',
+               'system.health']
     }));
 
     fastifyRef?.log.info('[MT5 WS] Backend connected — fetching snapshot');
