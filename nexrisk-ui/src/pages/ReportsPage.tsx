@@ -2,7 +2,7 @@
 // NexRisk — Reports Page
 // ============================================================
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 import type { ColDef, ValueFormatterParams } from 'ag-grid-community';
@@ -49,7 +49,8 @@ function cs(...defs: (string | ColDef)[]): ColDef[] {
 }
 
 // ── Types ────────────────────────────────────────────────────
-type ResponseShape = 'paginated' | 'profitability' | 'health-escalations' | 'raw-data' | 'json-config';
+type ResponseShape = 'paginated' | 'profitability' | 'health-escalations' | 'raw-data' | 'json-config' | 'lp-volume';
+
 type FilterDef =
   | { type: 'date-range' }
   | { type: 'text';   id: string; label: string; placeholder?: string; required?: boolean; strategySelect?: boolean }
@@ -194,6 +195,13 @@ const CATEGORIES: Category[] = [
           { type: 'text', id: 'login_id', label: 'Login ID' },
         ],
         columns: cs('record_id', 'login_id', col('trader_name', { minWidth: 140 }), 'lp_name', 'symbol', 'direction', n2('hedge_volume_mt5'), col('fill_price'), 'hedge_state', ts('dispatched_at'), 'rt_ms'),
+      },
+      {
+        id: 'execution-lp-volume', label: 'LP Volume Report', category: 'execution',
+        description: 'LP-confirmed billable volume aggregated by symbol, asset class, LP, node, book, direction, or day',
+        path: 'lp-volume', responseShape: 'lp-volume',
+        csvSupported: true, defaultLimit: 0, filters: [],
+        columns: [],
       },
     ],
   },
@@ -645,7 +653,497 @@ function JsonConfigViewer({ data }: { data: Record<string, unknown> }) {
     </div>
   );
 }
+// ─────────────────────────────────────────────────────────────
+// LP Volume Report (custom toolbar + grid for the lp-volume shape)
+// ─────────────────────────────────────────────────────────────
+type LpVolumePeriod   = 'today' | 'mtd' | 'last_month' | 'custom';
+type LpVolumeGroupKey = 'lp' | 'node' | 'book' | 'symbol' | 'asset_class' | 'direction' | 'day';
 
+interface LpVolumeRow {
+  lp_id?:          string;
+  mt5_node_id?:    number;
+  book_name?:      'A' | 'C';
+  mt5_symbol?:     string;
+  asset_class?:    string | null;
+  contract_size?:  number;
+  direction?:      'LONG' | 'SHORT';
+  day?:            string;
+  volume_lots:     number;
+  volume_notional: number;
+  deal_count:      number;
+  first_fill_at:   string;
+  last_fill_at:    string;
+}
+
+interface LpVolumeResponse {
+  period:   LpVolumePeriod;
+  from:     string;
+  to:       string;
+  group_by: string[];
+  filters:  Record<string, string>;
+  columns:  string[];
+  rows:     LpVolumeRow[];
+  totals: { volume_lots: number; volume_notional: number; deal_count: number };
+}
+
+const LP_VOL_GROUP_OPTIONS: { key: LpVolumeGroupKey; label: string }[] = [
+  { key: 'symbol',      label: 'Symbol' },
+  { key: 'asset_class', label: 'Asset Class' },
+  { key: 'lp',          label: 'LP' },
+  { key: 'node',        label: 'Node' },
+  { key: 'book',        label: 'Book' },
+  { key: 'direction',   label: 'Direction' },
+  { key: 'day',         label: 'Day' },
+];
+
+const ASSET_CLASS_OPTIONS = ['Forex', 'Metals', 'Indices', 'Energies', 'Crypto', 'Stocks', 'Bonds'];
+
+function fmtLvNumber(v: unknown, decimals: number): string {
+  const n = typeof v === 'number' ? v : parseFloat(v as string);
+  if (isNaN(n)) return '';
+  return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+// The response's `to` is exclusive (next-day UTC midnight). Render the inclusive form.
+function fmtInclusiveTo(toIso: string): string {
+  try { return new Date(new Date(toIso).getTime() - 1).toLocaleDateString(); }
+  catch { return String(toIso); }
+}
+function fmtFromDate(fromIso: string): string {
+  try { return new Date(fromIso).toLocaleDateString(); }
+  catch { return String(fromIso); }
+}
+
+function LpVolumeFilterField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-shrink-0">
+      <span className="text-[10px] text-[#999] whitespace-nowrap">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function LpVolumeSummaryStat({ label, value, prominent = false }: { label: string; value: string; prominent?: boolean }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] text-[#bbb] uppercase tracking-wider font-medium">{label}</span>
+      <span
+        className="font-mono"
+        style={{
+          color:      prominent ? '#fff' : '#ddd',
+          fontSize:   prominent ? '14px' : '12px',
+          fontWeight: prominent ? 600    : 400,
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function LpVolumeReport() {
+  const [period, setPeriod]               = useState<LpVolumePeriod>('today');
+  const [customFrom, setCustomFrom]       = useState<string>('');
+  const [customTo, setCustomTo]           = useState<string>('');
+  const [appliedCustom, setAppliedCustom] = useState<{ from: string; to: string } | null>(null);
+  const [groupBy, setGroupBy]             = useState<LpVolumeGroupKey[]>(['symbol']);
+  const [fLpId, setFLpId]                 = useState<string>('');
+  const [fNodeId, setFNodeId]             = useState<string>('');
+  const [fBook, setFBook]                 = useState<string>('');
+  const [fSymbol, setFSymbol]             = useState<string>('');
+  const [fAssetClass, setFAssetClass]     = useState<string>('');
+  const [filtersOpen, setFiltersOpen]     = useState<boolean>(false);
+  const [data, setData]                   = useState<LpVolumeResponse | null>(null);
+  const [loading, setLoading]             = useState<boolean>(false);
+  const [error, setError]                 = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Browser tab title — restored on unmount/page switch
+  useEffect(() => {
+    const previous = document.title;
+    document.title = 'LP Volume Report — Taiga';
+    return () => { document.title = previous; };
+  }, []);
+
+  const buildParams = useCallback((forCsv: boolean): URLSearchParams => {
+    const sp = new URLSearchParams();
+    sp.set('period', period);
+    if (period === 'custom' && appliedCustom) {
+      sp.set('from', appliedCustom.from);
+      sp.set('to',   appliedCustom.to);
+    }
+    if (groupBy.length > 0) sp.set('group_by', groupBy.join(','));
+    if (fLpId.trim())       sp.set('lp_id',      fLpId.trim());
+    if (fNodeId.trim())     sp.set('node_id',    fNodeId.trim());
+    if (fBook)              sp.set('book',       fBook);
+    if (fSymbol.trim())     sp.set('mt5_symbol', fSymbol.trim());
+    if (fAssetClass)        sp.set('asset_class', fAssetClass);
+    if (forCsv)             sp.set('format', 'csv');
+    return sp;
+  }, [period, appliedCustom, groupBy, fLpId, fNodeId, fBook, fSymbol, fAssetClass]);
+
+  const doFetch = useCallback(async () => {
+    if (period === 'custom' && !appliedCustom) return;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    setError(null);
+    try {
+      const url = `${API_BASE}/api/v1/reports/lp-volume?${buildParams(false)}`;
+      const res = await fetch(url, { credentials: 'include', signal: ctrl.signal });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({})) as { error?: string; message?: string };
+        throw new Error(j.message ?? j.error ?? `HTTP ${res.status}`);
+      }
+      const json = await res.json() as LpVolumeResponse;
+      setData(json);
+    } catch (e: unknown) {
+      if ((e as Error)?.name === 'AbortError') return;
+      setError((e as Error)?.message ?? 'Request failed');
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [period, appliedCustom, buildParams]);
+
+  // Re-fetch whenever the request shape changes
+  const groupKey = groupBy.join(',');
+  useEffect(() => {
+    void doFetch();
+    return () => abortRef.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, appliedCustom, groupKey, fLpId, fNodeId, fBook, fSymbol, fAssetClass]);
+
+  // Poll only when period is open-ended and the tab is visible
+  useEffect(() => {
+    if (period !== 'today' && period !== 'mtd') return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void doFetch();
+    }, 45_000);
+    return () => window.clearInterval(id);
+  }, [period, doFetch]);
+
+  function toggleGroup(key: LpVolumeGroupKey) {
+    setGroupBy(prev =>
+      prev.includes(key)
+        ? (prev.length > 1 ? prev.filter(k => k !== key) : prev) // require ≥1
+        : [...prev, key]
+    );
+  }
+
+  function handleApplyCustom() {
+    if (!customFrom || !customTo || customFrom > customTo) return;
+    setAppliedCustom({ from: customFrom, to: customTo });
+  }
+
+  async function handleExportCsv() {
+    try {
+      const url = `${API_BASE}/api/v1/reports/lp-volume?${buildParams(true)}`;
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const burl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = burl;
+      const cd = res.headers.get('Content-Disposition');
+      a.download = cd?.match(/filename="(.+?)"/)?.[1] ?? 'lp-volume.csv';
+      a.click();
+      URL.revokeObjectURL(burl);
+    } catch { /* ignore */ }
+  }
+
+  // Column defs built from the response's `columns` array (canonical order)
+  const colDefs = useMemo<ColDef[]>(() => {
+    if (!data) return [];
+    return data.columns.map((field): ColDef => {
+      switch (field) {
+        case 'volume_lots':
+          return {
+            field, headerName: 'Volume (lots)', minWidth: 130, type: 'rightAligned',
+            valueFormatter: (p) => fmtLvNumber(p.value, 2),
+            cellStyle: { fontFamily: 'IBM Plex Mono, monospace' },
+          };
+        case 'volume_notional':
+          return {
+            field, headerName: 'Notional', minWidth: 170, type: 'rightAligned',
+            valueFormatter: (p) => fmtLvNumber(p.value, 2),
+            cellStyle: { fontFamily: 'IBM Plex Mono, monospace', fontSize: '14px', color: '#fff' },
+          };
+        case 'deal_count':
+          return {
+            field, headerName: 'Deal Count', minWidth: 110, type: 'rightAligned',
+            valueFormatter: (p) => fmtLvNumber(p.value, 0),
+            cellStyle: { fontFamily: 'IBM Plex Mono, monospace' },
+          };
+        case 'contract_size':
+          return {
+            field, headerName: 'Contract Size', minWidth: 130, type: 'rightAligned',
+            valueFormatter: (p) => {
+              const n = typeof p.value === 'number' ? p.value : parseFloat(p.value as string);
+              if (isNaN(n)) return '';
+              const d = Number.isInteger(n) ? 0 : 2;
+              return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+            },
+            cellStyle: { fontFamily: 'IBM Plex Mono, monospace' },
+          };
+        case 'asset_class':
+          return {
+            field, headerName: 'Asset Class', minWidth: 120,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            cellRenderer: (p: any) => (p.value == null
+              ? <span style={{ color: '#777', fontStyle: 'italic' }}>Unclassified</span>
+              : p.value),
+          };
+        case 'direction':
+          return {
+            field, headerName: 'Direction', minWidth: 90,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            cellRenderer: (p: any) => (
+              <span style={{
+                color:      p.value === 'LONG' ? '#66e07a' : p.value === 'SHORT' ? '#ff5c5c' : '#aaa',
+                fontWeight: 600,
+              }}>{p.value ?? ''}</span>
+            ),
+          };
+        case 'book_name':
+          return {
+            field, headerName: 'Book', minWidth: 80,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            cellRenderer: (p: any) => {
+              const v = p.value;
+              if (v == null) return '';
+              const bg = v === 'A' ? 'rgba(78,205,196,0.18)' : v === 'C' ? 'rgba(224,160,32,0.18)' : 'rgba(160,160,160,0.18)';
+              const fg = v === 'A' ? '#4ecdc4'              : v === 'C' ? '#e0a020'              : '#aaa';
+              return (
+                <span style={{
+                  display: 'inline-block', padding: '1px 8px', borderRadius: 999,
+                  fontSize: '11px', fontWeight: 600, backgroundColor: bg, color: fg,
+                  fontFamily: 'IBM Plex Mono, monospace',
+                }}>{v}</span>
+              );
+            },
+          };
+        case 'first_fill_at':
+        case 'last_fill_at':
+          return {
+            field, headerName: snake2title(field), minWidth: 180,
+            valueFormatter: (p) => {
+              const v = p.value as string | null | undefined;
+              if (v == null || v === '') return '';
+              try { return new Date(v).toLocaleString(); } catch { return String(v); }
+            },
+            tooltipValueGetter: (p) => (p.value == null ? '' : String(p.value)),
+            cellStyle: { fontFamily: 'IBM Plex Mono, monospace' },
+          };
+        case 'lp_id':
+          return { field, headerName: 'LP',       minWidth: 140, cellStyle: { fontFamily: 'IBM Plex Mono, monospace' } };
+        case 'mt5_node_id':
+          return { field, headerName: 'MT5 Node', minWidth: 90,  type: 'rightAligned', cellStyle: { fontFamily: 'IBM Plex Mono, monospace' } };
+        case 'mt5_symbol':
+          return { field, headerName: 'Symbol',   minWidth: 110, cellStyle: { fontFamily: 'IBM Plex Mono, monospace' } };
+        case 'day':
+          return { field, headerName: 'Day',      minWidth: 110, cellStyle: { fontFamily: 'IBM Plex Mono, monospace' } };
+        default:
+          // Defensive: unknown additive columns get a generic render
+          return col(field);
+      }
+    });
+  }, [data]);
+
+  const hasRows = !!data && data.rows.length > 0;
+  const customApplyDisabled = !customFrom || !customTo || customFrom > customTo;
+  const anyFilterActive = !!(fLpId || fNodeId || fBook || fSymbol || fAssetClass);
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+      {/* ── Toolbar ── */}
+      <div className="px-4 py-2 border-b border-[#505050] flex items-center gap-3 flex-wrap flex-shrink-0" style={{ backgroundColor: '#2a292c' }}>
+        {/* Period segmented */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <span className="text-[10px] text-[#bbb] uppercase tracking-wider font-medium mr-1">Period</span>
+          {([['today','Today'], ['mtd','MTD'], ['last_month','Last Month'], ['custom','Custom']] as [LpVolumePeriod, string][]).map(([key, label]) => {
+            const active = period === key;
+            return (
+              <button
+                key={key}
+                onClick={() => { setPeriod(key); if (key !== 'custom') setAppliedCustom(null); }}
+                className="text-[10px] px-2 py-0.5 rounded border transition-colors"
+                style={{
+                  borderColor:     active ? '#4ecdc4' : '#606060',
+                  color:           active ? '#4ecdc4' : '#ccc',
+                  backgroundColor: active ? 'rgba(78,205,196,0.12)' : 'transparent',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Custom date pickers */}
+        {period === 'custom' && (
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
+              className="bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white" />
+            <span className="text-[10px] text-[#bbb]">–</span>
+            <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
+              className="bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white" />
+            <button
+              onClick={handleApplyCustom}
+              disabled={customApplyDisabled}
+              className="text-[10px] px-2 py-0.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: '#4ecdc4', color: '#4ecdc4' }}
+            >
+              Apply
+            </button>
+          </div>
+        )}
+
+        {/* Group-by chips */}
+        <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap">
+          <span className="text-[10px] text-[#bbb] uppercase tracking-wider font-medium mr-1">Group by</span>
+          {LP_VOL_GROUP_OPTIONS.map(({ key, label }) => {
+            const active = groupBy.includes(key);
+            const lockedOn = active && groupBy.length === 1;
+            return (
+              <button
+                key={key}
+                onClick={() => toggleGroup(key)}
+                disabled={lockedOn}
+                title={lockedOn ? 'At least one grouping is required' : undefined}
+                className="text-[10px] px-2 py-0.5 rounded border transition-colors disabled:cursor-not-allowed"
+                style={{
+                  borderColor:     active ? '#4ecdc4' : '#606060',
+                  color:           active ? '#4ecdc4' : '#ccc',
+                  backgroundColor: active ? 'rgba(78,205,196,0.12)' : 'transparent',
+                  opacity:         lockedOn ? 0.85 : 1,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Filters toggle */}
+        <button
+          onClick={() => setFiltersOpen(o => !o)}
+          className="text-[10px] px-2 py-0.5 rounded border transition-colors flex-shrink-0"
+          style={{
+            borderColor:     filtersOpen || anyFilterActive ? '#4ecdc4' : '#606060',
+            color:           filtersOpen || anyFilterActive ? '#4ecdc4' : '#ccc',
+            backgroundColor: filtersOpen ? 'rgba(78,205,196,0.12)' : 'transparent',
+          }}
+        >
+          Filters{anyFilterActive ? ' •' : ''} {filtersOpen ? '▲' : '▼'}
+        </button>
+
+        {/* CSV */}
+        <button
+          onClick={handleExportCsv}
+          disabled={!hasRows}
+          className="text-xs px-3 py-1 rounded border border-[#606060] text-[#999] hover:text-white hover:border-[#808080] transition-colors font-mono flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Download CSV
+        </button>
+      </div>
+
+      {/* ── Filters drawer ── */}
+      {filtersOpen && (
+        <div className="px-4 py-2 border-b border-[#505050] flex items-center gap-4 flex-wrap flex-shrink-0" style={{ backgroundColor: '#252429' }}>
+          <LpVolumeFilterField label="LP">
+            <input type="text" value={fLpId} onChange={e => setFLpId(e.target.value)}
+              placeholder="e.g. traderevolution"
+              className="w-[160px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#555]" />
+          </LpVolumeFilterField>
+          <LpVolumeFilterField label="Asset Class">
+            <select value={fAssetClass} onChange={e => setFAssetClass(e.target.value)}
+              className="bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white">
+              <option value="">All</option>
+              {ASSET_CLASS_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </LpVolumeFilterField>
+          <LpVolumeFilterField label="Symbol">
+            <input type="text" value={fSymbol} onChange={e => setFSymbol(e.target.value)}
+              placeholder="e.g. EURUSD"
+              className="w-[120px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#555]" />
+          </LpVolumeFilterField>
+          <LpVolumeFilterField label="Node">
+            <input type="text" value={fNodeId} onChange={e => setFNodeId(e.target.value)}
+              placeholder="e.g. 2"
+              className="w-[80px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white placeholder-[#555]" />
+          </LpVolumeFilterField>
+          <LpVolumeFilterField label="Book">
+            <select value={fBook} onChange={e => setFBook(e.target.value)}
+              className="bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white">
+              <option value="">All</option>
+              <option value="A">A</option>
+              <option value="C">C</option>
+            </select>
+          </LpVolumeFilterField>
+          {anyFilterActive && (
+            <button
+              onClick={() => { setFLpId(''); setFNodeId(''); setFBook(''); setFSymbol(''); setFAssetClass(''); }}
+              className="text-[10px] text-[#bbb] hover:text-white transition-colors ml-auto"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Summary strip ── */}
+      {data && (
+        <div className="px-4 py-2 border-b border-[#505050] flex items-center gap-6 flex-shrink-0 flex-wrap" style={{ backgroundColor: '#1c1b1e' }}>
+          <LpVolumeSummaryStat label="Period"        value={data.period.toUpperCase()} />
+          <LpVolumeSummaryStat label="From"          value={fmtFromDate(data.from)} />
+          <LpVolumeSummaryStat label="To (incl.)"    value={fmtInclusiveTo(data.to)} />
+          {loading && <span className="text-[10px] text-[#bbb] font-mono">refreshing…</span>}
+          <div className="flex-1" />
+          <LpVolumeSummaryStat label="Volume (lots)" value={fmtLvNumber(data.totals.volume_lots,     2)} prominent />
+          <LpVolumeSummaryStat label="Notional"      value={fmtLvNumber(data.totals.volume_notional, 2)} prominent />
+          <LpVolumeSummaryStat label="Deal Count"    value={fmtLvNumber(data.totals.deal_count,      0)} prominent />
+        </div>
+      )}
+
+      {/* ── Data area ── */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden" style={{ padding: '4px' }}>
+        {loading && !data && (
+          <div className="flex-1 flex items-center justify-center">
+            <span className="text-[#999] text-sm font-mono">Loading…</span>
+          </div>
+        )}
+        {!loading && error && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
+            <p className="text-[#ff5c5c] text-sm font-mono">{error}</p>
+            <button onClick={() => doFetch()} className="text-xs px-3 py-1 rounded border border-[#606060] text-[#999] hover:text-white transition-colors">Retry</button>
+          </div>
+        )}
+        {!loading && !error && data && data.rows.length === 0 && (
+          <div className="flex-1 flex items-center justify-center">
+            <span className="text-[#aaa] text-sm font-mono">No fills in this period for the selected filters.</span>
+          </div>
+        )}
+        {data && data.rows.length > 0 && (
+          <div className="flex-1 min-h-0">
+            <AgGridReact
+              theme={gridTheme}
+              defaultColDef={defaultColDef}
+              rowHeight={26}
+              headerHeight={36}
+              rowData={data.rows}
+              columnDefs={colDefs}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 // ── Main component ───────────────────────────────────────────
 export function ReportsPage() {
   const [selectedId, setSelectedId]           = useState<string>(ALL_REPORTS[0].id);
@@ -962,7 +1460,8 @@ export function ReportsPage() {
           </div>
         )}
 
-        {/* Filter bar */}
+        {/* Filter bar — hidden for LP Volume (it has its own custom toolbar) */}
+        {selectedReport.responseShape !== 'lp-volume' && (
         <div className="px-4 py-2 border-b border-[#505050] flex items-center gap-3 flex-wrap flex-shrink-0" style={{ backgroundColor: '#2a292c' }}>
           <span className="text-[10px] text-[#bbb] uppercase tracking-wider font-medium flex-shrink-0">Filters</span>
 
@@ -1092,24 +1591,31 @@ export function ReportsPage() {
             {loading ? 'Loading…' : 'Run Report'}
           </button>
         </div>
-
+        )}
+      
         {/* Data area + optional detail panel */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden" style={{ padding: '4px' }}>
-            {renderData()}
-          </div>
-          {selectedRow && (
-            <RowDetailPanel
-              row={selectedRow}
-              reportLabel={selectedReport.label}
-              categoryColor={category.color}
-              onClose={() => setSelectedRow(null)}
-            />
+          {selectedReport.responseShape === 'lp-volume' ? (
+            <LpVolumeReport />
+          ) : (
+            <>
+              <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden" style={{ padding: '4px' }}>
+                {renderData()}
+              </div>
+              {selectedRow && (
+                <RowDetailPanel
+                  row={selectedRow}
+                  reportLabel={selectedReport.label}
+                  categoryColor={category.color}
+                  onClose={() => setSelectedRow(null)}
+                />
+              )}
+            </>
           )}
         </div>
 
         {/* Pagination footer */}
-        {showPagination && (
+        {showPagination && selectedReport.responseShape !== 'lp-volume' && (
           <div className="px-4 py-2 border-t border-[#505050] flex items-center gap-4 flex-shrink-0" style={{ backgroundColor: '#2a292c' }}>
             <span className="text-xs text-[#999] font-mono">{pFrom.toLocaleString()}–{pTo.toLocaleString()} of {pagination!.total.toLocaleString()}</span>
             <div className="flex items-center gap-1">
