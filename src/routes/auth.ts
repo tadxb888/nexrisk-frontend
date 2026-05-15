@@ -175,7 +175,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     });
 
     if (!result.ok) {
-      const errBody = result.error as Record<string, unknown>;
+      const errBody = result.error as unknown as Record<string, unknown>;
 
       // First-login gates: 403 + status field (not the `error` field)
       // MUST_CHANGE_PASSWORD → tell frontend to redirect to /setup

@@ -73,7 +73,7 @@ function stampSubmitter(body: unknown, request: FastifyRequest): unknown {
 //      If that also 404s, the LP doesn't exist — propagate the original error.
 //   3. Empty envelope shape matches the real response so frontend destructuring
 //      hits the same code path regardless.
-type EmptyFallback = Record<string, unknown>;
+type EmptyFallback = Record<string, unknown> | unknown[];
 async function emptyOn404(
   response: { ok: boolean; status: number; data?: unknown; error?: unknown },
   lp_id: string,

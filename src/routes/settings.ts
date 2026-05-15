@@ -21,8 +21,7 @@
 // ============================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { nexriskApi, snakeToCamel, camelToSnake } from '../services/nexrisk-api.js';
-
+import { nexriskApi, snakeToCamel } from '../services/nexrisk-api.js';
 // ── helpers ──────────────────────────────────────────────────
 
 /**
@@ -84,14 +83,19 @@ async function proxyGetRaw(
 }
 
 async function proxyWriteRaw(
-  method: 'PUT' | 'POST',
+  method: 'PUT' | 'POST' | 'DELETE',
   path: string,
   body: unknown,
   reply: FastifyReply
 ) {
-  const response = method === 'PUT'
-    ? await nexriskApi.put(path, body)
-    : await nexriskApi.post(path, body);
+  let response;
+  if (method === 'DELETE') {
+    response = await nexriskApi.delete(path);
+  } else if (method === 'PUT') {
+    response = await nexriskApi.put(path, body);
+  } else {
+    response = await nexriskApi.post(path, body);
+  }
   if (!response.ok) {
     return reply.code(response.status).send(response.error);
   }

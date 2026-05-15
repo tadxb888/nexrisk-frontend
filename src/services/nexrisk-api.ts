@@ -22,7 +22,7 @@ const agent = new Agent({
 export interface NexRiskRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   body?: unknown;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: Record<string, unknown>;
   timeout?: number;
   /** Additional headers merged into the request (e.g. Authorization, X-Enrollment-Token, Cookie) */
   headers?: Record<string, string>;
@@ -43,7 +43,7 @@ export interface NexRiskResponse<T> {
 /**
  * Build URL with query parameters
  */
-function buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {
+function buildUrl(path: string, query?: Record<string, unknown>): string {
   const url = new URL(path, config.nexriskApiUrl);
   
   if (query) {
@@ -143,8 +143,7 @@ export async function nexriskFetch<T>(
  * Convenience methods for common operations
  */
 export const nexriskApi = {
-  get: <T>(path: string, query?: Record<string, string | number | boolean | undefined>, headers?: Record<string, string>) =>
-    nexriskFetch<T>(path, { method: 'GET', query, headers }),
+  get: <T>(path: string, query?: Record<string, unknown>, headers?: Record<string, string>) =>    nexriskFetch<T>(path, { method: 'GET', query, headers }),
 
   post: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
     nexriskFetch<T>(path, { method: 'POST', body, headers }),

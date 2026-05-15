@@ -62,7 +62,7 @@ export async function riskMatrixRoutes(fastify: FastifyInstance): Promise<void> 
     return reply.send(response.data);
   });
 
-  fastify.post('/config/risk-matrix/reload', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/config/risk-matrix/reload', async (_request: FastifyRequest, reply: FastifyReply) => {    
     const response = await nexriskApi.post('/api/v1/config/risk-matrix/reload', {});
     if (!response.ok) return reply.code(response.status).send(response.error);
     return reply.send(response.data);

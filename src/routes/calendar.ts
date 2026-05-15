@@ -43,7 +43,7 @@ export async function calendarRoutes(fastify: FastifyInstance): Promise<void> {
   // ── GET /calendar/events/:id ───────────────────────────────────
   // Single event detail — used to populate picker display when loading
   // an existing rule/window that already has te_calendar_id set.
-  fastify.get(
+  fastify.get<{ Params: { id: string } }>(
     '/calendar/events/:id',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {

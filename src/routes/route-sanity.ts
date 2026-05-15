@@ -66,8 +66,7 @@ export async function routeSanityRoutes(fastify: FastifyInstance): Promise<void>
       }
 
       // Per-LP detail calls for connect_count + session states + metrics + MD prices — parallel
-      const [detailResults, metricsResults, pricesResults] = await Promise.all([
-        Promise.allSettled(enabledConfigs.map((c: any) => nexriskApi.get(`/api/v1/fix/status/${c.lp_id}`))),
+      const [detailResults, metricsResults, _pricesResults] = await Promise.all([        Promise.allSettled(enabledConfigs.map((c: any) => nexriskApi.get(`/api/v1/fix/status/${c.lp_id}`))),
         Promise.allSettled(enabledConfigs.map((c: any) => nexriskApi.get(`/api/v1/fix/lp/${c.lp_id}/metrics/symbols`))),
         Promise.allSettled(enabledConfigs.map((c: any) => nexriskApi.get(`/api/v1/fix/md/prices/${c.lp_id}`))),
       ]);
