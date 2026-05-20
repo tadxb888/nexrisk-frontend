@@ -1,5 +1,5 @@
 // ============================================
-// Risk Intelligence Center (Focus Page)
+// Behavioural & Trading Patterns Detection and Classification (Focus Page)
 // AI-powered trader detection, classification & clustering
 // ============================================
 
@@ -1444,11 +1444,11 @@ export function FocusPage() {
         <div className="px-4 py-2 border-b border-border flex items-center justify-between flex-shrink-0">
           {/* Left: Title */}
           <div className="flex-shrink-0">
-            <h1 className="text-base font-medium text-text-primary">Risk Intelligence Center</h1>
+            <h1 className="text-base font-medium text-text-primary whitespace-nowrap">Behavioural &amp; Trading Patterns Detection and Classification</h1>
           </div>
           
-          {/* Center: Summary Badges */}
-          <div className="flex items-center gap-1.5 mx-4">
+          {/* Center: Summary Badges — spread evenly across remaining width */}
+          <div className="flex-1 flex items-center justify-evenly mx-4 min-w-0">
             <SummaryBadge
               label="Critical"
               value={counts.critical}

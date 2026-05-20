@@ -63,9 +63,10 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     id: 'flow',
-    label: 'Flow',
+    label: 'Intel',
     items: [
-      { path: '/flow',         label: 'Trader Intelligence' },
+      { path: '/flow',         label: 'Profiler' },
+      { path: '/predictions',  label: 'Predictions' },
       { path: '/archetypes',   label: 'Archetypes' },
       { path: '/risk-charter', label: 'Risk Charter' },
     ],
@@ -132,7 +133,7 @@ const DEFAULT_FAVOURITES: string[] = [
   '/net-exposure',
   '/hedging-strategies',
   '/execution-report',
-  '/flow',          // Trader Intelligence
+  '/flow',          // Profiler
   '/portfolio',
 ];
 
