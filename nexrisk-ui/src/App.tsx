@@ -44,6 +44,10 @@ import {
   ReportsPage,
 } from '@/pages';
 
+// Predictions — top-level page imported directly (verify whether it's also
+// exported from @/pages barrel; if so this direct import can be removed).
+import { PredictionsPage } from '@/pages/PredictionsPage';
+
 // Settings sub-pages (not in @/pages barrel — direct import)
 import { GatewayPage }           from '@/pages/settings/GatewayPage';
 import { AuthSessionPage }       from '@/pages/settings/AuthSessionPage';
@@ -93,6 +97,7 @@ function App() {
 
               <Route path="/archetypes"    element={<ArchetypePage />} />
               <Route path="/risk-charter"  element={<CharterPage />} />
+              <Route path="/predictions"   element={<PredictionsPage />} />
 
               {/* ─── Execution ────────────────────────── */}
               <Route path="/b-book"              element={<BBookPage />} />
