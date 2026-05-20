@@ -2287,20 +2287,22 @@ export function NetExposurePage() {
         },
         cellRenderer: (p: { value: string; node?: { group?: boolean } }) => {
           if (!p.value || !p.node?.group) return null;
-          // Palette — muted per branding guideline (no neon, no fluorescent,
-          // no dark grey). Teal for "working as intended", muted amber for
-          // "watch this", muted red for "problem".
+          // Palette — lifted-but-muted per branding guideline (no neon, no
+          // pure saturation, "border glow" for alert states). FG bumped ~20%
+          // lightness vs the previous tones; borders brightened so the badge
+          // reads as a ring against the dark grid background; fontWeight 600
+          // so 11px badge text doesn't get lost.
           const palette: Record<string, { c: string; bg: string; border: string; label: string }> = {
-            HEDGE_WORKING: { c: '#49b3b3', bg: '#1b2d2d', border: '#3a6a6a', label: 'HEDGE WORKING' },
-            HEDGE_DRAG:    { c: '#c09060', bg: '#2a241a', border: '#6a5838', label: 'HEDGE DRAG'    },
-            BONUS:         { c: '#6aaa78', bg: '#1a2620', border: '#3a5a44', label: 'BONUS'         },
-            DOUBLE_LOSS:   { c: '#d07070', bg: '#2a1a1d', border: '#6a3a40', label: 'DOUBLE LOSS'   },
-            FLAT:          { c: '#999',    bg: '#1a1a1d', border: '#44454f', label: '—'             },
+            HEDGE_WORKING: { c: '#5ed4d4', bg: '#1b2d2d', border: '#4a8a8a', label: 'HEDGE WORKING' },
+            HEDGE_DRAG:    { c: '#e0b075', bg: '#2a241a', border: '#8a6d44', label: 'HEDGE DRAG'    },
+            BONUS:         { c: '#80cc90', bg: '#1a2620', border: '#5a8a68', label: 'BONUS'         },
+            DOUBLE_LOSS:   { c: '#e88a8a', bg: '#2a1a1d', border: '#8a4a52', label: 'DOUBLE LOSS'   },
+            FLAT:          { c: '#bbb',    bg: '#1a1a1d', border: '#666',    label: '—'             },
           };
           const s = palette[p.value] ?? palette.FLAT;
           return (
             <span style={{
-              fontSize: '11px', padding: '0 6px', lineHeight: '16px',
+              fontSize: '11px', fontWeight: 600, padding: '0 6px', lineHeight: '16px',
               borderRadius: '3px',
               color: s.c, backgroundColor: s.bg, border: `1px solid ${s.border}`,
             }}>
@@ -2324,20 +2326,21 @@ export function NetExposurePage() {
         },
         cellRenderer: (p: { value: string; node?: { group?: boolean } }) => {
           if (!p.value || !p.node?.group) return null;
-          // Muted palette per branding guideline — no neon, no fluorescent.
+          // Lifted-but-muted palette — kept in lock-step with the Hedge
+          // Impact column above so the two tag columns share colour per state.
           const palette: Record<string, { c: string; bg: string; border: string }> = {
-            MATCHED:     { c: '#6aaa78', bg: '#1a2620', border: '#3a5a44' },
-            PARTIAL:     { c: '#c09060', bg: '#2a241a', border: '#6a5838' },
-            OVER:        { c: '#c09060', bg: '#2a241a', border: '#6a5838' },
-            ORPHAN:      { c: '#d07070', bg: '#2a1a1d', border: '#6a3a40' },
-            NAKED:       { c: '#d07070', bg: '#2a1a1d', border: '#6a3a40' },
-            'WRONG-WAY': { c: '#d07070', bg: '#2a1a1d', border: '#6a3a40' },
-            FLAT:        { c: '#999',    bg: '#1a1a1d', border: '#44454f' },
+            MATCHED:     { c: '#80cc90', bg: '#1a2620', border: '#5a8a68' },
+            PARTIAL:     { c: '#e0b075', bg: '#2a241a', border: '#8a6d44' },
+            OVER:        { c: '#e0b075', bg: '#2a241a', border: '#8a6d44' },
+            ORPHAN:      { c: '#e88a8a', bg: '#2a1a1d', border: '#8a4a52' },
+            NAKED:       { c: '#e88a8a', bg: '#2a1a1d', border: '#8a4a52' },
+            'WRONG-WAY': { c: '#e88a8a', bg: '#2a1a1d', border: '#8a4a52' },
+            FLAT:        { c: '#bbb',    bg: '#1a1a1d', border: '#666'    },
           };
           const s = palette[p.value] ?? palette.FLAT;
           return (
             <span style={{
-              fontSize: '11px', padding: '0 6px', lineHeight: '16px',
+              fontSize: '11px', fontWeight: 600, padding: '0 6px', lineHeight: '16px',
               borderRadius: '3px',
               color: s.c, backgroundColor: s.bg, border: `1px solid ${s.border}`,
             }}>

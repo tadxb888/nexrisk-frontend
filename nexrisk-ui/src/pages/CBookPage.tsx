@@ -2005,9 +2005,14 @@ export function CBookPage() {
         return dir !== 0 ? (closePrice - p.data.fillPrice) * p.data.displayQty * dir : null;
       },
       cellRenderer: (p: { value: number | null }) => {
+        // Colour + format kept in lock-step with the View LP bar's Realized
+        // / Unrealized P/L cells (lines 2461, 2470 area) so the grid row and
+        // the LP bar read the same on the page.
         if (p.value == null) return <span style={{ color: '#555' }}>—</span>;
-        const color = p.value >= 0 ? '#49b3b3' : '#ff5c5c';
-        return <span style={{ color, fontWeight: 600 }}>{p.value >= 0 ? '+' : ''}{p.value.toFixed(2)}</span>;
+        const v = p.value;
+        const color = v >= 0 ? '#49b3b3' : '#ff5c5c';
+        const formatted = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return <span style={{ color, fontWeight: 600 }}>{v >= 0 ? '+' : ''}{formatted}</span>;
       },
     },
     { field: 'stopLoss',   headerName: 'S/L', filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value ? fmtPrice(p) : '—' },
@@ -2189,7 +2194,7 @@ export function CBookPage() {
                     value={effectiveStrategyName}
                     onChange={(e) => setSelectedStrategy(e.target.value)}
                     disabled={bookStats.strategies.length <= 1}
-                    className="appearance-none bg-[#1f1e22] border border-[#3a3a3e] rounded pl-2 pr-5 py-0 text-xs font-mono leading-normal focus:outline-none focus:border-[#49b3b3] cursor-pointer disabled:cursor-default disabled:opacity-80 hover:border-[#49b3b3] transition-colors"
+                    className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs focus:outline-none focus:border-[#49b3b3] disabled:opacity-80"
                     style={{ color: currentStrategy?.color ?? '#49b3b3' }}
                     title={bookStats.strategies.length <= 1 ? 'Only one strategy available' : 'Select another strategy'}
                   >
@@ -2201,7 +2206,6 @@ export function CBookPage() {
                       </option>
                     ))}
                   </select>
-                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[#999] text-[9px] pointer-events-none">▾</span>
                 </div>
               </div>
             </div>
