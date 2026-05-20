@@ -1107,6 +1107,178 @@ export function connectPortfolioExposureWebSocket(
     ws.close(1000, 'Client disconnecting');
   };
 }
+// ============================================================================
+// Cockpit page — multi-topic WebSocket subscriber
+//
+// The Cockpit page needs BOTH portfolio.summary.today AND portfolio.summary.month
+// simultaneously (Card 1 "Money" shows today and MTD side by side, not a
+// period toggle). connectPortfolioWebSocket is single-topic; this connector
+// opens one socket and subscribes to all cockpit topics together.
+//
+// As more cockpit cards come online (Card 5 coverage, Card 6 markup, NexDay
+// cards 7-9), their topics are added to the COCKPIT_TOPICS array below. The
+// consumer routes by envelope.topic.
+//
+// Strictly additive — does not affect any existing connect* function.
+// ============================================================================
+
+/** Envelope for any cockpit-subscribed message.
+ *  `data` shape depends on `topic` — typed at the consumer (CockpitPage). */
+export interface CockpitWsEvent {
+  topic:         string;     // 'portfolio.summary.today' | 'portfolio.summary.month' | ...
+  type:          'SNAPSHOT' | 'subscribed' | 'pong';
+  data:          unknown;
+  timestamp_ms?: number;
+}
+
+/**
+ * Open a managed WebSocket for the Cockpit page.
+ * Subscribes to all cockpit topics on a single connection. The consumer
+ * routes by `envelope.topic`. Subscribe ACK and pong frames carry no
+ * `topic` field and are filtered out before reaching the consumer.
+ */
+export function connectCockpitWebSocket(
+  onMessage: (event: CockpitWsEvent) => void,
+  onStatus?: (status: 'open' | 'closed' | 'error') => void
+): () => void {
+  const ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+
+  const COCKPIT_TOPICS = [
+    'portfolio.summary.today',
+    'portfolio.summary.month',
+    'portfolio.exposure.symbols',
+    // future cards subscribe additional topics here:
+    //   'cockpit.coverage',
+    //   'cockpit.markup',
+    //   'cockpit.trader_risk',
+    //   'cockpit.symbol_risk',
+    //   'cockpit.nexday_daily',
+    //   'cockpit.nexday_intraday',
+    //   'cockpit.nexday_opportunities',
+  ];
+
+  ws.onopen = () => {
+    onStatus?.('open');
+    ws.send(JSON.stringify({ type: 'subscribe', topics: COCKPIT_TOPICS }));
+  };
+
+  ws.onmessage = (ev: MessageEvent<string>) => {
+    try {
+      const envelope = JSON.parse(ev.data);
+      // Forward only envelopes carrying a topic — subscribe ACK / pong
+      // frames have no topic field and are silently ignored.
+      if (envelope.topic) {
+        onMessage(envelope as CockpitWsEvent);
+      }
+    } catch { /* ignore parse errors */ }
+  };
+
+  ws.onerror = () => onStatus?.('error');
+  ws.onclose = () => onStatus?.('closed');
+
+  return () => {
+    ws.onclose = null;
+    ws.close(1000, 'Client disconnecting');
+  };
+}
+
+// ============================================================================
+// Cockpit Card 4 — Trader Risk (REST, polled)
+//
+// Backed by GET /api/v1/cockpit/trader-risk. Update cadence is minutes-to-
+// hours (classifier and clustering runs), so REST polling at ~60 s suits
+// this better than a WS topic.
+// ============================================================================
+
+export interface CockpitTraderRisk {
+  asOf: string;
+  criticalTraders: {
+    count:  number;
+    logins: number[];
+  };
+  behavioral: {
+    criticalCount: number;
+    highCount:     number;
+  };
+  clusters: Array<{
+    displayName: string;
+  }>;
+}
+
+// ─── Cards 7/8/9 — NexDay predictions ────────────────────────────────────────
+
+export interface CockpitPredictionsDailyTopLosing {
+  mt5Symbol:         string;
+  nexdaySymbol:      string;
+  description:       string;
+  predictedTrend:    string;   // "Up" | "Down"
+  predictedStrength: number;   // signed
+  predictedClose:    number;
+  typicalPrice:      number;
+}
+
+export interface CockpitPredictionsDevelopingOpp {
+  mt5Symbol:         string;
+  nexdaySymbol:      string;
+  description:       string;
+  predictedTrend:    string;
+  momentum:          string;
+  daysSinceReversal: number;
+}
+
+export interface CockpitPredictionsMomentumShift {
+  mt5Symbol:      string;
+  nexdaySymbol:   string;
+  description:    string;
+  momentum:       string;   // "Tilting Up" | "Tilting Down" | "Reversed"
+  predictedTrend: string;
+}
+
+export interface CockpitPredictionsIntradaySymbol {
+  nexdaySymbol: string;
+  description:  string;
+}
+
+export interface CockpitPredictionsOpportunity {
+  mt5Symbol:            string;
+  nexdaySymbol:         string;
+  description:          string;
+  conviction:           string;   // "Prime:In-Play" | "Caution" | etc.
+  opportunity:          string;   // "Strong" | "Sustained" | "Qualified" | "Monitor"
+  opportunityDirection: string;   // "UP" | "DOWN"
+  opportunityScore:     number;
+}
+
+export interface CockpitPredictions {
+  asOf: string;
+  dailyOutlook: {
+    targetDate:              string;
+    topLosing:               CockpitPredictionsDailyTopLosing | null;
+    developingOpportunities: CockpitPredictionsDevelopingOpp[];
+    momentumShifts:          CockpitPredictionsMomentumShift[];
+  };
+  intradaySignals: {
+    upCoTrending:          CockpitPredictionsIntradaySymbol[];
+    downCoTrending:        CockpitPredictionsIntradaySymbol[];
+    upCount:               number;
+    downCount:             number;
+    latestPredictionTime:  string;   // ISO; "" if no data
+  };
+  bestOpportunities: {
+    top:               CockpitPredictionsOpportunity | null;
+    hottest:           CockpitPredictionsOpportunity[];   // tier ≤ 3
+    strongTier:        CockpitPredictionsOpportunity[];   // tier 4 or 5
+    primeInPlayCount:  number;
+  };
+}
+
+export const cockpitApi = {
+  getTraderRisk: () =>
+    fetchAPI<CockpitTraderRisk>('/api/v1/cockpit/trader-risk'),
+  getPredictions: () =>
+    fetchAPI<CockpitPredictions>('/api/v1/cockpit/predictions'),
+};
+
 /** REST endpoint that mirrors WebSocketManager::GetStatsJSON() */
 export const wsApi = {
   getStats: () =>

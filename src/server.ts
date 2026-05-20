@@ -6,6 +6,7 @@ import { registerWebSocket, getWSStats } from './websocket/handler.js';
 import { healthRoutes } from './routes/health.js';
 import { tradersRoutes } from './routes/traders.js';
 import { alertsRoutes } from './routes/alerts.js';
+import { cockpitRoutes } from './routes/cockpit.js';
 import { explanationsRoutes } from './routes/explanations.js';
 import { positionsRoutes, ordersRoutes } from './routes/positions-orders.js';
 import { clusteringRoutes } from './routes/clustering.js';
@@ -152,6 +153,7 @@ async function buildServer() {
 
       await api.register(tradersRoutes);
       await api.register(alertsRoutes);
+      await api.register(cockpitRoutes);
       await api.register(explanationsRoutes);
       await api.register(positionsRoutes);
       await api.register(ordersRoutes);

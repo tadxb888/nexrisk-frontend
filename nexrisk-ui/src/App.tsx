@@ -11,6 +11,8 @@ import { SetupPage } from '@/pages/SetupPage';
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
+import { CockpitHelpPage } from './help/CockpitHelpPage';
+
 import { Layout } from '@/components/layout';
 import {
   CockpitPage,
@@ -28,7 +30,7 @@ import {
   PriceRulesPage,
   ExecutionReportPage,
   CommandCenterPage,
-  FlowHedgingPage, 
+  FlowHedgingPage,
   BusinessPage,
   // Settings Pages
   SettingsPage,
@@ -88,6 +90,7 @@ function App() {
 
               {/* ─── Flow ─────────────────────────────── */}
               <Route path="/flow"          element={<FocusPage />} />
+
               <Route path="/archetypes"    element={<ArchetypePage />} />
               <Route path="/risk-charter"  element={<CharterPage />} />
 
@@ -110,6 +113,11 @@ function App() {
 
               {/* ─── System ───────────────────────────── */}
               <Route path="/mt5-servers"   element={<NodeManagementPage />} />
+
+              {/* ─── Cockpit─────────────────────── */}
+              <Route path="/cockpit"      element={<CockpitPage />} />
+              <Route path="/cockpit/help" element={<CockpitHelpPage />} />
+
 
               {/* ─── Legacy routes (redirects) ────────── */}
               <Route path="/focus"         element={<Navigate to="/flow" replace />} />
