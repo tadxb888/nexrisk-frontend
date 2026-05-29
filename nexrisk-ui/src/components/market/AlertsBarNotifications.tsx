@@ -117,6 +117,14 @@ const SEVERITY_COLORS: Record<Severity, { stripe: string; pillBg: string; pillTe
 
 const FONT_MONO = 'IBM Plex Mono, ui-monospace, monospace';
 
+// Live NEWS_IMMINENT countdown accent. Amber, not yellow: the branding doc
+// rules out yellow ("marketing/gaming") but blesses Orange/Amber for the
+// "Elevated Risk — warning, not panic" semantic, which a release countdown
+// is. Value is the app's established attention/transitional amber from
+// BBookPage (#e0a020 — used there for SELL side and the "Connecting…"
+// status). Swap this one constant to re-tone the countdown.
+const ECOCAL_COUNTDOWN_COLOR = '#e0a020';
+
 // ============================================
 // Icons (match Focus.tsx 1:1 where they overlap)
 // ============================================
@@ -567,9 +575,30 @@ function formatNumeric(v: string | null | undefined): string {
   return (v == null || v === '') ? '—' : v;
 }
 
-/** EcoCal pill secondary status word: '15 MIN' for IMMINENT, 'RELEASED' for RELEASED. */
-function ecoCalStatusLabel(t: NotificationType): string {
-  return t === 'NEWS_IMMINENT' ? '15 MIN' : 'RELEASED';
+/**
+ * Live countdown for NEWS_IMMINENT. Ticks toward the payload's absolute
+ * release time (event_time_utc, ISO 8601 UTC) — NOT a hardcoded 15:00.
+ * This matters: the backend scan window means an imminent frame can land
+ * anywhere from ~5 to ~15 minutes out, so the old static "15 MIN" label
+ * was wrong most of the time. Counting to a real timestamp is the only
+ * honest option.
+ *
+ * Format "T-12:43" (mm:ss, minutes uncapped; "T-" disambiguates from the
+ * absolute clock time also shown on the row). At or past the release time
+ * we show "DUE" until the NEWS_RELEASED frame supersedes the slot. If
+ * event_time_utc is missing/unparseable we can't count honestly, so we
+ * fall back to the non-committal "SOON" rather than fabricate a number.
+ */
+function formatCountdown(eventTimeUtc: string | null | undefined, nowMs: number): string {
+  if (!eventTimeUtc) return 'SOON';
+  const eventMs = new Date(eventTimeUtc).getTime();
+  if (Number.isNaN(eventMs)) return 'SOON';
+  const remaining = eventMs - nowMs;
+  if (remaining <= 0) return 'DUE';
+  const totalSec = Math.floor(remaining / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `T-${m}:${String(s).padStart(2, '0')}`;
 }
 
 function buildClipboardText(n: AlertsBarNotification): string {
@@ -660,11 +689,30 @@ export function AlertsBarNotifications({ className, onSlotFilledChange }: Props)
   const [copied, setCopied]           = useState(false);
   const [downloading, setDownloading] = useState(false);
 
+  // Live-countdown driver for NEWS_IMMINENT. nowMs is bumped every second by
+  // the ticker effect below — but ONLY while an imminent event holds the slot,
+  // since nothing else needs a per-second re-render. Lazy init to now so the
+  // first imminent frame paints a correct countdown without waiting one tick.
+  // State is local to this component, so the ticker re-renders only the slot,
+  // not TopBar.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const isImminent = latest?.notification_type === 'NEWS_IMMINENT';
+
   // Notify parent when slot fills/empties (drives /portfolio compact mode).
   const slotFilled = latest !== null;
   useEffect(() => {
     onSlotFilledChange?.(slotFilled);
   }, [slotFilled, onSlotFilledChange]);
+
+  // 1s countdown ticker — armed only while an imminent event is in the slot,
+  // and torn down the moment it's superseded (e.g. by its NEWS_RELEASED frame
+  // or a dismiss). No imminent event → no interval running.
+  useEffect(() => {
+    if (!isImminent) return;
+    setNowMs(Date.now()); // sync immediately so the first paint isn't stale
+    const id = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, [isImminent]);
 
   const handleCopy = useCallback(() => {
     if (!latest) return;
@@ -773,34 +821,49 @@ export function AlertsBarNotifications({ className, onSlotFilledChange }: Props)
 
           {(() => {
             const p = (latest.payload ?? {}) as Partial<CalendarPayload>;
-            const status   = ecoCalStatusLabel(latest.notification_type);
+            const released = latest.notification_type === 'NEWS_RELEASED';
+            // Imminent: live countdown to the real release timestamp.
+            // Released: static label (the event has already happened).
+            const status   = released
+              ? 'RELEASED'
+              : formatCountdown(p.event_time_utc, nowMs);
             const country  = formatCountry(p.country);
             const evt      = p.event_name ?? '—';
-            const released = latest.notification_type === 'NEWS_RELEASED';
             // Released rows surface Actual first; Imminent has no Actual yet.
-            const fields: string[] = [
-              status,
+            const rest: string[] = [
               `${country} ${evt}`,
               ...(released ? [`Actual ${formatNumeric(p.actual)}`] : []),
               `Prev ${formatNumeric(p.previous)}`,
               `Fcst ${formatNumeric(p.forecast)}`,
               `Cons ${formatNumeric(p.consensus)}`,
             ];
-            const text = fields.join(' | ');
+            const restText = rest.join(' | ');
+            const fullText = `${status} | ${restText}`;
             return (
               <span
                 style={{
                   fontSize: 13,
-                  color: '#fff',
                   flex: 1,
                   minWidth: 0,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
-                title={text}
+                title={fullText}
               >
-                {text}
+                {/* The live countdown is the one time-sensitive element on
+                    the row, so it gets the amber accent + bold weight to
+                    read at a glance. RELEASED is a settled state — it stays
+                    in the row's default white like every other field. */}
+                <span
+                  style={{
+                    color: released ? '#fff' : ECOCAL_COUNTDOWN_COLOR,
+                    fontWeight: released ? 400 : 600,
+                  }}
+                >
+                  {status}
+                </span>
+                <span style={{ color: '#fff' }}>{` | ${restText}`}</span>
               </span>
             );
           })()}
