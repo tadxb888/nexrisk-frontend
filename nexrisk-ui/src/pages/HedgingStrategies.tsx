@@ -576,22 +576,25 @@ function LpHealthInline({ health }: { health: LpHealth | undefined }) {
 // ── Section card ──────────────────────────────────────────────
 function SectionCard({ n, label, children }: { n: number; label: string; children: ReactNode }) {
   return (
-    <div style={{ backgroundColor: BG_SECTION, border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 10 }}>
+    <div style={{
+      backgroundColor: BG_SECTION, border: `1px solid ${BORDER_MD}`, borderRadius: 6,
+      marginBottom: 14, boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+    }}>
       <div style={{
-        padding: '9px 14px', borderBottom: `1px solid ${BORDER}`,
-        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '12px 18px', borderBottom: `1px solid ${BORDER}`,
+        display: 'flex', alignItems: 'center', gap: 12,
       }}>
         <span style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 20, height: 20, borderRadius: 4,
+          width: 24, height: 24, borderRadius: 4,
           backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
-          fontFamily: FONT_MONO, fontSize: 10, color: TEAL, fontWeight: 600, flexShrink: 0,
+          fontFamily: FONT_MONO, fontSize: 13, color: TEAL, fontWeight: 600, flexShrink: 0,
         }}>{n}</span>
-        <span style={{ fontSize: 11, fontWeight: 600, color: TEXT_PRI, letterSpacing: '0.06em', textTransform: 'uppercase' as const }}>
+        <span style={{ fontSize: 18, fontWeight: 500, color: TEXT_PRI }}>
           {label}
         </span>
       </div>
-      <div style={{ padding: '14px' }}>
+      <div style={{ padding: '18px' }}>
         {children}
       </div>
     </div>
@@ -603,10 +606,10 @@ function FormRow({ label, hint, required, children }: { label: string; hint?: st
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ marginBottom: 5, display: 'flex', alignItems: 'baseline', gap: 6 }}>
-        <span style={{ fontSize: 11, color: TEXT_PRI, fontWeight: 500 }}>
+        <span style={{ fontSize: 14, color: TEXT_PRI, fontWeight: 500 }}>
           {label}{required && <span style={{ color: RED, marginLeft: 2 }}>*</span>}
         </span>
-        {hint && <span style={{ fontSize: 10, color: TEXT_SEC }}>{hint}</span>}
+        {hint && <span style={{ fontSize: 12, color: TEXT_SEC }}>{hint}</span>}
       </div>
       {children}
     </div>
@@ -617,8 +620,8 @@ function FormRow({ label, hint, required, children }: { label: string; hint?: st
 const inputStyle: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box',
   backgroundColor: BG_FIELD, border: `1px solid ${BORDER_MD}`,
-  borderRadius: 4, padding: '6px 10px',
-  color: TEXT_PRI, fontSize: 12,
+  borderRadius: 4, padding: '7px 11px',
+  color: TEXT_PRI, fontSize: 14,
   outline: 'none', colorScheme: 'dark',
 };
 
@@ -1516,8 +1519,8 @@ export function HedgeRulesPage() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
       }}>
         <div>
-          <h1 style={{ fontSize: 16, fontWeight: 600, color: TEXT_PRI, margin: 0 }}>Hedging Strategies</h1>
-          <p style={{ fontSize: 11, color: TEXT_SEC, margin: '2px 0 0' }}>
+          <h1 style={{ fontSize: 24, fontWeight: 600, color: TEXT_PRI, margin: 0 }}>Hedging Strategies</h1>
+          <p style={{ fontSize: 14, color: TEXT_SEC, margin: '2px 0 0' }}>
             Define and control exposure routing from executed client trades
           </p>
         </div>
