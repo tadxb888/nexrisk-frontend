@@ -1439,9 +1439,10 @@ export function HedgeRulesPage() {
   // Single call by design — do NOT loop per-record (2k+ records would hammer the BFF
   // and trip the rate limiter).
   const handlePurgeAll = useCallback(async () => {
-    if (totalEscalations === 0) return;
+    const count = escalations.length;
+    if (count === 0) return;
     const ok = window.confirm(
-      `Purge ALL ${totalEscalations} escalated position record${totalEscalations === 1 ? '' : 's'} across every strategy?\n\nThis clears the escalation queue and cannot be undone.`
+      `Purge ALL ${count} escalated position record${count === 1 ? '' : 's'} across every strategy?\n\nThis clears the escalation queue and cannot be undone.`
     );
     if (!ok) return;
     setPurging(true);
@@ -1454,11 +1455,11 @@ export function HedgeRulesPage() {
       const json = await res.json().catch(() => ({} as { error?: string; purged?: number }));
       if (!res.ok) { showToast(`Purge failed: ${json.error ?? res.status}`); return; }
       await loadEscalations();
-      const n = json.purged ?? totalEscalations;
+      const n = json.purged ?? count;
       showToast(`Purged ${n} escalation${n === 1 ? '' : 's'}`);
     } catch { showToast('Purge failed'); }
     finally { setPurging(false); }
-  }, [totalEscalations, loadEscalations, showToast]);
+  }, [escalations.length, loadEscalations, showToast]);
 
   // ══════════════════════════════════════════════════════════
   // DERIVED
