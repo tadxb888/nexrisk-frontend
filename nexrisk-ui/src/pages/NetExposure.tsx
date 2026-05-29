@@ -3032,7 +3032,7 @@ export function NetExposurePage() {
             {/* Symbol Selector */}
             <div className="px-3 py-2 border-b border-[#555] flex-shrink-0">
               <div className="flex items-center gap-1.5">
-                <span className="text-xs text-white w-5 flex-shrink-0">SYM</span>
+                <span className="text-white w-5 flex-shrink-0" style={{ fontSize: 9 }}>SYM</span>
                 <button
                   onClick={() => { if (domLpId) setShowPicker((v) => !v); }}
                   disabled={!domLpId || instrLoading}
@@ -3042,7 +3042,7 @@ export function NetExposurePage() {
                     (!domLpId || instrLoading) && 'opacity-50 cursor-not-allowed'
                   )}
                 >
-                  <span className="font-mono font-medium truncate" style={{ fontSize: 11 }}>
+                  <span className="font-mono font-semibold truncate">
                     {domSymbol || (instrLoading ? 'Loading…' : domLpId ? 'Select symbol…' : '—')}
                   </span>
                   <span className="text-[#444] ml-1 flex-shrink-0">{showPicker ? '▲' : '▼'}</span>
