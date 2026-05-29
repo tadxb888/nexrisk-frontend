@@ -3042,7 +3042,7 @@ export function NetExposurePage() {
                     (!domLpId || instrLoading) && 'opacity-50 cursor-not-allowed'
                   )}
                 >
-                  <span className="font-mono font-medium truncate text-[11px]">
+                  <span className="font-mono font-medium truncate" style={{ fontSize: 11 }}>
                     {domSymbol || (instrLoading ? 'Loading…' : domLpId ? 'Select symbol…' : '—')}
                   </span>
                   <span className="text-[#444] ml-1 flex-shrink-0">{showPicker ? '▲' : '▼'}</span>
