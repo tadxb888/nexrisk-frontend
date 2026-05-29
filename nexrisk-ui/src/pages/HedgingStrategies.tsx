@@ -26,9 +26,9 @@ import React, {
 // ══════════════════════════════════════════════════════════════
 // CONSTANTS — color tokens (matches BBookPage / Cockpit reference)
 // ══════════════════════════════════════════════════════════════
-const BG_PAGE    = '#313032';                // Cockpit page bg
-const BG_PANEL   = '#2a292c';                // filter-bar / sub-panel bg
-const BG_SECTION = '#2a292c';                // card bg — flat, single surface
+const BG_PAGE    = '#222327';                // Cockpit page bg (sampled)
+const BG_PANEL   = '#1a1a1c';                // sub-panel / tab-bar bg (= Cockpit card)
+const BG_SECTION = '#1a1a1c';                // card bg — matches Cockpit cards (sampled)
 const BG_FIELD   = '#232225';                // input bg (matches Cockpit inputs)
 const BORDER     = '#505050';                // subtle divider
 const BORDER_MD  = '#606060';                // standard border (Cockpit input border)
@@ -996,6 +996,7 @@ export function HedgeRulesPage() {
   // ── Escalations state ────────────────────────────────────────
   const [escalations,      setEscalations]      = useState<EscalatedPosition[]>([]);
   const [escalationBusy,   setEscalationBusy]   = useState<Record<number, boolean>>({});
+  const [purging,          setPurging]          = useState(false);
 
   // ── Calendar / NEWS_EVENT picker state ───────────────────────
   const [calEvents,        setCalEvents]        = useState<CalendarEvent[]>([]);
@@ -1432,6 +1433,33 @@ export function HedgeRulesPage() {
     finally { setEscalationBusy(b => { const n = { ...b }; delete n[recordId]; return n; }); }
   }, [loadEscalations, showToast]);
 
+  // ── Purge ALL escalated positions (bulk, destructive) ─────────
+  // relay to C++ dev: confirm bulk route + method. Expected contract:
+  //   POST /api/v1/hedge/positions/purge-escalated  ->  { success, purged: number }
+  // Single call by design — do NOT loop per-record (2k+ records would hammer the BFF
+  // and trip the rate limiter).
+  const handlePurgeAll = useCallback(async () => {
+    if (totalEscalations === 0) return;
+    const ok = window.confirm(
+      `Purge ALL ${totalEscalations} escalated position record${totalEscalations === 1 ? '' : 's'} across every strategy?\n\nThis clears the escalation queue and cannot be undone.`
+    );
+    if (!ok) return;
+    setPurging(true);
+    try {
+      const res = await fetch('/api/v1/hedge/positions/purge-escalated', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operator: 'manager' }),
+      });
+      const json = await res.json().catch(() => ({} as { error?: string; purged?: number }));
+      if (!res.ok) { showToast(`Purge failed: ${json.error ?? res.status}`); return; }
+      await loadEscalations();
+      const n = json.purged ?? totalEscalations;
+      showToast(`Purged ${n} escalation${n === 1 ? '' : 's'}`);
+    } catch { showToast('Purge failed'); }
+    finally { setPurging(false); }
+  }, [totalEscalations, loadEscalations, showToast]);
+
   // ══════════════════════════════════════════════════════════
   // DERIVED
   // ══════════════════════════════════════════════════════════
@@ -1794,7 +1822,7 @@ export function HedgeRulesPage() {
                       style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
                     />
                   </FormRow>
-                  <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 1fr', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr 1fr', gap: 12 }}>
                     <FormRow label="Priority" hint="lower = first">
                       <input
                         type="number" min={1} value={draftRule.priority}
@@ -2676,7 +2704,7 @@ export function HedgeRulesPage() {
                     {/* Final fallback */}
                     <div style={{ margin: '12px 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
-                      <span style={{ fontSize: 9, color: TEXT_MUT, letterSpacing: '0.05em' }}>FINAL FALLBACK — ALL LPs EXHAUSTED</span>
+                      <span style={{ fontSize: 11, color: TEXT_MUT, letterSpacing: '0.05em' }}>FINAL FALLBACK — ALL LPs EXHAUSTED</span>
                       <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
@@ -2686,10 +2714,10 @@ export function HedgeRulesPage() {
                           border: `1px solid ${draftSanity.final_fallback_action === k ? v.color : BORDER}`,
                           backgroundColor: draftSanity.final_fallback_action === k ? BG_FIELD : BG_FIELD,
                         }}>
-                          <div style={{ fontSize: 10, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 2 }}>
+                          <div style={{ fontSize: 13, color: draftSanity.final_fallback_action === k ? v.color : TEXT_SEC, fontWeight: 600, marginBottom: 2 }}>
                             {v.label}
                           </div>
-                          <div style={{ fontSize: 9, color: TEXT_MUT, lineHeight: 1.4 }}>{v.desc}</div>
+                          <div style={{ fontSize: 11, color: TEXT_MUT, lineHeight: 1.4 }}>{v.desc}</div>
                         </button>
                       ))}
                     </div>
@@ -2727,6 +2755,24 @@ export function HedgeRulesPage() {
               ══════════════════════════════════════════════ */}
               {rightTab === 'escalations' && (
                 <>
+                  {totalEscalations > 0 && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${BORDER}`,
+                    }}>
+                      <span style={{ fontSize: 13, color: RP_HINT }}>
+                        {totalEscalations} escalated position{totalEscalations === 1 ? '' : 's'} across all strategies
+                      </span>
+                      <button onClick={handlePurgeAll} disabled={purging} style={{
+                        fontSize: 12, fontWeight: 600, borderRadius: 3, padding: '5px 12px',
+                        cursor: purging ? 'default' : 'pointer',
+                        backgroundColor: BADGE.critical.bg, color: BADGE.critical.color,
+                        border: `1px solid ${BADGE.critical.border}`, opacity: purging ? 0.6 : 1,
+                      }}>
+                        {purging ? 'Purging…' : `Purge All (${totalEscalations})`}
+                      </button>
+                    </div>
+                  )}
                   {ruleEscalations.length === 0 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, paddingTop: 40 }}>
                       <span style={{ color: RP_LABEL, fontSize: 14 }}>No escalated positions</span>
