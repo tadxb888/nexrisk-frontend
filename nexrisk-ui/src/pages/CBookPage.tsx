@@ -321,6 +321,30 @@ const TYPE_COLORS: Record<string, string> = {
 // Type cell, per-position label). Distinct from the teal accent (#49b3b3) used elsewhere.
 const HEDGE_STRATEGY_COLOR = '#FF13F0';
 
+// ── Big-figure price (mirrors FxAskCell typography) ──────────────────────────
+// handle (white, smaller) · pip pair (accent, large) · pipette (accent, sup).
+// Precision-aware: >=3 → handle|pip|pipette; ==2 → handle|pip; <2 → handle only.
+// Used in the DOM Trader Market Depth panel so the sensitive (last) digits read
+// the same way they do in the reserved FX cells.
+function BigFigurePrice({
+  price, precision, accent, handlePx, pipPx, pipettePx,
+}: {
+  price: number; precision: number; accent: string;
+  handlePx: number; pipPx: number; pipettePx: number;
+}) {
+  const fixed = price.toFixed(Math.max(0, precision));
+  let handle = fixed, pip = '', pipette: string | null = null;
+  if (precision >= 3)       { handle = fixed.slice(0, -3); pip = fixed.slice(-3, -1); pipette = fixed.slice(-1); }
+  else if (precision === 2) { handle = fixed.slice(0, -2); pip = fixed.slice(-2); }
+  return (
+    <span className="font-mono" style={{ lineHeight: 1, whiteSpace: 'nowrap' }}>
+      <span style={{ color: '#fff', fontSize: handlePx }}>{handle}</span>
+      {pip && <span style={{ color: accent, fontSize: pipPx, fontWeight: 600 }}>{pip}</span>}
+      {pipette && <sup style={{ color: accent, fontSize: pipettePx, fontWeight: 600, marginLeft: 1 }}>{pipette}</sup>}
+    </span>
+  );
+}
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -2621,7 +2645,7 @@ export function CBookPage() {
         <div
           className="flex flex-col border border-[#555] rounded overflow-hidden flex-shrink-0"
           style={{
-            width: '300px',
+            width: '390px',
             backgroundColor: '#232225',
             // display:none hides the panel without unmounting, preserving
             // form state, WS subscriptions, and the exec log through the
@@ -2787,7 +2811,7 @@ export function CBookPage() {
               <div className="grid grid-cols-3 text-[10px]">
                 <div>
                   <div className="text-white mb-0.5">Best Bid</div>
-                  <div className="font-mono font-bold" style={{ color: '#49b3b3' }}>{liveBook.best_bid.toFixed(instrDecimals)}</div>
+                  <BigFigurePrice price={liveBook.best_bid} precision={instrDecimals} accent="#4ecdc4" handlePx={14} pipPx={20} pipettePx={11} />
                 </div>
                 <div className="text-center">
                   <div className="text-white mb-0.5">Spread</div>
@@ -2795,7 +2819,9 @@ export function CBookPage() {
                 </div>
                 <div className="text-right">
                   <div className="text-white mb-0.5">Best Ask</div>
-                  <div className="font-mono font-bold" style={{ color: '#e0a020' }}>{liveBook.best_ask?.toFixed(instrDecimals) ?? '—'}</div>
+                  {liveBook.best_ask != null
+                    ? <BigFigurePrice price={liveBook.best_ask} precision={instrDecimals} accent="#ff6b6b" handlePx={14} pipPx={20} pipettePx={11} />
+                    : <span className="font-mono font-bold text-[#666]">—</span>}
                 </div>
               </div>
             ) : (
@@ -2835,18 +2861,22 @@ export function CBookPage() {
                     return (
                       <tr key={i}>
                         <td className="text-right py-0.5 pr-1.5 relative">
-                          {b && <div className="absolute right-0 top-0 bottom-0 opacity-20 rounded-l" style={{ width: `${(b.size / maxSz) * 100}%`, backgroundColor: '#49b3b3' }} />}
-                          <span className="relative font-mono text-[11px]" style={{ color: b ? '#49b3b3' : '#2a2a2a' }}>{b ? fmtBookSize(b.size) : '—'}</span>
+                          {b && <div className="absolute right-0 top-0 bottom-0 opacity-20 rounded-l" style={{ width: `${(b.size / maxSz) * 100}%`, backgroundColor: '#4ecdc4' }} />}
+                          <span className="relative font-mono text-[11px]" style={{ color: b ? '#4ecdc4' : '#2a2a2a' }}>{b ? fmtBookSize(b.size) : '—'}</span>
                         </td>
                         <td className="text-center py-0.5">
-                          <span className="font-mono text-[11px] font-medium" style={{ color: b ? '#49b3b3' : '#2a2a2a' }}>{b ? b.price.toFixed(instrDecimals) : '—'}</span>
+                          {b
+                            ? <BigFigurePrice price={b.price} precision={instrDecimals} accent="#4ecdc4" handlePx={12} pipPx={17} pipettePx={10} />
+                            : <span className="font-mono text-[11px]" style={{ color: '#2a2a2a' }}>—</span>}
                         </td>
                         <td className="text-center py-0.5">
-                          <span className="font-mono text-[11px] font-medium" style={{ color: a ? '#e0a020' : '#2a2a2a' }}>{a ? a.price.toFixed(instrDecimals) : '—'}</span>
+                          {a
+                            ? <BigFigurePrice price={a.price} precision={instrDecimals} accent="#ff6b6b" handlePx={12} pipPx={17} pipettePx={10} />
+                            : <span className="font-mono text-[11px]" style={{ color: '#2a2a2a' }}>—</span>}
                         </td>
                         <td className="text-left py-0.5 pl-1.5 relative">
-                          {a && <div className="absolute left-0 top-0 bottom-0 opacity-20 rounded-r" style={{ width: `${(a.size / maxSz) * 100}%`, backgroundColor: '#e0a020' }} />}
-                          <span className="relative font-mono text-[11px]" style={{ color: a ? '#e0a020' : '#2a2a2a' }}>{a ? fmtBookSize(a.size) : '—'}</span>
+                          {a && <div className="absolute left-0 top-0 bottom-0 opacity-20 rounded-r" style={{ width: `${(a.size / maxSz) * 100}%`, backgroundColor: '#ff6b6b' }} />}
+                          <span className="relative font-mono text-[11px]" style={{ color: a ? '#ff6b6b' : '#2a2a2a' }}>{a ? fmtBookSize(a.size) : '—'}</span>
                         </td>
                       </tr>
                     );
