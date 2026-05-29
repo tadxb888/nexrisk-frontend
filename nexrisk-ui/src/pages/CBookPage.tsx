@@ -314,8 +314,12 @@ interface StrategyDayStat {
 const TYPE_COLORS: Record<string, string> = {
   Terminal:     '#FFFA60',
   'DOM Trader': '#1ca3de',
-  // Hedge strategy names are not listed here; the cell renderer falls back to teal.
+  // Hedge strategy names are not listed here; the cell renderer falls back to HEDGE_STRATEGY_COLOR.
 };
+
+// Colour applied to every hedge-strategy display (strategy selector card, Execution
+// Type cell, per-position label). Distinct from the teal accent (#49b3b3) used elsewhere.
+const HEDGE_STRATEGY_COLOR = '#FF13F0';
 
 // =============================================================================
 // HELPERS
@@ -1400,7 +1404,7 @@ export function CBookPage() {
                 next.set(ruleNameForClose, {
                   realized:    (existing?.realized    ?? 0) + evtPnl,
                   closedCount: (existing?.closedCount ?? 0) + 1,
-                  color:       existing?.color ?? (TYPE_COLORS[ruleNameForClose] ?? '#49b3b3'),
+                  color:       existing?.color ?? (TYPE_COLORS[ruleNameForClose] ?? HEDGE_STRATEGY_COLOR),
                   firstSeen:   existing?.firstSeen ?? Date.now(),
                 });
                 // Persist immediately so a page refresh mid-day keeps the card
@@ -1610,7 +1614,7 @@ export function CBookPage() {
         totalNotional: 0,
         buys:          0,
         sells:         0,
-        color:         TYPE_COLORS[name] ?? '#49b3b3',
+        color:         TYPE_COLORS[name] ?? HEDGE_STRATEGY_COLOR,
         firstSeen:     Number.MAX_SAFE_INTEGER,
       });
     }
@@ -1668,7 +1672,7 @@ export function CBookPage() {
             totalNotional: notional,
             buys:          pos.side === 'BUY'  ? 1 : 0,
             sells:         pos.side === 'SELL' ? 1 : 0,
-            color:         TYPE_COLORS[pos.type] ?? '#49b3b3',
+            color:         TYPE_COLORS[pos.type] ?? HEDGE_STRATEGY_COLOR,
             firstSeen:     Date.now(),
           });
         }
@@ -1968,7 +1972,7 @@ export function CBookPage() {
     {
       field: 'type', headerName: 'Execution Type', filter: 'agSetColumnFilter', width: 130, pinned: 'left',
       cellRenderer: (p: { value: CBookOrderType }) => (
-        <span style={{ color: TYPE_COLORS[p.value] ?? '#49b3b3', fontWeight: 500 }}>{p.value}</span>
+        <span style={{ color: TYPE_COLORS[p.value] ?? HEDGE_STRATEGY_COLOR, fontWeight: 500 }}>{p.value}</span>
       ),
     },
     { field: 'date',       headerName: 'Date',        filter: 'agDateColumnFilter',  width: 110, pinned: 'left', valueFormatter: fmtDate, sort: 'desc' },
@@ -2006,7 +2010,9 @@ export function CBookPage() {
       cellRenderer: (p: { value: number | null }) => {
         if (p.value == null) return <span style={{ color: '#555' }}>—</span>;
         const color = p.value >= 0 ? '#49b3b3' : '#ff5c5c';
-        return <span style={{ color, fontWeight: 600 }}>{p.value >= 0 ? '+' : ''}{p.value.toFixed(2)}</span>;
+        const sign = p.value < 0 ? '-' : '+';
+        const formatted = `${sign}$${Math.abs(p.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return <span style={{ color, fontWeight: 600 }}>{formatted}</span>;
       },
     },
     { field: 'stopLoss',   headerName: 'S/L', filter: 'agNumberColumnFilter', width: 110, valueFormatter: (p) => p.value ? fmtPrice(p) : '—' },
@@ -2189,7 +2195,7 @@ export function CBookPage() {
                     onChange={(e) => setSelectedStrategy(e.target.value)}
                     disabled={bookStats.strategies.length <= 1}
                     className="appearance-none bg-[#1f1e22] border border-[#3a3a3e] rounded pl-2 pr-5 py-0 text-xs font-mono leading-normal focus:outline-none focus:border-[#49b3b3] cursor-pointer disabled:cursor-default disabled:opacity-80 hover:border-[#49b3b3] transition-colors"
-                    style={{ color: currentStrategy?.color ?? '#49b3b3' }}
+                    style={{ color: currentStrategy?.color ?? HEDGE_STRATEGY_COLOR }}
                     title={bookStats.strategies.length <= 1 ? 'Only one strategy available' : 'Select another strategy'}
                   >
                     {bookStats.strategies.length === 0 ? (
