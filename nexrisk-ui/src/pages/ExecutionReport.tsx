@@ -209,7 +209,13 @@ function msToFixTimestamp(ms: number): string {
 
 // ══════════════════════════════════════════════════════════════
 // NOS TRACKER — pending orders waiting for AE correlation
-// key: `${symbol}|${side}` → most recent NOS for that symbol+side
+// key: clord_id → the NOS for that exact order.
+// Keyed on clord_id (unique per order), NOT symbol|side: rapid same
+// symbol+side orders (scalper at 5s) collide on a symbol|side key and
+// orphan all but the newest pending row, which then never clears until
+// a manual page refresh re-seeds from the DB. clord_id is 1:1 with the
+// order and the AE fill carries it back (C++ LookupNOS embeds cl_ord_id),
+// so fills clear the exact pending row deterministically, at any rate.
 // ══════════════════════════════════════════════════════════════
 interface NosRecord {
   clord_id: string;
@@ -949,8 +955,9 @@ export function ExecutionReportPage() {
               // legacy paths; could be "Hedge Engine" for auto-hedges.
               submitted_by: (inner.submitted_by as string | null | undefined) ?? null,
             };
-            const key = `${nosRecord.symbol}|${nosRecord.side}`;
-            nosMapRef.current.set(key, nosRecord);
+            // Key by clord_id (unique per order). symbol|side collides under
+            // rapid same-symbol/side orders and strands pending rows.
+            nosMapRef.current.set(nosRecord.clord_id, nosRecord);
 
             const pendingRow = buildPendingRow(nosRecord, lp_id);
             const existing = rowMapRef.current.get(pendingRow.trade_report_id);
@@ -971,22 +978,22 @@ export function ExecutionReportPage() {
           // ── AE fill from TE ────────────────────────────────────
           } else if (inner.trade_report_id) {
             const ae = inner as unknown as TradeCaptureWsEvent['data'];
-            const key = `${ae.symbol}|${ae.side}`;
-            const nosRecord = nosMapRef.current.get(key) ?? null;
-            const ae_ts = parseTimestamp(ae.transact_time);
-            const validNos = nosRecord && (ae_ts - nosRecord.nos_ts) < 5000 ? nosRecord : null;
+            // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
+            // Exact 1:1 match — no symbol|side guessing, no time window.
+            const clordId  = ae.cl_ord_id || '';
+            const nosRecord = clordId ? (nosMapRef.current.get(clordId) ?? null) : null;
 
-            if (validNos) {
-              const pendingKey = `pending_${validNos.clord_id}`;
+            if (clordId) {
+              const pendingKey = `pending_${clordId}`;
               const pendingRow = rowMapRef.current.get(pendingKey);
               if (pendingRow) {
                 rowMapRef.current.delete(pendingKey);
                 gridRef.current?.api?.applyTransaction({ remove: [pendingRow] });
               }
-              nosMapRef.current.delete(key);
+              nosMapRef.current.delete(clordId);
             }
 
-            const row = buildRowFromAE(ae, lp_id, validNos);
+            const row = buildRowFromAE(ae, lp_id, nosRecord);
             // Enrich with strategy name from hedge records map (ground truth)
             if (row.clord_id) {
               const match = hedgeRuleMapRef.current.get(row.clord_id);
@@ -1028,22 +1035,22 @@ export function ExecutionReportPage() {
           if (!ae?.trade_report_id) return;
 
           const lp_id = msg.lp_id as string ?? '';
-          const key = `${ae.symbol}|${ae.side}`;
-          const nosRecord = nosMapRef.current.get(key) ?? null;
-          const ae_ts = parseTimestamp(ae.transact_time);
-          const validNos = nosRecord && (ae_ts - nosRecord.nos_ts) < 5000 ? nosRecord : null;
+          // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
+          // Exact 1:1 match — no symbol|side guessing, no time window.
+          const clordId   = ae.cl_ord_id || '';
+          const nosRecord = clordId ? (nosMapRef.current.get(clordId) ?? null) : null;
 
-          if (validNos) {
-            const pendingKey = `pending_${validNos.clord_id}`;
+          if (clordId) {
+            const pendingKey = `pending_${clordId}`;
             const pendingRow = rowMapRef.current.get(pendingKey);
             if (pendingRow) {
               rowMapRef.current.delete(pendingKey);
               gridRef.current?.api?.applyTransaction({ remove: [pendingRow] });
             }
-            nosMapRef.current.delete(key);
+            nosMapRef.current.delete(clordId);
           }
 
-          const row = buildRowFromAE(ae, lp_id, validNos);
+          const row = buildRowFromAE(ae, lp_id, nosRecord);
           // Enrich with strategy name from hedge records map (ground truth)
           if (row.clord_id) {
             const match = hedgeRuleMapRef.current.get(row.clord_id);
