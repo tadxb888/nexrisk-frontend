@@ -804,6 +804,7 @@ export function CBookPage() {
       fetch('/api/v1/hedge/records?page_size=200')
         .then((res) => (res.ok ? res.json() : null))
         .then((json) => {
+          console.log('[HEDGE records]', json);
           if (cancelled || !json) return;
           const records: { lp_position_id?: string | null; rule_name?: string | null }[] =
             json.data ?? (Array.isArray(json) ? json : []);
@@ -812,6 +813,7 @@ export function CBookPage() {
             if (r.lp_position_id && r.rule_name) map.set(r.lp_position_id, r.rule_name);
           }
           hedgeRecordMapRef.current = map;
+          console.log('[HEDGE map]', [...map.entries()]);
           // Backfill two places so bookStats (derived from livePositions)
           // re-evaluates and the Strategy / A-Book cards render. If we only update
           // the grid nodes (as was the original behaviour), gridRows still holds the
@@ -849,6 +851,7 @@ export function CBookPage() {
       fetch('/api/v1/hedge/rules')
         .then((res) => (res.ok ? res.json() : null))
         .then((json) => {
+          console.log('[HEDGE rules]', json);
           if (cancelled || !json) return;
           const rules: { name?: string; status?: string }[] =
             json.data ?? (Array.isArray(json) ? json : []);
