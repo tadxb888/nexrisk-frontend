@@ -218,11 +218,14 @@ export function BBookPage() {
     rowIndexRef.current = m;
   }, [positions]);
 
-  // Force AG Grid to refresh cells when positions array is replaced wholesale
-  // (AG Grid delta-matches by row ID and skips unchanged rows otherwise)
-  useEffect(() => {
-    gridRef.current?.api?.refreshCells({ force: true });
-  }, [positions]);
+  // NOTE: We deliberately do NOT force a grid-wide cell refresh on every
+  // positions change. AG Grid already delta-matches rows by getRowId and,
+  // because handleMerge replaces only the changed row's object (immutable
+  // update), refreshes just the affected cells in place. A previous
+  // refreshCells({ force: true }) here destroyed and recreated every cell on
+  // every WebSocket frame; each recreated cell registered a Window-scoped
+  // tooltip listener that was never released, leaking ~185 MB/2min under the
+  // live tick stream until the tab OOM-crashed ("Aw, Snap", error code 5).
 
   // One-time node list fetch (nodes don't change at position frequency)
   useEffect(() => {
