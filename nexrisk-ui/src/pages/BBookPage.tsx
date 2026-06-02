@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
-import type { ColDef, GridOptions, RowSelectionOptions, ValueFormatterParams, GetContextMenuItemsParams, MenuItemDef, GridReadyEvent } from 'ag-grid-community';
+import type { ColDef, GridOptions, RowSelectionOptions, ValueFormatterParams, GetContextMenuItemsParams, MenuItemDef, GridReadyEvent, IRowNode } from 'ag-grid-community';
 import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
 
@@ -102,6 +102,11 @@ const fmtPrice = (p: ValueFormatterParams) => {
 
 const getRowId = (r: BBookPosition) => `${r.position_id}|${r.login}|${r.symbol}`;
 
+// Stable empty reference for the grid's rowData. The grid row model is the
+// source of truth for live rows and is fed exclusively via transactions, so
+// rowData must never be re-bound from React state after mount.
+const EMPTY_ROWS: BBookPosition[] = [];
+
 // ======================
 // useBBookWebSocket hook
 // ======================
@@ -186,13 +191,19 @@ export function BBookPage() {
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
 
   // ── Data state ──────────────────────────────────────────────
-  const [positions,   setPositions]   = useState<BBookPosition[]>([]);
-  const [activeNodes, setActiveNodes] = useState<MT5NodeAPI[]>([]);
-  const [wsStatus,    setWsStatus]    = useState<WsStatus>('connecting');
-  const [error,       setError]       = useState<string | null>(null);
-  // lastEventAt: setter only — value no longer surfaced in UI but kept so that
-  // future debug overlays / LP sync indicators can read it without re-wiring.
-  const [, setLastEventAt] = useState<Date | null>(null);
+  // GRID-AUTHORITATIVE MODEL
+  // The AG Grid row model is the single source of truth for live rows. Tick
+  // updates are pushed via applyTransactionAsync, which the grid batches on
+  // its own render cadence (asyncTransactionWaitMillis) — so React does NOT
+  // re-render per tick. The states below are SLOW read-back snapshots taken
+  // from the grid every few seconds, used only by the charts, header-card
+  // stats and filter dropdowns; none of those need tick-rate freshness.
+  const [positions,         setPositions]         = useState<BBookPosition[]>([]); // all rows (slow)
+  const [filteredPositions, setFilteredPositions] = useState<BBookPosition[]>([]); // filtered+sorted (slow)
+  const [rowCount,          setRowCount]          = useState(0);                   // live grid row count
+  const [activeNodes,       setActiveNodes]       = useState<MT5NodeAPI[]>([]);
+  const [wsStatus,          setWsStatus]          = useState<WsStatus>('connecting');
+  const [error,             setError]             = useState<string | null>(null);
 
   // Filter state
   const [groupInput,   setGroupInput]   = useState('');
@@ -210,22 +221,37 @@ export function BBookPage() {
   // page and the Portfolio page from the same state — no local subscription.
   const portfolio = usePortfolioStats();
 
-  // Row index for O(1) upsert/remove
-  const rowIndexRef = useRef<Map<string, BBookPosition>>(new Map());
-  useEffect(() => {
-    const m = new Map<string, BBookPosition>();
-    for (const r of positions) m.set(getRowId(r), r);
-    rowIndexRef.current = m;
-  }, [positions]);
+  // position_id -> rowId. POSITION_CHANGE / POSITION_DELETE arrive carrying only
+  // position_id, but the grid is keyed by the composite getRowId. This index
+  // resolves the node for those partial events. Rebuilt on every reconcile and
+  // kept in sync on add/remove. Touched only from the WS callback thread.
+  const pidToRowIdRef = useRef<Map<number, string>>(new Map());
 
-  // NOTE: We deliberately do NOT force a grid-wide cell refresh on every
-  // positions change. AG Grid already delta-matches rows by getRowId and,
-  // because handleMerge replaces only the changed row's object (immutable
-  // update), refreshes just the affected cells in place. A previous
-  // refreshCells({ force: true }) here destroyed and recreated every cell on
-  // every WebSocket frame; each recreated cell registered a Window-scoped
-  // tooltip listener that was never released, leaking ~185 MB/2min under the
-  // live tick stream until the tab OOM-crashed ("Aw, Snap", error code 5).
+  // Toolbar filter values mirrored into a ref so the grid's external-filter
+  // callbacks always read current values without being re-bound on each render.
+  const filtersRef = useRef({ group: '', symbol: '', server: '' });
+  useEffect(() => {
+    filtersRef.current = { group: groupInput, symbol: symbolInput, server: filterServer };
+    gridRef.current?.api?.onFilterChanged();
+  }, [groupInput, symbolInput, filterServer]);
+
+  // Does a row pass the toolbar filters. Mirrors the previous React-side filter
+  // exactly; reads filtersRef so it never goes stale inside the grid callback.
+  const rowPassesFilters = useCallback((p: BBookPosition): boolean => {
+    const { group, symbol, server } = filtersRef.current;
+    const gTerm = group.trim().toUpperCase();
+    const sTerm = symbol.trim().toUpperCase();
+    if (gTerm) {
+      const matchesGroup = p.group.toUpperCase().includes(gTerm);
+      const matchesLogin = String(p.login).includes(gTerm);
+      if (!matchesGroup && !matchesLogin) return false;
+    }
+    if (sTerm && !p.symbol.toUpperCase().includes(sTerm)) return false;
+    // filterServer is empty only during initial load (before the master node
+    // resolves). In that window everything shows; then it narrows to the node.
+    if (server !== '' && p.server !== server) return false;
+    return true;
+  }, []);
 
   // One-time node list fetch (nodes don't change at position frequency)
   useEffect(() => {
@@ -242,45 +268,98 @@ export function BBookPage() {
       .catch(() => { /* non-fatal — node badges just won't show */ });
   }, []);
 
-  // ── WebSocket handlers ───────────────────────────────────────
-  const handleSnapshot = useCallback((snap: BBookPosition[]) => {
-    setPositions(snap);
-    setLastEventAt(new Date());
-    setError(null);
+  // ── Slow read-back from the grid (charts / stats / dropdowns / overlays) ──
+  // Off the tick path. Pulls the grid's current row model into React state so
+  // charts, header-card stats, dropdown options and the empty/loading overlays
+  // have data — none of which need tick-rate freshness. Called on a 5s timer
+  // and once synchronously after each structural reconcile so the first seed
+  // shows immediately.
+  const pullFromGrid = useCallback(() => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const all:      BBookPosition[] = [];
+    const filtered: BBookPosition[] = [];
+    api.forEachNode(n => { if (n.data) all.push(n.data); });
+    api.forEachNodeAfterFilterAndSort(n => { if (n.data) filtered.push(n.data); });
+    setPositions(all);
+    setFilteredPositions(filtered);
+    setRowCount(all.length);
   }, []);
 
-  const handleUpsert = useCallback((pos: BBookPosition) => {
-    setPositions(prev => {
-      const key = getRowId(pos);
-      const idx = prev.findIndex(p => getRowId(p) === key);
-      if (idx === -1) return [...prev, pos];
-      const next = [...prev];
-      next[idx] = pos;
-      return next;
+  // ── WebSocket handlers — all mutate the grid via transactions, never state ──
+
+  // Reconcile the grid against an authoritative full set (initial seed AND
+  // every reconnect SNAPSHOT): add missing rows, update existing ones, remove
+  // rows no longer present. applyTransaction preserves sort, filters, column
+  // state, selection and scroll position — so a reconnect snapshot does not
+  // disturb the user's grid state.
+  const reconcile = useCallback((rows: BBookPosition[]) => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+
+    const incoming = new Map<string, BBookPosition>();
+    for (const r of rows) incoming.set(getRowId(r), r);
+
+    const add:    BBookPosition[] = [];
+    const update: BBookPosition[] = [];
+    const remove: BBookPosition[] = [];
+
+    api.forEachNode(node => {
+      const id = node.id;
+      if (id !== undefined && !incoming.has(id) && node.data) remove.push(node.data);
     });
-    setLastEventAt(new Date());
+    incoming.forEach((row, id) => {
+      (api.getRowNode(id) ? update : add).push(row);
+    });
+
+    api.applyTransaction({ add, update, remove });
+
+    const m = new Map<number, string>();
+    incoming.forEach((row, id) => m.set(row.position_id, id));
+    pidToRowIdRef.current = m;
+
+    pullFromGrid();   // reflect the seed/reconcile immediately (sync transaction)
+  }, [pullFromGrid]);
+
+  const handleSnapshot = useCallback((snap: BBookPosition[]) => {
+    setError(null);
+    reconcile(snap);
+  }, [reconcile]);
+
+  const handleUpsert = useCallback((pos: BBookPosition) => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const id = getRowId(pos);
+    api.applyTransactionAsync(api.getRowNode(id) ? { update: [pos] } : { add: [pos] });
+    pidToRowIdRef.current.set(pos.position_id, id);
   }, []);
 
   const handleMerge = useCallback((delta: Partial<MT5PositionWithNode> & { position_id: number }) => {
-    setPositions(prev => {
-      const idx = prev.findIndex(p => p.position_id === delta.position_id);
-      if (idx === -1) return prev;
-      const next = [...prev];
-      next[idx] = {
-        ...prev[idx],
-        ...(delta.price_current !== undefined && { price_current: delta.price_current }),
-        ...(delta.profit        !== undefined && { profit: -delta.profit }),
-        ...(delta.swap          !== undefined && { swap: delta.swap }),
-        ...(delta.commission    !== undefined && { commission: delta.commission }),
-      };
-      return next;
-    });
-    setLastEventAt(new Date());
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const id = pidToRowIdRef.current.get(delta.position_id);
+    if (!id) return;                       // unknown position — wait for snapshot/add
+    const node = api.getRowNode(id);
+    if (!node || !node.data) return;
+    // Merge only the live fields, exactly as before (broker P&L is inverted).
+    const merged: BBookPosition = {
+      ...node.data,
+      ...(delta.price_current !== undefined && { price_current: delta.price_current }),
+      ...(delta.profit        !== undefined && { profit: -delta.profit }),
+      ...(delta.swap          !== undefined && { swap: delta.swap }),
+      ...(delta.commission    !== undefined && { commission: delta.commission }),
+    };
+    api.applyTransactionAsync({ update: [merged] });
   }, []);
 
   const handleRemove = useCallback((positionId: number) => {
-    setPositions(prev => prev.filter(p => p.position_id !== positionId));
-    setLastEventAt(new Date());
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const id = pidToRowIdRef.current.get(positionId);
+    if (!id) return;
+    const node = api.getRowNode(id);
+    if (node && node.data) api.applyTransactionAsync({ remove: [node.data] });
+    pidToRowIdRef.current.delete(positionId);
   }, []);
 
   useBBookWebSocket({
@@ -291,49 +370,32 @@ export function BBookPage() {
     onStatus:   setWsStatus,
   });
 
-  // Manual force-refresh via REST (fallback if WS gets out of sync)
+  // Initial REST load — reconciles into the grid (same path as a SNAPSHOT) so
+  // rows appear immediately regardless of WS snapshot timing.
   const fetchPositions = useCallback(async () => {
     setError(null);
     try {
       const { positions: raw, nodes } = await mt5Api.getAllBBookPositions();
       setActiveNodes(nodes);
-      setPositions(raw.map(p => mapPosition(p)));
-      setLastEventAt(new Date());
+      reconcile(raw.map(p => mapPosition(p)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load B-Book positions');
     }
-  }, []);
+  }, [reconcile]);
 
-  // Fetch on mount so positions load immediately regardless of WS snapshot timing
+  // Slow refresh so price drift reflects in charts/stats between structural
+  // changes. Structural changes (seed/reconnect) update immediately via
+  // reconcile -> pullFromGrid; this timer just keeps prices reasonably fresh.
   useEffect(() => {
-    fetchPositions();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = setInterval(pullFromGrid, 5000);
+    return () => clearInterval(t);
+  }, [pullFromGrid]);
 
-  // ── Derived filter options ──────────────────────────────────
+  // ── Derived filter options (from the slow snapshot) ─────────────────────
   const uniqueLogins  = useMemo(() => Array.from(new Set(positions.map(p => String(p.login)))).sort(), [positions]);
   const uniqueSymbols = useMemo(() => Array.from(new Set(positions.map(p => p.symbol))).sort(), [positions]);
   const uniqueGroups  = useMemo(() => Array.from(new Set(positions.map(p => p.group).filter(Boolean))).sort(), [positions]);
   const uniqueServers = useMemo(() => activeNodes.map(n => n.node_name).sort(), [activeNodes]);
-
-  // ── Filtered positions ──────────────────────────────────────
-  const filteredPositions = useMemo(() => {
-    const gTerm = groupInput.trim().toUpperCase();
-    const sTerm = symbolInput.trim().toUpperCase();
-
-    return positions.filter(p => {
-      if (gTerm) {
-        const matchesGroup = p.group.toUpperCase().includes(gTerm);
-        const matchesLogin = String(p.login).includes(gTerm);
-        if (!matchesGroup && !matchesLogin) return false;
-      }
-      if (sTerm && !p.symbol.toUpperCase().includes(sTerm)) return false;
-      // filterServer is empty only during the initial load (before the master
-      // node has been resolved). In that brief window, show everything; once
-      // the selector snaps to the master, this filter narrows to that node.
-      if (filterServer !== '' && p.server !== filterServer) return false;
-      return true;
-    });
-  }, [positions, groupInput, symbolInput, filterServer]);
 
   // ======================
   // COLUMN DEFINITIONS
@@ -412,6 +474,11 @@ export function BBookPage() {
     animateRows: false,
     rowBuffer: 20,
     debounceVerticalScrollbar: true,
+    // Coalesce async transactions: the grid flushes batched applyTransactionAsync
+    // calls on this cadence regardless of how fast ticks arrive. At a 25ms LP
+    // feed this turns ~40 updates/sec/position into ~20 batched flushes/sec
+    // total, which is what makes the high-frequency feed safe to render.
+    asyncTransactionWaitMillis: 50,
     statusBar: {
       statusPanels: [
         { statusPanel: 'agTotalAndFilteredRowCountComponent' },
@@ -421,9 +488,23 @@ export function BBookPage() {
     },
   }), []);
 
-  const onGridReady = useCallback((_event: GridReadyEvent) => {
-    setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
+  // External (toolbar) filter — runs inside the grid so live transaction
+  // updates are filtered in place without ever re-binding rowData.
+  const isExternalFilterPresent = useCallback(() => {
+    const { group, symbol, server } = filtersRef.current;
+    return group.trim() !== '' || symbol.trim() !== '' || server !== '';
   }, []);
+  const doesExternalFilterPass = useCallback(
+    (node: IRowNode<BBookPosition>) => (node.data ? rowPassesFilters(node.data) : true),
+    [rowPassesFilters],
+  );
+
+  const onGridReady = useCallback((_event: GridReadyEvent) => {
+    // Grid API now exists — seed it from REST. The WS SNAPSHOT will reconcile
+    // on top once the socket connects.
+    fetchPositions();
+    setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
+  }, [fetchPositions]);
 
   const getContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
     const rowData = params.node?.data as BBookPosition | undefined;
@@ -696,45 +777,49 @@ export function BBookPage() {
       {/* Content */}
       <div className="flex-1 flex flex-col overflow-hidden p-2">
 
-        {/* Loading overlay — only on initial connect */}
-        {wsStatus === 'connecting' && positions.length === 0 && (
-          <div className="flex-1 flex items-center justify-center text-[#999] text-sm">
-            <span className="font-mono">Connecting to live feed…</span>
-          </div>
-        )}
+        {/* Grid — ALWAYS mounted: its row model is the source of truth for live
+            rows and is fed via transactions. rowData is a stable empty array so
+            React never re-binds it. Loading/empty states overlay the grid. */}
+        <div style={{ position: 'relative', flex: 1, width: '100%' }}>
+          <AgGridReact<BBookPosition>
+            ref={gridRef}
+            theme={gridTheme}
+            rowData={EMPTY_ROWS}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            gridOptions={gridOptions}
+            rowHeight={26}
+            headerHeight={36}
+            getRowId={(p) => getRowId(p.data)}
+            rowSelection={rowSelection}
+            cellSelection={{ enableHeaderHighlight: true }}
+            getContextMenuItems={getContextMenuItems}
+            isExternalFilterPresent={isExternalFilterPresent}
+            doesExternalFilterPass={doesExternalFilterPass}
+            onGridReady={onGridReady}
+          />
 
-        {/* Empty state */}
-        {wsStatus === 'live' && !error && positions.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
-            <p className="text-[#999] text-sm">No positions in B-Book</p>
-            <p className="text-[#666] text-xs">
-              {activeNodes.length > 0
-                ? 'Assign MT5 groups to the B-Book in Node Management, or there are no open positions.'
-                : 'No connected MT5 nodes found. Go to Node Management to connect your MT5 server.'}
-            </p>
-          </div>
-        )}
+          {/* Loading overlay — only on initial connect, before any rows */}
+          {wsStatus === 'connecting' && rowCount === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center text-[#999] text-sm"
+                 style={{ backgroundColor: '#232326' }}>
+              <span className="font-mono">Connecting to live feed…</span>
+            </div>
+          )}
 
-        {/* Grid */}
-        {positions.length > 0 && (
-          <div style={{ flex: 1, width: '100%' }}>
-            <AgGridReact<BBookPosition>
-              ref={gridRef}
-              theme={gridTheme}
-              rowData={filteredPositions}
-              columnDefs={columnDefs}
-              defaultColDef={defaultColDef}
-              gridOptions={gridOptions}
-              rowHeight={26}
-              headerHeight={36}
-              getRowId={(p) => getRowId(p.data)}
-              rowSelection={rowSelection}
-              cellSelection={{ enableHeaderHighlight: true }}
-              getContextMenuItems={getContextMenuItems}
-              onGridReady={onGridReady}
-            />
-          </div>
-        )}
+          {/* Empty state */}
+          {wsStatus === 'live' && !error && rowCount === 0 && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center gap-2"
+                 style={{ backgroundColor: '#232326' }}>
+              <p className="text-[#999] text-sm">No positions in B-Book</p>
+              <p className="text-[#666] text-xs">
+                {activeNodes.length > 0
+                  ? 'Assign MT5 groups to the B-Book in Node Management, or there are no open positions.'
+                  : 'No connected MT5 nodes found. Go to Node Management to connect your MT5 server.'}
+              </p>
+            </div>
+          )}
+        </div>
 
         {/* Charts - collapsible */}
         <div
