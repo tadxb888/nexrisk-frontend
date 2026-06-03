@@ -488,6 +488,13 @@ export function BBookPage() {
     // feed this turns ~40 updates/sec/position into ~20 batched flushes/sec
     // total, which is what makes the high-frequency feed safe to render.
     asyncTransactionWaitMillis: 50,
+    // Use native browser title tooltips instead of AG Grid's custom tooltip
+    // system. The custom path instantiates a per-cell tooltipCtrl bound to a
+    // listener (native_bind) that is retained by tooltipManager when cells are
+    // destroyed under the high-frequency transaction stream — the root of the
+    // detached-cell retention seen in heap snapshots. Native tooltips are
+    // browser-managed and cannot leak.
+    enableBrowserTooltips: true,
     statusBar: {
       statusPanels: [
         { statusPanel: 'agTotalAndFilteredRowCountComponent' },
