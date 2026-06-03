@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
 // Muted gradient colors for each chart - no red, no green, no fluorescent
@@ -91,7 +91,7 @@ function TraderConcentrationChart({ positions }: { positions: Position[] }) {
       </div>
       <ResponsiveContainer width="100%" height={PIE_HEIGHT}>
         <PieChart>
-          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={2} dataKey="value" stroke="none">
+          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={2} dataKey="value" stroke="none" isAnimationActive={false}>
             {data.map((_, i) => <Cell key={i} fill={BLUE_GRADIENT[i % BLUE_GRADIENT.length]} />)}
           </Pie>
           <Tooltip content={<ChartTooltip />} />
@@ -129,7 +129,7 @@ function TopSymbolsChart({ positions }: { positions: Position[] }) {
       </div>
       <ResponsiveContainer width="100%" height={PIE_HEIGHT}>
         <PieChart>
-          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={2} dataKey="value" stroke="none">
+          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={2} dataKey="value" stroke="none" isAnimationActive={false}>
             {data.map((_, i) => <Cell key={i} fill={PURPLE_GRADIENT[i % PURPLE_GRADIENT.length]} />)}
           </Pie>
           <Tooltip content={<ChartTooltip />} />
@@ -171,7 +171,7 @@ function HedgeRatioChart({ positions }: { positions: Position[] }) {
       </div>
       <ResponsiveContainer width="100%" height={PIE_HEIGHT}>
         <PieChart>
-          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={3} dataKey="value" stroke="none">
+          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={3} dataKey="value" stroke="none" isAnimationActive={false}>
             {data.map((_, i) => <Cell key={i} fill={HEDGE_COLORS[i]} />)}
           </Pie>
           <Tooltip content={<ChartTooltip />} />
@@ -209,7 +209,7 @@ function TopProfitableChart({ positions }: { positions: Position[] }) {
       </div>
       <ResponsiveContainer width="100%" height={PIE_HEIGHT}>
         <PieChart>
-          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={2} dataKey="value" stroke="none">
+          <Pie data={data} cx="50%" cy="50%" innerRadius="45%" outerRadius="85%" paddingAngle={2} dataKey="value" stroke="none" isAnimationActive={false}>
             {data.map((_, i) => <Cell key={i} fill={TEAL_GRADIENT[i % TEAL_GRADIENT.length]} />)}
           </Pie>
           <Tooltip content={<ChartTooltip />} />
@@ -227,7 +227,7 @@ function TopProfitableChart({ positions }: { positions: Position[] }) {
   );
 }
 
-export function BBookCharts({ positions, collapsed, onToggle }: BBookChartsProps) {
+export const BBookCharts = memo(function BBookCharts({ positions, collapsed, onToggle }: BBookChartsProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Toggle bar */}
@@ -259,6 +259,13 @@ export function BBookCharts({ positions, collapsed, onToggle }: BBookChartsProps
       )}
     </div>
   );
-}
+},
+// Re-render only when the chart data reference or collapsed state actually
+// changes. The parent (BBookPage) re-renders ~1/sec from the portfolio-summary
+// feed, but `positions` (filteredPositions) only changes on the ~5s grid
+// read-back — so this skips ~4 of every 5 parent renders, and with each Pie's
+// isAnimationActive={false} the periodic SVG rebuilds are GC'd instead of
+// retained. onToggle identity is intentionally ignored.
+(prev, next) => prev.positions === next.positions && prev.collapsed === next.collapsed);
 
 export default BBookCharts;
