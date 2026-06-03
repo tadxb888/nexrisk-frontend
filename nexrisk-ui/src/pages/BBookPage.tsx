@@ -422,9 +422,12 @@ export function BBookPage() {
       headerName: 'Type',
       filter: 'agSetColumnFilter',
       width: 90,
-      cellRenderer: (p: { value: string }) => (
-        <span style={{ color: p.value === 'BUY' ? '#49b3b3' : '#e0a020' }}>{p.value}</span>
-      ),
+      // Colored text via cellStyle instead of a JSX cellRenderer. Function
+      // cell renderers can't refresh in place, so under the high-frequency
+      // transaction stream AG Grid tears down and rebuilds the React-rendered
+      // cell on each update, leaking the old fiber + per-cell tooltip
+      // controller. valueFormatter/cellStyle keep cells as reusable DOM.
+      cellStyle: (p) => ({ color: p.value === 'BUY' ? '#49b3b3' : '#e0a020' }),
     },
     { field: 'volume',        headerName: 'Volume',   filter: 'agNumberColumnFilter', valueFormatter: fmtNum(2),  width: 100, type: 'rightAligned' },
     { field: 'price_open',    headerName: 'Open Price', filter: 'agNumberColumnFilter', valueFormatter: fmtPrice,   width: 110, type: 'rightAligned' },
@@ -437,11 +440,17 @@ export function BBookPage() {
       filter: 'agNumberColumnFilter',
       width: 120,
       type: 'rightAligned',
-      cellRenderer: (p: { value: number }) => {
-        const val = p.value;
-        const color = val > 0 ? '#66e07a' : val < 0 ? '#ff5c5c' : '#999';
-        const prefix = val >= 0 ? '$' : '-$';
-        return <span style={{ color }}>{prefix}{Math.abs(val).toFixed(2)}</span>;
+      // profit updates on EVERY tick. Render as formatted/colored text via
+      // valueFormatter + cellStyle (no JSX) so the cell is refreshed in place
+      // rather than recreated per tick — this is the hot column and the main
+      // source of the residual tooltip/fiber retention.
+      valueFormatter: (p) => {
+        const v = (p.value as number) ?? 0;
+        return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2);
+      },
+      cellStyle: (p) => {
+        const v = (p.value as number) ?? 0;
+        return { color: v > 0 ? '#66e07a' : v < 0 ? '#ff5c5c' : '#999' };
       },
     },
     { field: 'swap',       headerName: 'Swap',       filter: 'agNumberColumnFilter', valueFormatter: fmtNum(2), width: 90,  type: 'rightAligned' },
