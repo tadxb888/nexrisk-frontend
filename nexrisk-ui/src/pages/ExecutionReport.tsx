@@ -114,7 +114,7 @@ export interface ExecutionReportRow {
   nos_time: string;         // ":ss.mmm" or "—"
   round_trip_ms: number | null;
   // Status — always FILLED for AE; PENDING if NOS sent but no AE yet
-  te_status: 'FILLED' | 'PENDING' | 'UNKNOWN';
+  te_status: 'FILLED' | 'PENDING' | 'FAILED' | 'REJECTED' | 'ERROR' | 'B_BOOK' | 'PARTIAL' | 'CLOSED' | 'CLOSING' | 'UNKNOWN';
   user: string;
   order_id: string;         // tag 37 — TE order ID
   exec_id: string;
@@ -136,6 +136,37 @@ export interface ExecutionReportRow {
   // Hedging strategy — populated by hedge.fill WS event, null for manual executions
   rule_id:   number | null;
   rule_name: string | null;
+}
+interface HedgeExecutionRow {
+  record_id: number;
+  clord_id: string;
+  symbol: string;
+  direction: 'LONG' | 'SHORT' | '';
+  status: string;
+  hedge_state: string;
+  hedge_volume_lp: string;
+  hedge_volume_mt5: string;
+  lp_fill_volume_lp: string;
+  lp_fill_volume_mt5: string;
+  client_fill_price: string;
+  lp_fill_price: string;
+  raw_feed_price: string;
+  net_revenue_pips: string;
+  net_revenue_usd: string;
+  lp_position_id: string;
+  position_id: number;
+  login_id: number;
+  feed_lp_id: string;
+  hedging_lp_id: string;
+  rule_name: string;
+  rule_id: number | null;
+  escalation_reason: string;
+  rejection_code: string;
+  execution_source: string;
+  dispatched_ms: number;
+  confirmed_ms: number;
+  escalated_ms: number;
+  closed_ms: number;
 }
 
 interface LPStatus {
@@ -277,6 +308,50 @@ function buildRowFromAE(
     lp_id,
     rule_id:   null,
     rule_name: null,
+  };
+}
+
+// Build a row from a risk.hedge_records entry (hedge-executions endpoint).
+// hedge_records is the order-lifecycle source of truth: it includes orders TE
+// never confirmed (FAILED), rejected, errored, or b-booked — states the AE-only
+// path could not represent. status is already mapped server-side.
+function buildRowFromHedge(
+  h: HedgeExecutionRow,
+  lp_id: string
+): ExecutionReportRow {
+  const nos_ms   = h.dispatched_ms || 0;
+  const conf_ms  = h.confirmed_ms  || 0;
+  const round_trip_ms =
+    (nos_ms && conf_ms && conf_ms > nos_ms && (conf_ms - nos_ms) < 5000)
+      ? (conf_ms - nos_ms)
+      : null;
+
+  return {
+    trade_report_id: h.clord_id ? `pending_${h.clord_id}` : `hedge_${h.record_id}`,
+    clord_id:        h.clord_id || '',
+    nos_time:        nos_ms ? formatSsMs(msToFixTimestamp(nos_ms)) : '—',
+    round_trip_ms,
+    te_status:       (h.status as ExecutionReportRow['te_status']) || 'UNKNOWN',
+    user:            h.rule_name || UNKNOWN_SUBMITTER,
+    order_id:        h.lp_position_id || '',
+    exec_id:         '',
+    symbol:          h.symbol || '',
+    side:            h.direction === 'SHORT' ? 'SELL' : 'BUY',
+    ord_type:        'MKT',
+    tif:             'GTC',
+    order_qty:       parseFloat(h.hedge_volume_lp || '0'),
+    fill_px:         parseFloat(h.lp_fill_price   || '0'),
+    fill_qty:        parseFloat(h.lp_fill_volume_lp || '0'),
+    commission:      0,
+    route:           '',
+    security_exchange: '',
+    security_id:     '',
+    settl_date:      '',
+    account:         '',
+    transact_time:   msToFixTimestamp(nos_ms),
+    lp_id,
+    rule_id:   h.rule_id ?? null,
+    rule_name: h.rule_name ?? null,
   };
 }
 
@@ -775,9 +850,8 @@ export function ExecutionReportPage() {
 
         await Promise.allSettled(lps.map(async (lp) => {
           try {
-            const url = `/api/v1/fix/lp/${lp.lp_id}/correlated-fills?limit=500`;
+            const url = `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=500`;
             let res = await fetch(url);
-            // ZMQ command channel may not be ready immediately — retry once
             if (res.status === 503) {
               await new Promise(r => setTimeout(r, 3000));
               if (cancelled) return;
@@ -785,66 +859,9 @@ export function ExecutionReportPage() {
             }
             if (!res.ok || cancelled) return;
             const data = await res.json();
-            // Response shape: { success: true, data: [ { raw, msg_type, timestamp_ms, cl_ord_id, nos_sent_ms } ] }
-            const messages: Array<{
-              raw:         string;
-              msg_type:    string;
-              timestamp_ms:number;
-              cl_ord_id:   string;
-              nos_sent_ms: number;
-            }> = data?.data ?? [];
-
-            for (const msg of messages) {
-              const ts_ms: number = msg.timestamp_ms ?? 0;
-              const fixTs = ts_ms ? msToFixTimestamp(ts_ms) : '';
-
-              const trade_report_id = msg.trade_report_id ?? '';
-              if (!trade_report_id) continue;
-
-              const sideCode = msg.side ?? '';
-              const side     = sideCode === '2' ? 'SELL' : 'BUY';
-
-              const aeData: TradeCaptureWsEvent['data'] = {
-                trade_report_id,
-                order_id:          msg.order_id          ?? '',
-                exec_id:           '',
-                symbol:            msg.symbol            ?? '',
-                side,
-                last_qty:          parseFloat(msg.last_qty   || '0'),
-                last_px:           parseFloat(msg.last_px    || '0'),
-                account:           msg.account           ?? '',
-                transact_time:     msg.transact_time     || fixTs,
-                security_exchange: msg.security_exchange ?? '',
-                ex_destination:    msg.ex_destination    ?? '',
-                security_id:       msg.security_id       ?? '',
-                canonical_symbol:  '',
-                trd_type:          0,
-                commission:        parseFloat(msg.commission || '0'),
-                received_ts:       ts_ms,
-                cl_ord_id:         msg.cl_ord_id  || undefined,
-                nos_sent_ms:       msg.nos_sent_ms || undefined,
-              };
-
-              // Legacy rows (placed before C++ started stamping submitted_by)
-              // carry "'" as a placeholder — treat that as null so the grid
-              // falls back to UNKNOWN_SUBMITTER rather than displaying garbage.
-              const rawSubmitter = typeof msg.submitted_by === 'string' ? msg.submitted_by.trim() : '';
-              const submitted_by = rawSubmitter && rawSubmitter !== "'" ? rawSubmitter : null;
-
-              const seedNos: NosRecord | null = submitted_by
-                ? {
-                    clord_id:  msg.cl_ord_id ?? '',
-                    symbol:    msg.symbol    ?? '',
-                    side,
-                    order_qty: 0,
-                    ord_type:  '1',
-                    tif:       '1',
-                    nos_ts:    msg.nos_sent_ms ?? 0,
-                    submitted_by,
-                  }
-                : null;
-
-              seedRows.push(buildRowFromAE(aeData, lp.lp_id, seedNos));
+            const rows: HedgeExecutionRow[] = data?.data ?? [];
+            for (const h of rows) {
+              seedRows.push(buildRowFromHedge(h, lp.lp_id));
             }
           } catch { /* per-LP non-fatal */ }
         }));
