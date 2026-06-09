@@ -1222,12 +1222,25 @@ export function ExecutionReportPage() {
   // The grid is driven imperatively via applyTransaction; rowMapRef is the live
   // source of truth. This samples it every 3s into React state so the charts and
   // stats bar stay current without re-rendering the page on every WS tick.
+  // ── Throttled chart/stats sync (3s) ─────────────────────────
+  // Samples rowMapRef into React state for charts/stats, but only when the
+  // data actually changed. Skipping setRows when idle prevents the charts
+  // (recharts) from re-rendering every 3s — those re-renders accumulate event
+  // listeners that made navigation-away take tens of seconds.
   useEffect(() => {
+    let lastCount = -1;
+    let lastTopId = '';
     const sync = () => {
-      const snapshot = Array.from(rowMapRef.current.values());
+      const map = rowMapRef.current;
+      const snapshot = Array.from(map.values());
       snapshot.sort((a, b) =>
         parseTimestamp(b.transact_time) - parseTimestamp(a.transact_time)
       );
+      const count = snapshot.length;
+      const topId = count ? snapshot[0].trade_report_id : '';
+      if (count === lastCount && topId === lastTopId) return;
+      lastCount = count;
+      lastTopId = topId;
       setRows(snapshot);
     };
     const t = setInterval(sync, 3000);
