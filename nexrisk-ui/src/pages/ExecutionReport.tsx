@@ -1370,7 +1370,6 @@ export function ExecutionReportPage() {
           filter: 'agSetColumnFilter',
           filterParams: { values: ['FILLED', 'PARTIAL', 'PENDING', 'FAILED', 'REJECTED', 'ERROR', 'B_BOOK', 'CLOSED', 'CLOSING', 'UNKNOWN'] },
           cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
-            cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
             const colors: Record<string, string> = {
               'FILLED':   '#66e07a',
               'PARTIAL':  '#8fcf9f',
@@ -1386,18 +1385,6 @@ export function ExecutionReportPage() {
             const fg = colors[p.value] ?? '#777';
             return (
               <span style={{ color: fg, fontSize: 11, fontWeight: 600, letterSpacing: '0.04em' }}>
-                {p.value}
-              </span>
-            );
-          },
-            const s = palette[p.value] ?? palette['UNKNOWN'];
-            return (
-              <span style={{
-                backgroundColor: s.bg, color: s.fg,
-                padding: '2px 7px', borderRadius: 3,
-                fontSize: 10, fontWeight: 600,
-                letterSpacing: '0.04em', whiteSpace: 'nowrap',
-              }}>
                 {p.value}
               </span>
             );
