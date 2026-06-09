@@ -332,7 +332,7 @@ function buildRowFromHedge(
     nos_time:        nos_ms ? formatSsMs(msToFixTimestamp(nos_ms)) : '—',
     round_trip_ms,
     te_status:       (h.status as ExecutionReportRow['te_status']) || 'UNKNOWN',
-    user:            h.rule_name || UNKNOWN_SUBMITTER,
+    user:            h.execution_source === 'automated' ? 'Hedge Engine' : (h.execution_source || UNKNOWN_SUBMITTER),
     order_id:        h.lp_position_id || '',
     exec_id:         '',
     symbol:          h.symbol || '',
@@ -398,6 +398,13 @@ function generateExplanation(row: ExecutionReportRow): string {
 
   if (row.te_status === 'PENDING') {
     lines.push('Order sent to TE — awaiting fill confirmation (35=AE).');
+  } else if (row.te_status === 'FAILED' || row.te_status === 'REJECTED' || row.te_status === 'ERROR') {
+    const reason =
+      row.te_status === 'FAILED'   ? 'Hedge not confirmed by LP within timeout — OrderCancelRequest sent.' :
+      row.te_status === 'REJECTED' ? 'Order rejected by LP.' :
+                                     'Internal error during hedge processing.';
+    lines.push(reason);
+    lines.push('No fill — order did not execute.');
   } else {
     const fillPx = row.fill_px > 0 ? row.fill_px.toFixed(5) : '—';
     const fillQty = row.fill_qty > 0 ? row.fill_qty.toLocaleString() : '—';
@@ -423,7 +430,10 @@ function generateExplanation(row: ExecutionReportRow): string {
   lines.push('');
   lines.push('LIFECYCLE TIMING');
   lines.push(`NOS sent   : ${row.nos_time.padEnd(10)}  (we submitted the order)`);
-  lines.push(`TE filled  : ${row.transact_time ? formatSsMs(row.transact_time) : '—'}  (35=AE received)`);
+  const filledLabel = (row.te_status === 'FAILED' || row.te_status === 'REJECTED' || row.te_status === 'ERROR')
+    ? `Escalated  : ${row.transact_time ? formatSsMs(row.transact_time) : '—'}  (no fill — timeout/reject)`
+    : `TE filled  : ${row.transact_time ? formatSsMs(row.transact_time) : '—'}  (35=AE received)`;
+  lines.push(filledLabel);
   lines.push(`Round trip : ${row.round_trip_ms !== null ? `${row.round_trip_ms}ms` : '—'}`);
 
   lines.push('');
@@ -1358,13 +1368,28 @@ export function ExecutionReportPage() {
           headerTooltip: 'FILLED = 35=AE received; PENDING = NOS sent, no AE yet',
           width: 100,
           filter: 'agSetColumnFilter',
-          filterParams: { values: ['FILLED', 'PENDING', 'UNKNOWN'] },
+          filterParams: { values: ['FILLED', 'PARTIAL', 'PENDING', 'FAILED', 'REJECTED', 'ERROR', 'B_BOOK', 'CLOSED', 'CLOSING', 'UNKNOWN'] },
           cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
-            const palette: Record<string, { bg: string; fg: string }> = {
-              'FILLED':  { bg: '#1b361b', fg: '#66e07a' },
-              'PENDING': { bg: '#332a00', fg: '#e0a020' },
-              'UNKNOWN': { bg: '#262626', fg: '#555'    },
+            cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
+            const colors: Record<string, string> = {
+              'FILLED':   '#66e07a',
+              'PARTIAL':  '#8fcf9f',
+              'PENDING':  '#e0a020',
+              'FAILED':   '#ff5c5c',
+              'REJECTED': '#ff5c5c',
+              'ERROR':    '#ff8c3c',
+              'B_BOOK':   '#49b3b3',
+              'CLOSED':   '#f0b0f0ff',
+              'CLOSING':  '#f5ececff',
+              'UNKNOWN':  '#c5c0c0ff',
             };
+            const fg = colors[p.value] ?? '#777';
+            return (
+              <span style={{ color: fg, fontSize: 11, fontWeight: 600, letterSpacing: '0.04em' }}>
+                {p.value}
+              </span>
+            );
+          },
             const s = palette[p.value] ?? palette['UNKNOWN'];
             return (
               <span style={{
