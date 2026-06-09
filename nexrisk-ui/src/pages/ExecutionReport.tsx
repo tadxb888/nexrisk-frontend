@@ -1622,14 +1622,7 @@ export function ExecutionReportPage() {
   // Re-size columns whenever filteredRows changes — covers initial load via
   // applyTransaction (fires after onFirstDataRendered), LP filter switches,
   // and any subsequent row updates. Debounced so rapid WS updates don't thrash.
-  const autoSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (filteredRows.length === 0) return;
-    if (autoSizeTimerRef.current) clearTimeout(autoSizeTimerRef.current);
-    autoSizeTimerRef.current = setTimeout(() => {
-      gridRef.current?.api?.autoSizeAllColumns();
-    }, 80);
-  }, [filteredRows]);
+  
 
   const onRowClicked = useCallback((params: { data?: ExecutionReportRow }) => {
     if (params.data) setSelectedRow(params.data);
