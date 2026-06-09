@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
@@ -528,7 +528,7 @@ function OrdersByStatusTooltip({ active, payload, total }: { active?: boolean; p
 }
 
 // ── 1. Execution Latency Over Time ─────────────────────────────
-function LatencyOverTimeChart({ rows }: { rows: ExecutionReportRow[] }) {
+const LatencyOverTimeChart = memo(function LatencyOverTimeChart({ rows }: { rows: ExecutionReportRow[] }) {
   const data = useMemo(() => (
     rows
       .filter(r => r.round_trip_ms !== null && isTodayRow(r.transact_time))
@@ -575,10 +575,10 @@ function LatencyOverTimeChart({ rows }: { rows: ExecutionReportRow[] }) {
       </ResponsiveContainer>
     </div>
   );
-}
+});
 
 // ── 2. Execution Latency by LP (stacked horizontal bar: min/avg-min/max-avg) ──
-function LatencyByLPChart({ rows }: { rows: ExecutionReportRow[] }) {
+const LatencyByLPChart = memo(function LatencyByLPChart({ rows }: { rows: ExecutionReportRow[] }) {
   const data = useMemo(() => {
     const byLp: Record<string, number[]> = {};
     rows
@@ -646,10 +646,10 @@ function LatencyByLPChart({ rows }: { rows: ExecutionReportRow[] }) {
       </div>
     </div>
   );
-}
+});
 
 // ── 3. Orders by Status (donut) ─────────────────────────────────
-function OrdersByStatusChart({ rows }: { rows: ExecutionReportRow[] }) {
+const OrdersByStatusChart = memo(function OrdersByStatusChart({ rows }: { rows: ExecutionReportRow[] }) {
   const { data, total } = useMemo(() => {
     const counts: Record<string, number> = { FILLED: 0, REJECTED: 0, PENDING: 0, CANCELLED: 0 };
     rows
@@ -708,10 +708,10 @@ function OrdersByStatusChart({ rows }: { rows: ExecutionReportRow[] }) {
       </div>
     </div>
   );
-}
+});
 
 // ── 4. Volume by Symbol (vertical bar) ──────────────────────────
-function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
+const VolumeBySymbolChart = memo(function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
   const data = useMemo(() => {
     const bySymbol: Record<string, number> = {};
     rows
@@ -755,7 +755,7 @@ function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
       </ResponsiveContainer>
     </div>
   );
-}
+});
 
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
