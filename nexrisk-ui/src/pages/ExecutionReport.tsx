@@ -1208,6 +1208,22 @@ export function ExecutionReportPage() {
     return () => clearInterval(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Throttled chart/stats sync (3s) ─────────────────────────
+  // The grid is driven imperatively via applyTransaction; rowMapRef is the live
+  // source of truth. This samples it every 3s into React state so the charts and
+  // stats bar stay current without re-rendering the page on every WS tick.
+  useEffect(() => {
+    const sync = () => {
+      const snapshot = Array.from(rowMapRef.current.values());
+      snapshot.sort((a, b) =>
+        parseTimestamp(b.transact_time) - parseTimestamp(a.transact_time)
+      );
+      setRows(snapshot);
+    };
+    const t = setInterval(sync, 3000);
+    return () => clearInterval(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Escape key → close side panel
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1808,7 +1824,7 @@ export function ExecutionReportPage() {
               <AgGridReact<ExecutionReportRow>
                 ref={gridRef}
                 theme={gridTheme}
-                rowData={filteredRows}
+                rowData={undefined}
                 columnDefs={columnDefs}
                 defaultColDef={defaultColDef}
                 gridOptions={gridOptions}
