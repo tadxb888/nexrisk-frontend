@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
@@ -528,7 +528,7 @@ function OrdersByStatusTooltip({ active, payload, total }: { active?: boolean; p
 }
 
 // ── 1. Execution Latency Over Time ─────────────────────────────
-const LatencyOverTimeChart = memo(function LatencyOverTimeChart({ rows }: { rows: ExecutionReportRow[] }) {
+function LatencyOverTimeChart({ rows }: { rows: ExecutionReportRow[] }) {
   const data = useMemo(() => (
     rows
       .filter(r => r.round_trip_ms !== null && isTodayRow(r.transact_time))
@@ -575,10 +575,10 @@ const LatencyOverTimeChart = memo(function LatencyOverTimeChart({ rows }: { rows
       </ResponsiveContainer>
     </div>
   );
-});
+}
 
 // ── 2. Execution Latency by LP (stacked horizontal bar: min/avg-min/max-avg) ──
-const LatencyByLPChart = memo(function LatencyByLPChart({ rows }: { rows: ExecutionReportRow[] }) {
+function LatencyByLPChart({ rows }: { rows: ExecutionReportRow[] }) {
   const data = useMemo(() => {
     const byLp: Record<string, number[]> = {};
     rows
@@ -646,10 +646,10 @@ const LatencyByLPChart = memo(function LatencyByLPChart({ rows }: { rows: Execut
       </div>
     </div>
   );
-});
+}
 
 // ── 3. Orders by Status (donut) ─────────────────────────────────
-const OrdersByStatusChart = memo(function OrdersByStatusChart({ rows }: { rows: ExecutionReportRow[] }) {
+function OrdersByStatusChart({ rows }: { rows: ExecutionReportRow[] }) {
   const { data, total } = useMemo(() => {
     const counts: Record<string, number> = { FILLED: 0, REJECTED: 0, PENDING: 0, CANCELLED: 0 };
     rows
@@ -708,10 +708,10 @@ const OrdersByStatusChart = memo(function OrdersByStatusChart({ rows }: { rows: 
       </div>
     </div>
   );
-});
+}
 
 // ── 4. Volume by Symbol (vertical bar) ──────────────────────────
-const VolumeBySymbolChart = memo(function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
+function VolumeBySymbolChart({ rows }: { rows: ExecutionReportRow[] }) {
   const data = useMemo(() => {
     const bySymbol: Record<string, number> = {};
     rows
@@ -755,7 +755,7 @@ const VolumeBySymbolChart = memo(function VolumeBySymbolChart({ rows }: { rows: 
       </ResponsiveContainer>
     </div>
   );
-});
+}
 
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
@@ -1230,12 +1230,28 @@ export function ExecutionReportPage() {
   useEffect(() => {
     let lastCount = -1;
     let lastTopId = '';
+    const MAX_GRID_ROWS = 300;  // cap live grid size so AG-Grid teardown stays fast
     const sync = () => {
       const map = rowMapRef.current;
-      const snapshot = Array.from(map.values());
+      let snapshot = Array.from(map.values());
       snapshot.sort((a, b) =>
         parseTimestamp(b.transact_time) - parseTimestamp(a.transact_time)
       );
+
+      // Evict oldest rows beyond the cap from BOTH the grid and rowMapRef.
+      // Without this the grid grows unbounded; AG-Grid then attaches a listener
+      // per cell that never gets removed until unmount, making navigation-away
+      // take tens of seconds (destroyBeans -> removeEventListener storm).
+      if (snapshot.length > MAX_GRID_ROWS) {
+        const keep = snapshot.slice(0, MAX_GRID_ROWS);
+        const drop = snapshot.slice(MAX_GRID_ROWS);
+        if (drop.length > 0) {
+          try { gridRef.current?.api?.applyTransaction({ remove: drop }); } catch { /* grid not ready */ }
+          for (const r of drop) map.delete(r.trade_report_id);
+        }
+        snapshot = keep;
+      }
+
       const count = snapshot.length;
       const topId = count ? snapshot[0].trade_report_id : '';
       if (count === lastCount && topId === lastTopId) return;
