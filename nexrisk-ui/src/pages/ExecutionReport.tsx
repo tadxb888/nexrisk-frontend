@@ -1351,11 +1351,12 @@ export function ExecutionReportPage() {
         },
         {
           field: 'transact_time',
-          headerName: 'Transact Time',
-          headerTooltip: 'TransactTime (tag 60) from 35=AE',
-          width: 170,
+          headerName: 'TE Filled',
+          headerTooltip: 'Time TE confirmed the fill (35=AE received). Sorted by send time.',
+          width: 110,
           sort: 'desc',
           filter: 'agTextColumnFilter',
+          valueFormatter: (p: ValueFormatterParams) => (p.data as ExecutionReportRow)?.fill_time ?? '—',
           cellStyle: { fontFamily: 'monospace', fontSize: 11 },
         },
         {
@@ -1376,7 +1377,7 @@ export function ExecutionReportPage() {
       children: [
         {
           field: 'nos_time',
-          headerName: 'NOS Time',
+          headerName: 'NOS Sent',
           headerTooltip: 'Time we sent the NewOrderSingle — correlated from outbound NOS',
           width: 90,
           filter: 'agTextColumnFilter',
