@@ -163,6 +163,7 @@ interface HedgeExecutionRow {
   escalation_reason: string;
   rejection_code: string;
   execution_source: string;
+  submitted_by: string | null;   // NexRisk operator from C++ NOS stamp; null for pre-stamp/external rows
   dispatched_ms: number;
   confirmed_ms: number;
   escalated_ms: number;
@@ -332,7 +333,9 @@ function buildRowFromHedge(
     nos_time:        nos_ms ? formatSsMs(msToFixTimestamp(nos_ms)) : '—',
     round_trip_ms,
     te_status:       (h.status as ExecutionReportRow['te_status']) || 'UNKNOWN',
-    user:            h.execution_source === 'automated' ? 'Hedge Engine' : (h.execution_source || UNKNOWN_SUBMITTER),
+    user:            h.execution_source === 'automated'
+                       ? 'Hedge Engine'
+                       : (h.submitted_by || h.execution_source || UNKNOWN_SUBMITTER),
     order_id:        h.lp_position_id || '',
     exec_id:         '',
     symbol:          h.symbol || '',
