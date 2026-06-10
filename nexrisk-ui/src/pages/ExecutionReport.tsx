@@ -767,8 +767,10 @@ export function ExecutionReportPage() {
   // ── State ──────────────────────────────────────────────────
   const [rows,           setRows]           = useState<ExecutionReportRow[]>([]);
   const [lpStatuses,     setLpStatuses]     = useState<LPStatus[]>([]);
+  const [positions,      setPositions]      = useState<FIXPosition[]>([]);
   const [wsStatus,       setWsStatus]       = useState<WsStatus>('connecting');
   const [wsError,        setWsError]        = useState<string | null>(null);
+  const [lastEventAt,    setLastEventAt]    = useState<Date | null>(null);
   const [selectedRow,    setSelectedRow]    = useState<ExecutionReportRow | null>(null);
   const [copied,         setCopied]         = useState(false);
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
@@ -885,7 +887,7 @@ export function ExecutionReportPage() {
             if (row.clord_id) clordIdMapRef.current.set(row.clord_id, row.trade_report_id);
           }
           // Push into grid — hedge records polling effect will enrich with strategy names
-          gridRef.current?.api?.applyTransactionAsync({ add: seedRows });
+          gridRef.current?.api?.applyTransaction({ add: seedRows });
         }
       } catch { /* non-fatal */ }
     };
@@ -913,6 +915,7 @@ export function ExecutionReportPage() {
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
+        setLastEventAt(new Date());
 
         // ── HEDGE FILL — strategy correlation ─────────────────
         // Must be checked FIRST — hedge.fill events arrive with
@@ -944,7 +947,7 @@ export function ExecutionReportPage() {
           };
           rowMapRef.current.set(tradeId, updated);
           clordIdMapRef.current.set(clordId, tradeId);
-          gridRef.current?.api?.applyTransactionAsync({ update: [updated] });
+          gridRef.current?.api?.applyTransaction({ update: [updated] });
           return; // handled — do not fall through to type-based handlers
 
         // C++ publishes execution events under msg.type === 'EXECUTION_REPORT'
@@ -989,9 +992,9 @@ export function ExecutionReportPage() {
             // Keep clordIdMapRef in sync — hedge.fill uses clord_id to find the row
             clordIdMapRef.current.set(nosRecord.clord_id, pendingRow.trade_report_id);
             if (existing) {
-              gridRef.current?.api?.applyTransactionAsync({ update: [pendingRow] });
+              gridRef.current?.api?.applyTransaction({ update: [pendingRow] });
             } else {
-              gridRef.current?.api?.applyTransactionAsync({ add: [pendingRow], addIndex: 0 });
+              gridRef.current?.api?.applyTransaction({ add: [pendingRow], addIndex: 0 });
             }
             // Refresh the detail panel if this row is currently selected —
             // AG Grid mutations don't trigger React re-renders on their own.
@@ -1012,7 +1015,7 @@ export function ExecutionReportPage() {
               const pendingRow = rowMapRef.current.get(pendingKey);
               if (pendingRow) {
                 rowMapRef.current.delete(pendingKey);
-                gridRef.current?.api?.applyTransactionAsync({ remove: [pendingRow] });
+                gridRef.current?.api?.applyTransaction({ remove: [pendingRow] });
               }
               nosMapRef.current.delete(clordId);
             }
@@ -1037,9 +1040,9 @@ export function ExecutionReportPage() {
 
             rowMapRef.current.set(row.trade_report_id, row);
             if (existing) {
-              gridRef.current?.api?.applyTransactionAsync({ update: [row] });
+              gridRef.current?.api?.applyTransaction({ update: [row] });
             } else {
-              gridRef.current?.api?.applyTransactionAsync({ add: [row], addIndex: 0 });
+              gridRef.current?.api?.applyTransaction({ add: [row], addIndex: 0 });
             }
             // Refresh the detail panel if this row — or the pending row it
             // replaced — is currently selected.
@@ -1069,7 +1072,7 @@ export function ExecutionReportPage() {
             const pendingRow = rowMapRef.current.get(pendingKey);
             if (pendingRow) {
               rowMapRef.current.delete(pendingKey);
-              gridRef.current?.api?.applyTransactionAsync({ remove: [pendingRow] });
+              gridRef.current?.api?.applyTransaction({ remove: [pendingRow] });
             }
             nosMapRef.current.delete(clordId);
           }
@@ -1094,9 +1097,9 @@ export function ExecutionReportPage() {
 
           rowMapRef.current.set(row.trade_report_id, row);
           if (existing) {
-            gridRef.current?.api?.applyTransactionAsync({ update: [row] });
+            gridRef.current?.api?.applyTransaction({ update: [row] });
           } else {
-            gridRef.current?.api?.applyTransactionAsync({ add: [row], addIndex: 0 });
+            gridRef.current?.api?.applyTransaction({ add: [row], addIndex: 0 });
           }
           // Refresh the detail panel if this row — or the pending row it
           // replaced — is currently selected.
@@ -1116,8 +1119,25 @@ export function ExecutionReportPage() {
             return [...prev, { lp_id, trading_session: newState }];
           });
 
-        // POSITION_REPORT / POSITION_CLOSED intentionally not handled —
-        // ExecutionReport does not render net positions.
+        // ── POSITION_REPORT ───────────────────────────────────
+        } else if (msg.type === 'POSITION_REPORT') {
+          const pos: FIXPosition = {
+            position_id: msg.position_id as string,
+            side:        msg.side as 'LONG' | 'SHORT',
+            net_qty:     msg.net_qty as number,
+          };
+          if (!pos.position_id) return;
+          setPositions(prev => {
+            const idx = prev.findIndex(p => p.position_id === pos.position_id);
+            if (idx >= 0) { const n = [...prev]; n[idx] = pos; return n; }
+            return [...prev, pos];
+          });
+
+        // ── POSITION_CLOSED ───────────────────────────────────
+        } else if (msg.type === 'POSITION_CLOSED') {
+          const posId = (msg.data as Record<string, unknown>)?.position_id as string | undefined;
+          if (!posId) return;
+          setPositions(prev => prev.filter(p => p.position_id !== posId));
         }
 
       } catch { /* ignore parse errors */ }
@@ -1188,7 +1208,7 @@ export function ExecutionReportPage() {
           }
         }
         if (updates.length > 0) {
-          gridRef.current?.api?.applyTransactionAsync({ update: updates });
+          gridRef.current?.api?.applyTransaction({ update: updates });
         }
       } catch { /* non-fatal */ }
     };
@@ -1210,7 +1230,7 @@ export function ExecutionReportPage() {
   useEffect(() => {
     let lastCount = -1;
     let lastTopId = '';
-    const MAX_GRID_ROWS = 300;  // cap live grid size so AG-Grid teardown stays fast
+    const MAX_GRID_ROWS = 1;  // cap live grid size so AG-Grid teardown stays fast
     const sync = () => {
       const map = rowMapRef.current;
       let snapshot = Array.from(map.values());
@@ -1226,7 +1246,7 @@ export function ExecutionReportPage() {
         const keep = snapshot.slice(0, MAX_GRID_ROWS);
         const drop = snapshot.slice(MAX_GRID_ROWS);
         if (drop.length > 0) {
-          try { gridRef.current?.api?.applyTransactionAsync({ remove: drop }); } catch { /* grid not ready */ }
+          try { gridRef.current?.api?.applyTransaction({ remove: drop }); } catch { /* grid not ready */ }
           for (const r of drop) map.delete(r.trade_report_id);
         }
         snapshot = keep;
@@ -1593,7 +1613,6 @@ export function ExecutionReportPage() {
     columnHoverHighlight: true,
     animateRows: false,
     rowBuffer: 20,
-    asyncTransactionWaitMillis: 60,
     suppressMovableColumns: true,
     debounceVerticalScrollbar: true,
     getRowStyle: (params) => {
