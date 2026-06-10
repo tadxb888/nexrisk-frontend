@@ -1210,7 +1210,7 @@ export function ExecutionReportPage() {
   useEffect(() => {
     let lastCount = -1;
     let lastTopId = '';
-    const MAX_GRID_ROWS = 500;  // cap live grid size so AG-Grid teardown stays fast
+    const MAX_GRID_ROWS = 5000;  // cap live grid size so AG-Grid teardown stays fast
     const sync = () => {
       const map = rowMapRef.current;
       let snapshot = Array.from(map.values());
