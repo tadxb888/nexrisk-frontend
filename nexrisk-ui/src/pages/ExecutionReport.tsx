@@ -164,6 +164,10 @@ interface HedgeExecutionRow {
   rejection_code: string;
   execution_source: string;
   submitted_by: string | null;   // NexRisk operator from C++ NOS stamp; null for pre-stamp/external rows
+  account: string;
+  route: string;
+  security_exchange: string;
+  security_id: string;
   dispatched_ms: number;
   confirmed_ms: number;
   escalated_ms: number;
@@ -346,11 +350,11 @@ function buildRowFromHedge(
     fill_px:         parseFloat(h.lp_fill_price   || '0'),
     fill_qty:        parseFloat(h.lp_fill_volume_lp || '0'),
     commission:      0,
-    route:           '',
-    security_exchange: '',
-    security_id:     '',
+    route:           h.route,
+    security_exchange: h.security_exchange,
+    security_id:     h.security_id,
     settl_date:      '',
-    account:         '',
+    account:         h.account,
     transact_time:   msToFixTimestamp(nos_ms),
     lp_id,
     rule_id:   h.rule_id ?? null,
@@ -425,10 +429,10 @@ function generateExplanation(row: ExecutionReportRow): string {
 
   lines.push('');
   lines.push('ROUTING');
-  lines.push(`Account   : ${row.account || '—'}  (tag 1)`);
-  lines.push(`Route     : ${row.route || '—'}  (tag 100)`);
-  lines.push(`Exchange  : ${row.security_exchange || '—'}  (tag 207)`);
-  lines.push(`Security  : ${row.security_id || '—'}  (tag 48)`);
+  lines.push(`Account   : ${row.account || '—'}`);
+  lines.push(`Route     : ${row.route || '—'}`);
+  lines.push(`Exchange  : ${row.security_exchange || '—'}`);
+  lines.push(`Security  : ${row.security_id || '—'}`);
 
   lines.push('');
   lines.push('LIFECYCLE TIMING');
