@@ -112,6 +112,7 @@ export interface ExecutionReportRow {
   // Correlated from NOS (matched by symbol+side+time within 500ms window)
   clord_id: string;         // tag 11 — empty if NOS not yet correlated
   nos_time: string;         // ":ss.mmm" or "—"
+  fill_time: string;        // confirm/AE-receive instant (the value RT is measured to) or "—"
   round_trip_ms: number | null;
   // Status — always FILLED for AE; PENDING if NOS sent but no AE yet
   te_status: 'FILLED' | 'PENDING' | 'FAILED' | 'REJECTED' | 'ERROR' | 'B_BOOK' | 'PARTIAL' | 'CLOSED' | 'CLOSING' | 'UNKNOWN';
@@ -291,6 +292,7 @@ function buildRowFromAE(
     trade_report_id: ae.trade_report_id,
     clord_id:        corr_clord_id,
     nos_time:        corr_nos_ts ? formatSsMs(msToFixTimestamp(corr_nos_ts)) : '—',
+    fill_time:       fill_ts ? formatSsMs(msToFixTimestamp(fill_ts)) : '—',
     round_trip_ms,
     te_status:       'FILLED',
     user:            nosRecord?.submitted_by ?? UNKNOWN_SUBMITTER,
@@ -335,6 +337,7 @@ function buildRowFromHedge(
     trade_report_id: h.clord_id ? `pending_${h.clord_id}` : `hedge_${h.record_id}`,
     clord_id:        h.clord_id || '',
     nos_time:        nos_ms ? formatSsMs(msToFixTimestamp(nos_ms)) : '—',
+    fill_time:       conf_ms ? formatSsMs(msToFixTimestamp(conf_ms)) : '—',
     round_trip_ms,
     te_status:       (h.status as ExecutionReportRow['te_status']) || 'UNKNOWN',
     user:            h.execution_source === 'automated'
@@ -368,6 +371,7 @@ function buildPendingRow(nos: NosRecord, lp_id: string): ExecutionReportRow {
     trade_report_id: `pending_${nos.clord_id}`,
     clord_id:        nos.clord_id,
     nos_time:        formatSsMs(msToFixTimestamp(nos.nos_ts)),
+    fill_time:       '—',
     round_trip_ms:   null,
     te_status:       'PENDING',
     user:            nos.submitted_by ?? UNKNOWN_SUBMITTER,
@@ -439,7 +443,7 @@ function generateExplanation(row: ExecutionReportRow): string {
   lines.push(`NOS sent   : ${row.nos_time.padEnd(10)}  (we submitted the order)`);
   const filledLabel = (row.te_status === 'FAILED' || row.te_status === 'REJECTED' || row.te_status === 'ERROR')
     ? `Escalated  : ${row.transact_time ? formatSsMs(row.transact_time) : '—'}  (no fill — timeout/reject)`
-    : `TE filled  : ${row.transact_time ? formatSsMs(row.transact_time) : '—'}  (35=AE received)`;
+    : `TE filled  : ${row.fill_time.padEnd(10)}  (35=AE received)`;
   lines.push(filledLabel);
   lines.push(`Round trip : ${row.round_trip_ms !== null ? `${row.round_trip_ms}ms` : '—'}`);
 
@@ -1409,7 +1413,7 @@ export function ExecutionReportPage() {
         {
           field: 'round_trip_ms',
           headerName: 'RT (ms)',
-          headerTooltip: 'Round trip: AE transact_time − NOS sent_time',
+          headerTooltip: 'Round trip: AE/confirm receive time − NOS sent time',
           width: 80,
           filter: 'agNumberColumnFilter',
           type: 'rightAligned',
