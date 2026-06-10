@@ -1613,6 +1613,7 @@ export function ExecutionReportPage() {
     columnHoverHighlight: true,
     animateRows: false,
     rowBuffer: 20,
+    suppressMovableColumns: true,
     debounceVerticalScrollbar: true,
     getRowStyle: (params) => {
       if (params.data?.te_status === 'PENDING') return { backgroundColor: '#282000' };
