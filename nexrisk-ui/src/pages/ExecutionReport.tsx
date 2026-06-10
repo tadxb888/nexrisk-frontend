@@ -1230,12 +1230,28 @@ export function ExecutionReportPage() {
   useEffect(() => {
     let lastCount = -1;
     let lastTopId = '';
+    const MAX_GRID_ROWS = 300;  // cap live grid size so AG-Grid teardown stays fast
     const sync = () => {
       const map = rowMapRef.current;
-      const snapshot = Array.from(map.values());
+      let snapshot = Array.from(map.values());
       snapshot.sort((a, b) =>
         parseTimestamp(b.transact_time) - parseTimestamp(a.transact_time)
       );
+
+      // Evict oldest rows beyond the cap from BOTH the grid and rowMapRef.
+      // Without this the grid grows unbounded; AG-Grid then attaches a listener
+      // per cell that never gets removed until unmount, making navigation-away
+      // take tens of seconds (destroyBeans -> removeEventListener storm).
+      if (snapshot.length > MAX_GRID_ROWS) {
+        const keep = snapshot.slice(0, MAX_GRID_ROWS);
+        const drop = snapshot.slice(MAX_GRID_ROWS);
+        if (drop.length > 0) {
+          try { gridRef.current?.api?.applyTransaction({ remove: drop }); } catch { /* grid not ready */ }
+          for (const r of drop) map.delete(r.trade_report_id);
+        }
+        snapshot = keep;
+      }
+
       const count = snapshot.length;
       const topId = count ? snapshot[0].trade_report_id : '';
       if (count === lastCount && topId === lastTopId) return;
@@ -1303,16 +1319,29 @@ export function ExecutionReportPage() {
           filter: 'agSetColumnFilter',
           cellRenderer: (p: { value: string | null; data?: ExecutionReportRow }) => {
             if (!p.value) {
-              return '<span style="color:#aaa;font-size:11px;font-style:italic">Manual</span>';
+              return <span style={{ color: '#aaa', fontSize: 11, fontStyle: 'italic' }}>Manual</span>;
             }
-            const title = `Rule #${p.data?.rule_id} - click to open in Hedging Strategies`;
-            return `<span title="${title}" style="color:#49b3b3;cursor:pointer;font-size:11px;font-weight:600;text-decoration:underline;white-space:nowrap">${p.value}</span>`;
-          },
-          onCellClicked: (e: { data?: ExecutionReportRow }) => {
-            if (e.data?.rule_id != null) {
-              sessionStorage.setItem('nexrisk:hedging:selected', String(e.data.rule_id));
-              navigate('/hedging-strategies');
-            }
+            return (
+              <span
+                onClick={() => {
+                  if (p.data?.rule_id != null) {
+                    sessionStorage.setItem('nexrisk:hedging:selected', String(p.data.rule_id));
+                    navigate('/hedging-strategies');
+                  }
+                }}
+                title={`Rule #${p.data?.rule_id} — click to open in Hedging Strategies`}
+                style={{
+                  color: '#49b3b3',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textDecoration: 'underline',
+                  whiteSpace: 'nowrap' as const,
+                }}
+              >
+                {p.value}
+              </span>
+            );
           },
         },
       ],
@@ -1383,7 +1412,11 @@ export function ExecutionReportPage() {
               'UNKNOWN':  '#c5c0c0ff',
             };
             const fg = colors[p.value] ?? '#777';
-            return `<span style="color:${fg};font-size:11px;font-weight:600;letter-spacing:0.04em">${p.value ?? ''}</span>`;
+            return (
+              <span style={{ color: fg, fontSize: 11, fontWeight: 600, letterSpacing: '0.04em' }}>
+                {p.value}
+              </span>
+            );
           },
         },
         {
@@ -1395,9 +1428,9 @@ export function ExecutionReportPage() {
           type: 'rightAligned',
           cellRenderer: (p: { value: number | null }) => {
             if (p.value === null || p.value === undefined)
-              return '<span style="color:#555">\u2014</span>';
+              return <span style={{ color: '#555' }}>—</span>;
             const color = p.value <= 200 ? '#66e07a' : p.value <= 600 ? '#e0a020' : '#ff5c5c';
-            return `<span style="color:${color};font-weight:700">${p.value}</span>`;
+            return <span style={{ color, fontWeight: 700 }}>{p.value}</span>;
           },
         },
       ],
@@ -1436,11 +1469,11 @@ export function ExecutionReportPage() {
           width: 60,
           filter: 'agSetColumnFilter',
           filterParams: { values: ['BUY', 'SELL'] },
-          cellRenderer: (p: { value: 'BUY' | 'SELL' }) => {
-            if (!p.value) return '';
-            const c = p.value === 'BUY' ? '#49b3b3' : '#e0a020';
-            return `<span style="color:${c};font-weight:700">${p.value}</span>`;
-          },
+          cellRenderer: (p: { value: 'BUY' | 'SELL' }) => (
+            <span style={{ color: p.value === 'BUY' ? '#49b3b3' : '#e0a020', fontWeight: 700 }}>
+              {p.value}
+            </span>
+          ),
         },
         {
           field: 'ord_type',
@@ -1580,6 +1613,7 @@ export function ExecutionReportPage() {
     columnHoverHighlight: true,
     animateRows: false,
     rowBuffer: 20,
+    suppressMovableColumns: true,
     debounceVerticalScrollbar: true,
     getRowStyle: (params) => {
       if (params.data?.te_status === 'PENDING') return { backgroundColor: '#282000' };
