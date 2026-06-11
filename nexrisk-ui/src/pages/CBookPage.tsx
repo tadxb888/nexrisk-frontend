@@ -1620,7 +1620,7 @@ export function CBookPage() {
         totalNotional: 0,
         buys:          0,
         sells:         0,
-        color:         stat.color,
+        color: TYPE_COLORS[name] ?? HEDGE_STRATEGY_COLOR,
         firstSeen:     stat.firstSeen,
       });
     }
