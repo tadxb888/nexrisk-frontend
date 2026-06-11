@@ -312,14 +312,14 @@ interface StrategyDayStat {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  Terminal:     '#FFFA60',
-  'DOM Trader': '#1ca3de',
+  Terminal:     '#FFFF00',
+  'DOM Trader': '#76DEDE',
   // Hedge strategy names are not listed here; the cell renderer falls back to HEDGE_STRATEGY_COLOR.
 };
 
 // Colour applied to every hedge-strategy display (strategy selector card, Execution
 // Type cell, per-position label). Distinct from the teal accent (#49b3b3) used elsewhere.
-const HEDGE_STRATEGY_COLOR = '#FF13F0';
+const HEDGE_STRATEGY_COLOR = '#EDE3EC';
 
 // ── Big-figure price (mirrors FxAskCell typography) ──────────────────────────
 // handle (white, smaller) · pip pair (accent, large) · pipette (accent, sup).
