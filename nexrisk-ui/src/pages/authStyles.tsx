@@ -213,7 +213,7 @@ export function AuthLogo() {
   return (
     <div style={A.logoFixed}>
       <img
-        src="/taiga-logo-final.png"
+        src="/taiga-mark.svg"
         alt="Taiga"
         style={A.logoImg}
         onError={e => {

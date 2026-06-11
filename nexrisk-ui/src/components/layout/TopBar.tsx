@@ -427,7 +427,7 @@ export function TopBar() {
       >
         {/* Logo */}
         <div className="flex items-center shrink-0" style={{ marginRight: 12 }}>
-          <img src="/taiga-logo.png" alt="taiga" style={{ height: 28, objectFit: 'contain' }} draggable={false} />
+          <img src="/taiga-mark.svg" alt="taiga" style={{ height: 28, objectFit: 'contain' }} draggable={false} />
         </div>
 
         {/* Mode nav — Main and Favourites pills are always present on the left. */}
