@@ -1322,7 +1322,7 @@ export function ExecutionReportPage() {
                 }}
                 title={`Rule #${p.data?.rule_id} — click to open in Hedging Strategies`}
                 style={{
-                  color: '#49b3b3',
+                  color: '#EDE3EC',
                   cursor: 'pointer',
                   fontSize: 11,
                   fontWeight: 600,
