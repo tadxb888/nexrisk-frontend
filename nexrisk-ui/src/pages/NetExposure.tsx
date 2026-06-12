@@ -41,6 +41,7 @@
  */
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useAuth } from '@/stores/AuthContext';
 import { mt5Api, type MT5PositionWithNode, type MT5NodeAPI } from '@/services/api';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
@@ -738,6 +739,7 @@ const aggregateABookPositions = aggregateCoverageBookPositions;
 // COMPONENT
 // ======================
 export function NetExposurePage() {
+  const { hasPermission } = useAuth();
   // ── Exposure grid ─────────────────────────────────────────────
   const exposureGridRef = useRef<AgGridReact<HedgeExposureRow>>(null);
   const expandedGroupsRef = useRef<Set<string>>(new Set());
@@ -2912,6 +2914,9 @@ export function NetExposurePage() {
             </div>
           </div>
 
+          {/* DOM Trader panel — gated on dom_trader >= VIEW. NONE hides it; the
+              page stays visible as read-only monitoring. BFF enforces the same. */}
+          {hasPermission('dom_trader', 'VIEW') && (<>
           {/* ── DOM Trader Drawer ────────────────────────────────────────
               Default: collapsed 32px rail with an expand chevron. Click the
               rail → opens the full panel. Inside the open panel, the header
@@ -3277,6 +3282,7 @@ export function NetExposurePage() {
             </div>
 
           </div>{/* end DOM panel */}
+          </>)}
 
         </div>
       </div>

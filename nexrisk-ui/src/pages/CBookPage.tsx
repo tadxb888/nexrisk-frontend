@@ -21,6 +21,7 @@
  */
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useAuth } from '@/stores/AuthContext';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 import type {
@@ -544,6 +545,7 @@ function positionToCBook(pos: FIXPosition, lpId: string, instrMap: Record<string
 // COMPONENT
 // =============================================================================
 export function CBookPage() {
+  const { hasPermission } = useAuth();
   const gridRef = useRef<AgGridReact<CBookOrder>>(null);
 
   // ── LPs ───────────────────────────────────────────────────────────────────
@@ -2618,6 +2620,9 @@ export function CBookPage() {
           </div>
         </div>
 
+        {/* DOM Trader panel — gated on dom_trader >= VIEW. NONE hides it; the
+            page stays visible as read-only monitoring. BFF enforces the same. */}
+        {hasPermission('dom_trader', 'VIEW') && (<>
         {/* ── DOM Trader Drawer ────────────────────────────────────────
             Default: collapsed 32px rail with an expand chevron. Click the
             rail → opens the full panel. Inside the open panel, the header
@@ -3029,6 +3034,7 @@ export function CBookPage() {
 
         </div>
         {/* ── End DOM Panel ──────────────────────────────────────────────────── */}
+        </>)}
 
         {/* ── Order Execution Panel (slide-out, mirrors ABookPage pattern) ───── */}
         {execPanelOpen && (
