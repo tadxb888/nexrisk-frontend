@@ -5,7 +5,6 @@
 // ============================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { moduleGate } from '../middleware/auth.js';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
 async function proxyGet(path: string, reply: FastifyReply, query?: Record<string, unknown>) {
