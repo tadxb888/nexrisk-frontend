@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/stores/AuthContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { RoutePermissionGuard } from '@/components/RoutePermissionGuard';
 import { LoginPage } from '@/pages/LoginPage';
 import { SetupPage } from '@/pages/SetupPage';
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
@@ -86,6 +87,8 @@ function App() {
 
             {/* ── Protected routes — session required ── */}
             <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+              {/* Permission gate — blocks routes whose module is NONE/missing. */}
+              <Route element={<RoutePermissionGuard />}>
 
               {/* ─── Overview ─────────────────────────── */}
               <Route path="/"              element={<CockpitPage />} />
@@ -160,6 +163,7 @@ function App() {
               <Route path="/settings/audit"         element={<Navigate to="/settings" replace />} />
               <Route path="/settings/notifications" element={<Navigate to="/settings" replace />} />
               <Route path="/settings/risk-logic"    element={<Navigate to="/settings" replace />} />
+              </Route>{/* /RoutePermissionGuard */}
             </Route>
           </Routes>
         </BrowserRouter>

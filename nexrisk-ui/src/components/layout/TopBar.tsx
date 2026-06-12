@@ -26,89 +26,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/stores/AuthContext';
+import { type SubItem, type NavSection, NAV_SECTIONS, moduleForPath } from '@/config/navPermissions';
 import { clsx } from 'clsx';
 import { PortfolioCard } from '@/components/portfolio/PortfolioCard';
 import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
 import { AlertsBar } from '@/components/market/AlertsBar';
 import { AlertsBarNotifications } from '@/components/market/AlertsBarNotifications';
 
-// ── Types ────────────────────────────────────────────────────
-export interface SubItem {
-  path: string;
-  label: string;
-  /** Shortcut for root+administrator only. Kept for backwards compat. */
-  adminOnly?: boolean;
-  /** When set, visible only to users whose role is in this list. Takes
-   *  precedence over adminOnly when both are present. */
-  rolesAllowed?: string[];
-}
-
-export interface NavSection {
-  id: string;
-  label: string;
-  items: SubItem[];
-}
-
 // ── Navigation definition ────────────────────────────────────
-// Single source of truth for sections + children. Unchanged from prior version.
-export const NAV_SECTIONS: NavSection[] = [
-  {
-    id: 'overview',
-    label: 'Overview',
-    items: [
-      { path: '/',              label: 'Cockpit' },
-      { path: '/portfolio',     label: 'Portfolio' },
-      { path: '/net-exposure',  label: 'Net Exposure' },
-    ],
-  },
-  {
-    id: 'flow',
-    label: 'Intel',
-    items: [
-      { path: '/flow',         label: 'Profiler' },
-      { path: '/predictions',  label: 'Predictions' },
-      { path: '/archetypes',   label: 'Archetypes' },
-      { path: '/risk-charter', label: 'Risk Charter' },
-    ],
-  },
-  {
-    id: 'execution',
-    label: 'Execution',
-    items: [
-      { path: '/b-book',              label: 'B-Book' },
-      { path: '/coverage-book',       label: 'Coverage Book' },
-      { path: '/hedging-strategies',  label: 'Hedging Strategies' },
-      { path: '/execution-report',    label: 'Execution Report' },
-    ],
-  },
-  {
-    id: 'markets',
-    label: 'Markets',
-    items: [
-      { path: '/liquidity-providers', label: 'Liquidity Providers' },
-      { path: '/symbol-mapping',      label: 'Symbol Mapping' },
-      { path: '/route-sanity',        label: 'Route Sanity' },
-      { path: '/price-rules',         label: 'Price Rules Engine' },
-    ],
-  },
-  {
-    id: 'control',
-    label: 'Control',
-    items: [
-      { path: '/logs',     label: 'Logs' },
-      { path: '/reports',  label: 'Reports' },
-      { path: '/users',    label: 'Users',    adminOnly: true },
-      { path: '/settings', label: 'Settings', rolesAllowed: ['root', 'administrator', 'sysadmin', 'broker_dealer'] },
-    ],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    items: [
-      { path: '/mt5-servers', label: 'MT5 Servers' },
-    ],
-  },
-];
+// SubItem / NavSection / NAV_SECTIONS / moduleForPath now live in
+// @/config/navPermissions (single source shared with RoutePermissionGuard).
+// Re-exported below so existing imports from this module keep working.
+export { NAV_SECTIONS, moduleForPath };
+export type { SubItem, NavSection };
 
 // ── Mode colours ─────────────────────────────────────────────
 const COLOR_MAIN          = '#f5802c'; // orange — Main mode
@@ -167,16 +97,8 @@ function seedDefaultsIfNeeded() {
   } catch { /* localStorage unavailable; skip seeding */ }
 }
 
-// ── Role-based item visibility ───────────────────────────────
-export function canSeeItem(item: SubItem, role: string | undefined): boolean {
-  if (item.rolesAllowed) {
-    return !!role && item.rolesAllowed.includes(role);
-  }
-  if (item.adminOnly) {
-    return role === 'root' || role === 'administrator';
-  }
-  return true;
-}
+// canSeeItem (role-based) removed — visibility now derives from permissions
+// via hasPermission(item.module, 'VIEW'); see RoutePermissionGuard / spec.
 
 // ── Resolve which section owns a path ────────────────────────
 export function sectionForPath(pathname: string): NavSection | undefined {
@@ -236,7 +158,7 @@ type Mode =
 
 export function TopBar() {
   const location = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
 
   // One-time default seeding on first mount.
   useEffect(() => { seedDefaultsIfNeeded(); }, []);
@@ -299,10 +221,10 @@ export function TopBar() {
   const fmt     = (d: Date) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
-  // Visible favourites — filter through canSeeItem so a role loss hides the pin.
+  // Visible favourites — filtered by permission so a perm loss hides the pin.
   const visibleFavourites: SubItem[] = pins
     .map(findItem)
-    .filter((i): i is SubItem => !!i && canSeeItem(i, user?.role));
+    .filter((i): i is SubItem => !!i && hasPermission(i.module, 'VIEW'));
 
   // ── Render helpers ─────────────────────────────────────────
 
@@ -451,7 +373,7 @@ export function TopBar() {
 
           {/* Mode-specific content */}
           {mode.kind === 'main' && NAV_SECTIONS.map(section => {
-            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
+            const visibleItems = section.items.filter(i => hasPermission(i.module, 'VIEW'));
             if (visibleItems.length === 0) return null;
             return renderSectionPill(section);
           })}
@@ -459,7 +381,7 @@ export function TopBar() {
           {mode.kind === 'drilldown' && (() => {
             const section = NAV_SECTIONS.find(s => s.id === mode.sectionId);
             if (!section) return null;
-            const visibleItems = section.items.filter(i => canSeeItem(i, user?.role));
+            const visibleItems = section.items.filter(i => hasPermission(i.module, 'VIEW'));
             return (
               <>
                 {renderBreadcrumbPill(section.label, COLOR_MAIN)}
