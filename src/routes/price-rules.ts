@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { z } from 'zod';
 import { nexriskApi, nexriskFetch } from '../services/nexrisk-api.js';
 
@@ -57,6 +58,10 @@ const newsQuery = z.object({
 // ─────────────────────────────────────────────────────────────
 
 export async function priceRulesRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'price_rules' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('price_rules'));
 
   // ══════════════════════════════════════════════════════════
   // A. FEED CONFIGURATION

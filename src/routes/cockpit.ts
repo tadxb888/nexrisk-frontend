@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { nexriskApi, snakeToCamel } from '../services/nexrisk-api.js';
 
 export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'cockpit' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('cockpit'));
   /**
    * GET /api/cockpit/trader-risk
    * Card 4 backing data — critical traders, behavioral severity counts,

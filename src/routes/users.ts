@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { z } from 'zod';
 import { nexriskFetch } from '../services/nexrisk-api.js';
 import { sessionStore } from '../services/session-store.js';
@@ -70,6 +71,10 @@ async function dispatchInviteEmail(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'users' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('users'));
 
   // ── Session guard — all users/roles routes require an active session ──────
 

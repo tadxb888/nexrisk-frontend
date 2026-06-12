@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { request as undiciRequest } from 'undici';
 import { config } from '../config.js';
 import { nexriskApi } from '../services/nexrisk-api.js';
@@ -10,6 +11,10 @@ import { nexriskApi } from '../services/nexrisk-api.js';
  * CSV   → undici direct (needed for raw body + Content-Disposition pass-through)
  */
 export async function reportsRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'reports' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('reports'));
   fastify.get(
     '/reports/*',
     { preHandler: [fastify.authenticate] },

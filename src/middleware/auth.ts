@@ -23,6 +23,7 @@ const MOCK_USER: User = {
   name: 'Development User',
   role: 'risk_admin',
   capabilities: getCapabilitiesForRole('risk_admin'),
+  permissions: {}, // dev bypass skips checks; value unused
 };
 
 /**
@@ -48,6 +49,54 @@ function displayNameFromSessionUser(user: {
   const last = user.last_name?.trim() ?? '';
   const full = [first, last].filter(Boolean).join(' ');
   return full || user.email;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Permission ranking (mirrors PERM_ORDER on the frontend AuthContext)
+// ─────────────────────────────────────────────────────────────────────────────
+const PERM_ORDER = ['NONE', 'VIEW', 'EDIT', 'FULL', 'CRUD', 'SU'] as const;
+function rankPerm(level?: string): number {
+  const i = PERM_ORDER.indexOf((level ?? 'NONE') as (typeof PERM_ORDER)[number]);
+  return i < 0 ? 0 : i;
+}
+
+/**
+ * Plugin-level preHandler that gates an ENTIRE route plugin to one permission
+ * module. Reads the session directly (independent of fastify.authenticate, so
+ * it works regardless of hook ordering). GET/HEAD require VIEW; mutating methods
+ * require EDIT. Dev bypass when authEnabled is false.
+ *
+ * Use for plugins whose every route belongs to a single module:
+ *   fastify.addHook('preHandler', moduleGate('symbol_map'));
+ *
+ * For plugins that mix modules, use the per-route fastify.requirePermission()
+ * decorator instead (after fastify.authenticate).
+ */
+export function moduleGate(module: string) {
+  return async function (request: FastifyRequest, reply: FastifyReply) {
+    if (!config.authEnabled) return; // dev bypass, mirrors authenticate
+
+    const method = request.method.toUpperCase();
+    if (method === 'OPTIONS') return; // let CORS preflight through
+
+    const sessionId = (request.cookies as Record<string, string | undefined>)?.[SESSION_COOKIE];
+    if (!sessionId) {
+      return reply.code(401).send({ error: 'Unauthorized', details: 'No session cookie' });
+    }
+    const session = sessionStore.get(sessionId);
+    if (!session?.user?.id) {
+      return reply.code(401).send({ error: 'Unauthorized', details: 'Session expired or invalid' });
+    }
+
+    const needed = method === 'GET' || method === 'HEAD' ? 'VIEW' : 'EDIT';
+    const actual = session.permissions?.[module];
+    if (rankPerm(actual) < rankPerm(needed)) {
+      return reply.code(403).send({
+        error: 'Forbidden',
+        details: `Requires ${needed} on ${module} (have ${actual ?? 'NONE'})`,
+      });
+    }
+  };
 }
 
 /**
@@ -111,6 +160,7 @@ export async function registerAuth(fastify: FastifyInstance): Promise<void> {
         name: displayNameFromSessionUser(session.user),
         role,
         capabilities: getCapabilitiesForRole(role),
+        permissions: session.permissions ?? {},
       };
     }
   );
@@ -126,6 +176,27 @@ export async function registerAuth(fastify: FastifyInstance): Promise<void> {
         return reply.code(403).send({
           error: 'Forbidden',
           details: `Missing required capability: ${capability}`,
+        });
+      }
+    };
+  });
+
+  // Add permission check decorator (module-level, mirrors requireCapability).
+  // Use AFTER fastify.authenticate so request.nexriskUser is populated.
+  fastify.decorate('requirePermission', function (module: string, level: string = 'VIEW') {
+    return async function (request: FastifyRequest, reply: FastifyReply) {
+      // Dev bypass — mirror authenticate; MOCK_USER carries no real perms.
+      if (!config.authEnabled) return;
+
+      if (!request.nexriskUser) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+
+      const actual = request.nexriskUser.permissions?.[module];
+      if (rankPerm(actual) < rankPerm(level)) {
+        return reply.code(403).send({
+          error: 'Forbidden',
+          details: `Requires ${level} on ${module} (have ${actual ?? 'NONE'})`,
         });
       }
     };
@@ -158,6 +229,10 @@ declare module 'fastify' {
     ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requireRole: (
       roles: Role | Role[]
+    ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requirePermission: (
+      module: string,
+      level?: string
     ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }

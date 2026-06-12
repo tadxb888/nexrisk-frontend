@@ -63,7 +63,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** POST /hedge/rules — create strategy */
   fastify.post(
     '/hedge/rules',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.post('/api/v1/hedge/rules', request.body);
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -74,7 +74,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** PUT /hedge/rules/:rule_id — update strategy (partial) */
   fastify.put(
     '/hedge/rules/:rule_id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.put(`/api/v1/hedge/rules/${rule_id}`, request.body);
@@ -86,7 +86,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** DELETE /hedge/rules/:rule_id — delete strategy */
   fastify.delete(
     '/hedge/rules/:rule_id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.delete(`/api/v1/hedge/rules/${rule_id}`);
@@ -98,7 +98,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** POST /hedge/rules/:rule_id/activate */
   fastify.post(
     '/hedge/rules/:rule_id/activate',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/hedge/rules/${rule_id}/activate`, {});
@@ -110,7 +110,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** POST /hedge/rules/:rule_id/pause */
   fastify.post(
     '/hedge/rules/:rule_id/pause',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/hedge/rules/${rule_id}/pause`, {});
@@ -122,7 +122,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** POST /hedge/rules/:rule_id/stop */
   fastify.post(
     '/hedge/rules/:rule_id/stop',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/hedge/rules/${rule_id}/stop`, {});
@@ -152,7 +152,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** PUT /hedge/rules/:rule_id/sanity-config — upsert per-rule sanity config */
   fastify.put(
     '/hedge/rules/:rule_id/sanity-config',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.put(
@@ -167,7 +167,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** DELETE /hedge/rules/:rule_id/sanity-config — revert to global default */
   fastify.delete(
     '/hedge/rules/:rule_id/sanity-config',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rule_id } = ruleIdParams.parse(request.params);
       const response = await nexriskApi.delete(
@@ -195,7 +195,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
   /** PUT /hedge/sanity-config/default — upsert global default for an LP */
   fastify.put(
     '/hedge/sanity-config/default',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.put(
         '/api/v1/hedge/sanity-config/default',
@@ -238,7 +238,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/hedge/positions/:record_id/retry',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { record_id } = recordIdParams.parse(request.params);
       const response = await nexriskApi.post(
@@ -259,7 +259,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/hedge/positions/:record_id/force-close',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { record_id } = recordIdParams.parse(request.params);
       const response = await nexriskApi.post(
@@ -278,7 +278,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/hedge/positions/:record_id/bbook',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { record_id } = recordIdParams.parse(request.params);
       const response = await nexriskApi.post(
@@ -297,7 +297,7 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/hedge/positions/:record_id/acknowledge',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { record_id } = recordIdParams.parse(request.params);
       const response = await nexriskApi.post(

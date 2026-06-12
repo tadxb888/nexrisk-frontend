@@ -111,7 +111,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post(
     '/fix/admin/lp',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.post('/api/v1/fix/admin/lp', request.body);
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -152,7 +152,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.put(
     '/fix/admin/lp/:lp_id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
       const response = await nexriskApi.put(`/api/v1/fix/admin/lp/${lp_id}`, request.body);
@@ -163,7 +163,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.delete(
     '/fix/admin/lp/:lp_id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
       const response = await nexriskApi.delete(`/api/v1/fix/admin/lp/${lp_id}`);
@@ -174,7 +174,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.put(
     '/fix/admin/lp/:lp_id/credentials',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
       const response = await nexriskApi.put(`/api/v1/fix/admin/lp/${lp_id}/credentials`, request.body);
@@ -196,7 +196,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post(
     '/fix/admin/lp/:lp_id/test',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/fix/admin/lp/${lp_id}/test`);
@@ -207,7 +207,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post(
     '/fix/admin/lp/:lp_id/reload',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/fix/admin/lp/${lp_id}/reload`);
@@ -450,7 +450,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.post(
     '/fix/order',
-    { preHandler: [fastify.authenticate] },
+    { preHandler: [fastify.authenticate, fastify.requirePermission('dom_trader', 'VIEW')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = stampSubmitter(request.body, request);
       // Diagnostic: if we couldn't resolve a submitter despite the preHandler
@@ -810,6 +810,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
   // Replace order — Section 4.3 / 5.2
   fastify.post(
     '/fix/replace',
+    { preHandler: [fastify.authenticate, fastify.requirePermission('dom_trader', 'VIEW')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       fastify.log.info({ body: request.body }, '[fix] replace order');
       const response = await nexriskApi.post('/api/v1/fix/replace', request.body);
@@ -821,6 +822,7 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
   // Cancel order — Section 4.3 / 5.3
   fastify.post(
     '/fix/cancel',
+    { preHandler: [fastify.authenticate, fastify.requirePermission('dom_trader', 'VIEW')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       fastify.log.info({ body: request.body }, '[fix] cancel order');
       const response = await nexriskApi.post('/api/v1/fix/cancel', request.body);

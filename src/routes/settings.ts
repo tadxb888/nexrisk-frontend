@@ -21,6 +21,7 @@
 // ============================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { nexriskApi, snakeToCamel } from '../services/nexrisk-api.js';
 // ── helpers ──────────────────────────────────────────────────
 
@@ -105,6 +106,10 @@ async function proxyWriteRaw(
 // ─────────────────────────────────────────────────────────────
 
 export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'settings' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('settings'));
 
   // ══════════════════════════════════════════════════════════
   // GLOBAL

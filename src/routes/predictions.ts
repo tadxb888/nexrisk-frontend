@@ -5,6 +5,7 @@
 // ============================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
 async function proxyGet(path: string, reply: FastifyReply, query?: Record<string, unknown>) {
@@ -37,32 +38,32 @@ async function proxyDelete(path: string, reply: FastifyReply) {
 export async function predictionsRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.get('/mappings/nexday',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('symbol_map', 'VIEW')] },
     async (_req, reply) => proxyGet('/api/v1/mappings/nexday', reply)
   );
 
   fastify.get('/mappings/nexday/available',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('symbol_map', 'VIEW')] },
     async (_req, reply) => proxyGet('/api/v1/mappings/nexday/available', reply)
   );
 
   fastify.get('/mappings/nexday/unmapped',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('symbol_map', 'VIEW')] },
     async (_req, reply) => proxyGet('/api/v1/mappings/nexday/unmapped', reply)
   );
 
   fastify.post('/mappings/nexday',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('symbol_map', 'EDIT')] },
     async (req, reply) => proxyPost('/api/v1/mappings/nexday', req.body, reply)
   );
 
   fastify.post('/mappings/nexday/bulk',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('symbol_map', 'EDIT')] },
     async (req, reply) => proxyPost('/api/v1/mappings/nexday/bulk', req.body, reply)
   );
 
   fastify.delete('/mappings/nexday',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('symbol_map', 'EDIT')] },
     async (req: FastifyRequest, reply) => {
       const { confirm } = req.query as { confirm?: string };
       if (confirm !== 'true') return reply.code(400).send({ error: 'confirm=true query param required' });
@@ -71,7 +72,7 @@ export async function predictionsRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   fastify.delete('/mappings/nexday/:id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('symbol_map', 'EDIT')] },
     async (req: FastifyRequest, reply) => {
       const { id } = req.params as { id: string };
       return proxyDelete(`/api/v1/mappings/nexday/${id}`, reply);
@@ -79,22 +80,22 @@ export async function predictionsRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   fastify.get('/mappings/history',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('symbol_map', 'VIEW')] },
     async (req, reply) => proxyGet('/api/v1/mappings/history', reply, req.query as Record<string, unknown>)
   );
 
   fastify.get('/predictions/status',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
     async (_req, reply) => proxyGet('/api/v1/predictions/status', reply)
   );
 
   fastify.get('/predictions/signals',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
     async (req, reply) => proxyGet('/api/v1/predictions/signals', reply, req.query as Record<string, unknown>)
   );
 
   fastify.get('/predictions/intraday/:mt5_symbol',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
     async (req: FastifyRequest, reply) => {
       const { mt5_symbol } = req.params as { mt5_symbol: string };
       return proxyGet(`/api/v1/predictions/intraday/${mt5_symbol}`, reply);
@@ -102,7 +103,7 @@ export async function predictionsRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   fastify.get('/predictions/daily/:mt5_symbol',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
     async (req: FastifyRequest, reply) => {
       const { mt5_symbol } = req.params as { mt5_symbol: string };
       return proxyGet(`/api/v1/predictions/daily/${mt5_symbol}`, reply);

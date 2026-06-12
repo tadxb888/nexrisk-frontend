@@ -15,6 +15,7 @@
 // ============================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { z } from 'zod';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
@@ -25,6 +26,10 @@ const lpIdParams = z.object({
 
 // ── Route module ──────────────────────────────────────────────
 export async function routeSanityRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'route_sanity' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('route_sanity'));
 
   // ── GET /route-sanity/lps ────────────────────────────────────
   // Returns all enabled LP admin configs merged with live FIX status.

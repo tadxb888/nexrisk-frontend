@@ -18,6 +18,7 @@
 // keeps its own symbol catalog. See migration 029 + SymbolMappingCache changes.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { z } from 'zod';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
@@ -101,6 +102,10 @@ const snapQuoteQuery = z.object({
 // ── Route Module ─────────────────────────────────────────────
 
 export async function symbolMappingRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'symbol_map' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('symbol_map'));
 
   // ── Reference data ───────────────────────────────────────────
   // NOTE: specific sub-paths registered BEFORE /:id wildcard

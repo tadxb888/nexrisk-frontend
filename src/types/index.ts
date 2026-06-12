@@ -27,12 +27,20 @@ export type Capability =
   | 'predictions.read'
   | 'llm.status';
 
+/** Permission levels, low → high. Absent/`NONE` means no access. */
+export type PermissionLevel = 'NONE' | 'VIEW' | 'EDIT' | 'FULL' | 'CRUD' | 'SU';
+
+/** module key → level. Mirrors the JWT `permissions` claim; absent key == NONE. */
+export type Permissions = Record<string, string>;
+
 export interface User {
   id: string;
   email: string;
   name: string;
   role: Role;
   capabilities: Capability[];
+  /** Per-module access levels from the session/JWT. */
+  permissions: Permissions;
 }
 
 // =============================================================================

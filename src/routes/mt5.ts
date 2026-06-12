@@ -83,7 +83,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/mt5/nodes/test',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.post('/api/v1/mt5/nodes/test', request.body);
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -97,7 +97,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/mt5/nodes',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.post('/api/v1/mt5/nodes', request.body);
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -126,7 +126,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.put(
     '/mt5/nodes/:id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.put(`/api/v1/mt5/nodes/${id}`, request.body);
@@ -141,7 +141,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.delete(
     '/mt5/nodes/:id',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.delete(`/api/v1/mt5/nodes/${id}`);
@@ -155,7 +155,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/mt5/nodes/:id/connect',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/connect`);
@@ -169,7 +169,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/mt5/nodes/:id/disconnect',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/disconnect`);
@@ -184,7 +184,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/mt5/nodes/:id/test',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/test`);
@@ -282,7 +282,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/mt5/nodes/:id/books/:book/groups',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id, book } = bookParams.parse(request.params);
       const response = await nexriskApi.post(
@@ -336,7 +336,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.delete(
     '/mt5/nodes/:id/books/assignments/:assignmentId',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id, assignmentId } = assignmentParams.parse(request.params);
       const response = await nexriskApi.delete(
@@ -369,7 +369,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.post(
     '/books',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const response = await nexriskApi.post('/api/v1/books', request.body);
       if (!response.ok) return reply.code(response.status).send(response.error);
@@ -383,7 +383,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.delete(
     '/books/:book_name',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { book_name } = bookNameParams.parse(request.params);
       const response = await nexriskApi.delete(`/api/v1/books/${book_name}`);

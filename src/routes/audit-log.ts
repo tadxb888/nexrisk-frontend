@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { z } from 'zod';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
@@ -32,6 +33,10 @@ const AUDIT_QUERY_KEYS = [
 // ── Route module ──────────────────────────────────────────────
 
 export async function auditLogRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'logs' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('logs'));
 
   // ── GET /api/v1/audit/logs ────────────────────────────────────
   // Returns: { total, limit, offset, count, entries[] }  — no { success, data } wrapper.

@@ -17,9 +17,14 @@
 // ============================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { moduleGate } from '../middleware/auth.js';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
 export async function portfolioRoutes(fastify: FastifyInstance): Promise<void> {
+  // RBAC: gate this whole plugin to the 'portfolio' module.
+  // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
+  // requireCapability checks — can only further restrict, never loosen.)
+  fastify.addHook('preHandler', moduleGate('portfolio'));
 
   // ── GET /portfolio/summary ────────────────────────────────────
   // Returns portfolio table data: P&L, volumes, revenues by book.
