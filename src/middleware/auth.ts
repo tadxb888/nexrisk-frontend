@@ -202,6 +202,26 @@ export async function registerAuth(fastify: FastifyInstance): Promise<void> {
     };
   });
 
+  // Add "any of these modules" permission check (OR semantics). Used where a
+  // single endpoint feeds more than one page/module — e.g. prediction data
+  // shown on both the Predictions page and the Net Exposure intraday monitor.
+  fastify.decorate('requireAnyPermission', function (modules: string[], level: string = 'VIEW') {
+    return async function (request: FastifyRequest, reply: FastifyReply) {
+      if (!config.authEnabled) return; // dev bypass, mirrors authenticate
+      if (!request.nexriskUser) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+      }
+      const perms = request.nexriskUser.permissions ?? {};
+      const ok = modules.some((m) => rankPerm(perms[m]) >= rankPerm(level));
+      if (!ok) {
+        return reply.code(403).send({
+          error: 'Forbidden',
+          details: `Requires ${level} on one of: ${modules.join(', ')}`,
+        });
+      }
+    };
+  });
+
   // Add role check decorator
   fastify.decorate('requireRole', function (roles: Role | Role[]) {
     const allowedRoles = Array.isArray(roles) ? roles : [roles];
@@ -232,6 +252,10 @@ declare module 'fastify' {
     ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requirePermission: (
       module: string,
+      level?: string
+    ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requireAnyPermission: (
+      modules: string[],
       level?: string
     ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }

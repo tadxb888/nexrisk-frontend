@@ -84,17 +84,17 @@ export async function predictionsRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   fastify.get('/predictions/status',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
+    { preHandler: [fastify.authenticate, fastify.requireAnyPermission(['predictions', 'net_exposure'], 'VIEW')] },
     async (_req, reply) => proxyGet('/api/v1/predictions/status', reply)
   );
 
   fastify.get('/predictions/signals',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
+    { preHandler: [fastify.authenticate, fastify.requireAnyPermission(['predictions', 'net_exposure'], 'VIEW')] },
     async (req, reply) => proxyGet('/api/v1/predictions/signals', reply, req.query as Record<string, unknown>)
   );
 
   fastify.get('/predictions/intraday/:mt5_symbol',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
+    { preHandler: [fastify.authenticate, fastify.requireAnyPermission(['predictions', 'net_exposure'], 'VIEW')] },
     async (req: FastifyRequest, reply) => {
       const { mt5_symbol } = req.params as { mt5_symbol: string };
       return proxyGet(`/api/v1/predictions/intraday/${mt5_symbol}`, reply);
@@ -102,7 +102,7 @@ export async function predictionsRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   fastify.get('/predictions/daily/:mt5_symbol',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read'), fastify.requirePermission('predictions', 'VIEW')] },
+    { preHandler: [fastify.authenticate, fastify.requireAnyPermission(['predictions', 'net_exposure'], 'VIEW')] },
     async (req: FastifyRequest, reply) => {
       const { mt5_symbol } = req.params as { mt5_symbol: string };
       return proxyGet(`/api/v1/predictions/daily/${mt5_symbol}`, reply);

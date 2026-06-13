@@ -32,7 +32,7 @@ export async function portfolioRoutes(fastify: FastifyInstance): Promise<void> {
   //   period — 'today' | 'week' | 'month'  (default: 'today')
   fastify.get(
     '/portfolio/summary',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('portfolio'); legacy config.read removed (monitoring roles lack it)
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { period = 'today' } = request.query as { period?: string };
 
@@ -56,7 +56,7 @@ export async function portfolioRoutes(fastify: FastifyInstance): Promise<void> {
   //   to   — YYYY-MM-DD  (default: today on C++ side)
   fastify.get(
     '/portfolio/pnl-history',
-    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('portfolio'); legacy config.read removed (monitoring roles lack it)
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { from, to } = request.query as { from?: string; to?: string };
 
