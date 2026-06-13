@@ -6,6 +6,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { mt5Api, type MT5NodeAPI, type MT5GroupAPI } from '@/services/api';
 import { clsx } from 'clsx';
+import { useAuth } from '@/stores/AuthContext';
 
 // ============================================================
 // ICONS — SVG only, no emojis
@@ -320,6 +321,8 @@ function NodeCard({ node, onEdit, onDelete, onConnect, onDisconnect, onPromote }
   const isBusy  = node.connection_status === 'CONNECTING' || node.connection_status === 'RECONNECTING';
   const isMaster  = node.node_type === 'MASTER';
   const isStandby = node.node_type === 'STANDBY';
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('mt5_servers', 'EDIT');
 
   return (
     <div className="panel flex flex-col overflow-hidden"
@@ -373,7 +376,8 @@ function NodeCard({ node, onEdit, onDelete, onConnect, onDisconnect, onPromote }
         )}
       </div>
 
-      {/* Footer */}
+      {/* Footer — write controls; hidden without EDIT on mt5_servers */}
+      {canEdit && (
       <div className="px-3 py-2.5 border-t border-border flex items-center gap-1.5 flex-wrap">
         {/* Connect / Disconnect — text-only buttons */}
         {isConn ? (
@@ -413,6 +417,7 @@ function NodeCard({ node, onEdit, onDelete, onConnect, onDisconnect, onPromote }
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -1282,20 +1287,26 @@ function NodesTab({ nodes, onEdit, onDelete, onConnect, onDisconnect, onPromote,
   onPromote:    (n: MT5Node) => void;
   onAdd:        () => void;
 }) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('mt5_servers', 'EDIT');
   return (
     <div className="space-y-4">
+      {canEdit && (
       <div className="flex items-center justify-end">
         <button onClick={onAdd} className="btn btn-primary text-xs flex items-center gap-1.5">
           <IcoPlus /> Add Node
         </button>
       </div>
+      )}
       {nodes.length === 0 ? (
         <div className="panel flex items-center justify-center" style={{ minHeight: 220 }}>
           <div className="text-center">
             <p className="text-text-muted text-sm mb-3">No nodes configured</p>
+            {canEdit && (
             <button onClick={onAdd} className="btn btn-primary text-xs flex items-center gap-1.5 mx-auto">
               <IcoPlus /> Add Node
             </button>
+            )}
           </div>
         </div>
       ) : (
@@ -1357,6 +1368,8 @@ function BookPanel({ book, rows, onRemove, onReassign }: {
   };
 
   const hasSelection = selected.size > 0;
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('mt5_servers', 'EDIT');
 
   return (
     <div className="panel overflow-hidden flex-1"
@@ -1365,7 +1378,7 @@ function BookPanel({ book, rows, onRemove, onReassign }: {
       {/* Header */}
       <div className="px-3 py-2 border-b border-border flex items-center gap-2">
         {/* Select-all checkbox */}
-        {rows.length > 0 && (
+        {canEdit && rows.length > 0 && (
           <input type="checkbox" checked={allChecked}
             ref={el => { if (el) el.indeterminate = someChecked; }}
             onChange={toggleAll}
@@ -1376,7 +1389,7 @@ function BookPanel({ book, rows, onRemove, onReassign }: {
         <span className="text-sm font-semibold text-text-primary flex-1">{book}-Book</span>
 
         {/* Actions — only visible when something is selected */}
-        {hasSelection && (
+        {canEdit && hasSelection && (
           <div className="flex items-center gap-1.5">
             {/* Re-assign */}
             <div style={{ position: 'relative' }} ref={ddRef}>
@@ -1422,8 +1435,10 @@ function BookPanel({ book, rows, onRemove, onReassign }: {
           : rows.map(a => (
             <div key={a.id}
               className="flex items-center gap-2 py-1.5 text-xs border-b border-border last:border-0">
+              {canEdit && (
               <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleOne(a.id)}
                 style={{ width: 13, height: 13, accentColor: BOOK_COLOR[book], cursor: 'pointer', flexShrink: 0 }} />
+              )}
               <span className="font-mono text-text-secondary truncate flex-1" title={a.group_name}>
                 {shortPath(a.group_name)}
               </span>
@@ -1544,6 +1559,8 @@ function BookMappingTab({ nodes }: { nodes: MT5Node[] }) {
 
   const selNode = nodes.find(n => n.id === nodeId);
   const isConn  = selNode?.connection_status === 'CONNECTED';
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('mt5_servers', 'EDIT');
 
   // Load assignments whenever the selected node changes
   const loadAssignments = useCallback(async (id: number) => {
@@ -1699,7 +1716,8 @@ function BookMappingTab({ nodes }: { nodes: MT5Node[] }) {
                 />
             }
           </div>
-          {/* Assign footer */}
+          {/* Assign footer — hidden without EDIT on mt5_servers */}
+          {canEdit && (
           <div className="px-3 py-2.5 border-t border-border flex items-center gap-2">
             <span className="text-xs text-text-muted flex-shrink-0">Assign to</span>
             <div className="flex gap-1">
@@ -1721,6 +1739,7 @@ function BookMappingTab({ nodes }: { nodes: MT5Node[] }) {
               {assigning ? 'Assigning…' : `Assign${selected.size ? ` (${selected.size})` : ''}`}
             </button>
           </div>
+          )}
         </div>
 
         {/* RIGHT: Book panels */}
