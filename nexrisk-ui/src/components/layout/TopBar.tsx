@@ -313,7 +313,7 @@ export function TopBar() {
       <NavLink
         key={item.path}
         to={item.path}
-        className="group flex items-center gap-1 px-1 text-[14px] transition-colors"
+        className="group flex items-center gap-1 px-1 text-[13px] transition-colors"
         style={{ color: isActive ? COLOR_ACCENT : COLOR_SUB_DEFAULT }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#fff'; }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = COLOR_SUB_DEFAULT; }}
@@ -459,7 +459,7 @@ export function TopBar() {
       {showGroupRow && (
         <div
           className="flex items-center px-4 gap-4 shrink-0 overflow-x-auto"
-          style={{ height: 32, backgroundColor: '#1f1e21', borderBottom: '1px solid #2f2f33' }}
+          style={{ height: 32, backgroundColor: '#1f1e21', borderTop: '1px solid rgba(78,205,196,0.35)', borderBottom: '1px solid #2f2f33' }}
         >
           {/* subtle indent — children sit under the group row, past the logo */}
           <div className="shrink-0" style={{ width: 40 }} />
