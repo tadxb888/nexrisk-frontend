@@ -106,10 +106,21 @@ async function proxyWriteRaw(
 // ─────────────────────────────────────────────────────────────
 
 export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
-  // RBAC: gate this whole plugin to the 'settings' module.
+  // RBAC: the classifier / detection / llm settings ARE the Archetype
+  // Intelligence page's data, so those routes gate on the 'archetype' module.
+  // Everything else in this plugin is genuine platform settings ('settings').
   // GET/HEAD require VIEW; mutations require EDIT. (Layered over existing
   // requireCapability checks — can only further restrict, never loosen.)
-  fastify.addHook('preHandler', moduleGate('settings'));
+  const settingsGate  = moduleGate('settings');
+  const archetypeGate = moduleGate('archetype');
+  fastify.addHook('preHandler', async (request, reply) => {
+    const path = request.url;
+    const isArchetypeData =
+      path.includes('/settings/classifier') ||
+      path.includes('/settings/detection') ||
+      path.includes('/settings/llm');
+    return (isArchetypeData ? archetypeGate : settingsGate)(request, reply);
+  });
 
   // ══════════════════════════════════════════════════════════
   // GLOBAL
