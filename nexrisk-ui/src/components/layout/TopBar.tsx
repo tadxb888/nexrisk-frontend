@@ -288,7 +288,7 @@ export function TopBar() {
       <button
         key={id}
         onClick={() => setActiveGroupId(id)}
-        className="px-2.5 py-0.5 text-[13px] rounded transition-colors"
+        className="px-2.5 py-0.5 text-[14px] rounded transition-colors"
         style={{
           border: `1px solid ${isActive ? COLOR_GROUP : COLOR_BORDER_MUTED}`,
           color: isActive ? COLOR_GROUP : COLOR_TEXT_DEFAULT,
@@ -313,7 +313,7 @@ export function TopBar() {
       <NavLink
         key={item.path}
         to={item.path}
-        className="group flex items-center gap-1 px-1 text-[12px] transition-colors"
+        className="group flex items-center gap-1 px-1 text-[13px] transition-colors"
         style={{ color: isActive ? COLOR_ACCENT : COLOR_SUB_DEFAULT }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#fff'; }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = COLOR_SUB_DEFAULT; }}
@@ -348,7 +348,7 @@ export function TopBar() {
       {/* ── Row 1: Group row + chrome ───────────────────────────────── */}
       <header
         className="flex items-center px-4 shrink-0 gap-3"
-        style={{ height: 56, backgroundColor: '#232326', borderBottom: '1px solid #3a3a3e' }}
+        style={{ height: 44, backgroundColor: '#232326', borderBottom: '1px solid #3a3a3e' }}
       >
         {/* Logo */}
         <div className="flex items-center shrink-0" style={{ marginRight: 12 }}>
