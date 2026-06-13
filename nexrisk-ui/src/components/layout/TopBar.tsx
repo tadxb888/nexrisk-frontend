@@ -483,7 +483,7 @@ export function TopBar() {
           the BBookPage reference. */}
       <div
         className="shrink-0 flex items-center px-4 gap-2"
-        style={{ height: 56, paddingTop: 8, paddingBottom: 8, backgroundColor: '#1c1b1e', borderBottom: '1px solid #808080' }}
+        style={{ height: 56, paddingTop: 8, paddingBottom: 8, backgroundColor: '#1c1b1e', borderTop: '1px solid rgba(78,205,196,0.35)', borderBottom: '1px solid #808080' }}
         aria-label="Reserved strip — FX cells (left); app-wide notifications + portfolio card on /portfolio (right)"
       >
         {/* Left half — Alerts Bar (FX cells, ≤ 50% of bar width). */}
