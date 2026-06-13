@@ -8,6 +8,16 @@
 //
 // Each item carries the permission `module` key it gates against. See
 // Frontend_Role_Menu_Spec.md for the authoritative menu→module table.
+//
+// NOTE: `label` strings are display-only. The `module` keys and route
+// `path`s are the stable contract (gates, guard, URLs, C++) and are NOT
+// renamed here — only the human-facing labels are.
+//
+// Groups follow a monitor / configure split:
+//   Summary    — at-a-glance firm view
+//   Trading    — live books + actions (where trading flow lives)
+//   Monitor    — things you watch but do not configure
+//   Configure  — things you tune; the system then runs on them
 // ============================================
 
 export interface SubItem {
@@ -27,59 +37,47 @@ export interface NavSection {
 // ── Navigation definition ────────────────────────────────────
 export const NAV_SECTIONS: NavSection[] = [
   {
-    id: 'overview',
-    label: 'Overview',
+    id: 'summary',
+    label: 'Summary',
     items: [
-      { path: '/',              label: 'Cockpit',      module: 'cockpit' },
-      { path: '/portfolio',     label: 'Portfolio',    module: 'portfolio' },
-      { path: '/net-exposure',  label: 'Net Exposure', module: 'net_exposure' },
+      { path: '/',          label: 'Cockpit',   module: 'cockpit' },
+      { path: '/portfolio', label: 'Portfolio', module: 'portfolio' },
     ],
   },
   {
-    id: 'flow',
-    label: 'Intel',
+    id: 'trading',
+    label: 'Trading',
     items: [
-      { path: '/flow',         label: 'Profiler',     module: 'focus' },
-      { path: '/predictions',  label: 'Predictions',  module: 'predictions' },
-      { path: '/archetypes',   label: 'Archetypes',   module: 'archetype' },
-      { path: '/risk-charter', label: 'Risk Charter', module: 'charter' },
+      { path: '/net-exposure',       label: 'Net Exposure',       module: 'net_exposure' },
+      { path: '/b-book',             label: 'B-Book',             module: 'bbook' },
+      { path: '/coverage-book',      label: 'Coverage',           module: 'coverage' },
+      { path: '/hedging-strategies', label: 'Hedging Strategies', module: 'hedge_strat' },
+      { path: '/execution-report',   label: 'Execution Report',   module: 'exec_report' },
     ],
   },
   {
-    id: 'execution',
-    label: 'Execution',
+    id: 'monitor',
+    label: 'Monitor',
     items: [
-      { path: '/b-book',              label: 'B-Book',             module: 'bbook' },
-      { path: '/coverage-book',       label: 'Coverage Book',      module: 'coverage' },
-      { path: '/hedging-strategies',  label: 'Hedging Strategies', module: 'hedge_strat' },
-      { path: '/execution-report',    label: 'Execution Report',   module: 'exec_report' },
+      { path: '/flow',        label: 'Traders', module: 'focus' },
+      { path: '/predictions', label: 'Predictions',     module: 'predictions' },
+      { path: '/logs',        label: 'Logs',            module: 'logs' },
+      { path: '/reports',     label: 'Reports',         module: 'reports' },
     ],
   },
   {
-    id: 'markets',
-    label: 'Markets',
+    id: 'configure',
+    label: 'Configure',
     items: [
-      { path: '/liquidity-providers', label: 'Liquidity Providers', module: 'lp_admin' },
+      { path: '/archetypes',          label: 'Behaviour Rules',     module: 'archetype' },
+      { path: '/risk-charter',        label: 'Risk Policy',         module: 'charter' },
+      { path: '/price-rules',         label: 'Price Rules Engine',  module: 'price_rules' },
       { path: '/symbol-mapping',      label: 'Symbol Mapping',      module: 'symbol_map' },
       { path: '/route-sanity',        label: 'Route Sanity',        module: 'route_sanity' },
-      { path: '/price-rules',         label: 'Price Rules Engine',  module: 'price_rules' },
-    ],
-  },
-  {
-    id: 'control',
-    label: 'Control',
-    items: [
-      { path: '/logs',     label: 'Logs',     module: 'logs' },
-      { path: '/reports',  label: 'Reports',  module: 'reports' },
-      { path: '/users',    label: 'Users',    module: 'users' },
-      { path: '/settings', label: 'Settings', module: 'settings' },
-    ],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    items: [
-      { path: '/mt5-servers', label: 'MT5 Servers', module: 'mt5_servers' },
+      { path: '/liquidity-providers', label: 'Liquidity Providers', module: 'lp_admin' },
+      { path: '/mt5-servers',         label: 'MT5 Servers',         module: 'mt5_servers' },
+      { path: '/settings',            label: 'Settings',            module: 'settings' },
+      { path: '/users',               label: 'Users',               module: 'users' },
     ],
   },
 ];
