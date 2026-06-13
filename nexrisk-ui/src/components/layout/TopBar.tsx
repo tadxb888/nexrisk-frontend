@@ -236,8 +236,14 @@ export function TopBar() {
   // member row always reflects where you are. (Favourites is a launcher: you
   // open it, pick a page, and land in that page's structural group.)
   useEffect(() => {
-    const owner = sectionForPath(location.pathname);
-    if (owner) setActiveGroupId(owner.id);
+    // Don't yank the user out of Favourites: while browsing favourites,
+    // clicking one navigates but keeps the Favourites row open so they can
+    // pick another. In a structural group, follow the page into its group.
+    setActiveGroupId(prev => {
+      if (prev === FAVOURITES_ID) return prev;
+      const owner = sectionForPath(location.pathname);
+      return owner ? owner.id : prev;
+    });
   }, [location.pathname]);
 
   // Favourites drained while selected → fall back to a structural group.
@@ -282,7 +288,7 @@ export function TopBar() {
       <button
         key={id}
         onClick={() => setActiveGroupId(id)}
-        className="px-3 py-1 text-[13px] rounded transition-colors"
+        className="px-2.5 py-0.5 text-[13px] rounded transition-colors"
         style={{
           border: `1px solid ${isActive ? COLOR_GROUP : COLOR_BORDER_MUTED}`,
           color: isActive ? COLOR_GROUP : COLOR_TEXT_DEFAULT,
@@ -352,7 +358,7 @@ export function TopBar() {
         {/* Group row — structural groups + Favourites, permission-filtered.
             Collapses to the single group's items when there's nothing to
             switch between. */}
-        <nav className="flex items-center gap-2 flex-1 min-w-0 overflow-x-auto">
+        <nav className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto">
           {showGroupRow ? (
             <>
               {accessibleGroups.map(section =>
