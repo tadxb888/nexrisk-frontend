@@ -41,11 +41,12 @@ export { NAV_SECTIONS, moduleForPath };
 export type { SubItem, NavSection };
 
 // ── Colours ──────────────────────────────────────────────────
-const COLOR_ACCENT        = '#49b3b3'; // teal — selected group + active sub
-const COLOR_ACCENT_BG     = '#163a3a'; // teal fill behind the active sub
-const COLOR_BORDER_MUTED  = '#444';    // inactive pill border
+const COLOR_GROUP         = '#f5802c'; // amber — selected group pill (parent)
+const COLOR_ACCENT        = '#49b3b3'; // teal  — active sub + pinned star
+const COLOR_SUB_DEFAULT   = '#ddd';    // soft white — inactive sub text
+const COLOR_BORDER_MUTED  = '#444';    // inactive group pill border
 const COLOR_BORDER_HOVER  = '#666';    // hover affordance
-const COLOR_TEXT_DEFAULT  = '#fff';
+const COLOR_TEXT_DEFAULT  = '#fff';    // group pill text (inactive)
 
 // Sentinel id for the Favourites tab (not a structural NavSection).
 const FAVOURITES_ID = '__favourites__';
@@ -273,38 +274,32 @@ export function TopBar() {
 
   // ── Render helpers ─────────────────────────────────────────
 
-  /** Top-row group pill. Clicking selects the group (switches the member
-   *  row); it does NOT navigate. The group owning the current page shows a
-   *  "you-are-here" underline while a different group is being previewed. */
-  const renderGroupPill = (id: string, label: string, ownsCurrent: boolean) => {
+  /** Top-row group pill (parent). Amber border when selected. Clicking
+   *  selects the group (switches the member row); it does NOT navigate. */
+  const renderGroupPill = (id: string, label: string) => {
     const isActive = activeGroupId === id;
     return (
       <button
         key={id}
         onClick={() => setActiveGroupId(id)}
-        className="relative px-3 py-1 text-[13px] rounded transition-colors"
+        className="px-3 py-1 text-[13px] rounded transition-colors"
         style={{
-          border: `1px solid ${isActive ? COLOR_ACCENT : COLOR_BORDER_MUTED}`,
-          color: isActive ? COLOR_ACCENT : COLOR_TEXT_DEFAULT,
+          border: `1px solid ${isActive ? COLOR_GROUP : COLOR_BORDER_MUTED}`,
+          color: isActive ? COLOR_GROUP : COLOR_TEXT_DEFAULT,
           backgroundColor: 'transparent',
         }}
         onMouseEnter={e => { if (!isActive) e.currentTarget.style.borderColor = COLOR_BORDER_HOVER; }}
         onMouseLeave={e => { if (!isActive) e.currentTarget.style.borderColor = COLOR_BORDER_MUTED; }}
       >
         {label}
-        {ownsCurrent && !isActive && (
-          <div
-            className="absolute h-[2px] rounded-full"
-            style={{ bottom: 1, left: 8, right: 8, backgroundColor: COLOR_ACCENT }}
-          />
-        )}
       </button>
     );
   };
 
-  /** Member-row pill — a navigable page with a pin toggle. The active page
-   *  gets the teal fill; in Favourites the (filled) pin is always shown. */
-  const renderMemberPill = (item: SubItem, alwaysShowPin: boolean) => {
+  /** Member-row item (child) — bare text, lighter than the parent pills.
+   *  Active page: teal text + teal underline. Soft white otherwise; brightens
+   *  on hover. Pin sits inline (always shown in Favourites). */
+  const renderMemberItem = (item: SubItem, alwaysShowPin: boolean) => {
     const isActive = location.pathname === item.path;
     const pinned = pins.includes(item.path);
 
@@ -312,27 +307,27 @@ export function TopBar() {
       <NavLink
         key={item.path}
         to={item.path}
-        className="group relative flex items-center gap-1.5 px-3 py-1 text-[13px] rounded transition-colors"
-        style={{
-          border: `1px solid ${isActive ? COLOR_ACCENT : COLOR_BORDER_MUTED}`,
-          color: isActive ? COLOR_ACCENT : COLOR_TEXT_DEFAULT,
-          backgroundColor: isActive ? COLOR_ACCENT_BG : 'transparent',
-        }}
-        onMouseEnter={e => {
-          if (!isActive) (e.currentTarget as HTMLAnchorElement).style.borderColor = COLOR_BORDER_HOVER;
-        }}
-        onMouseLeave={e => {
-          if (!isActive) (e.currentTarget as HTMLAnchorElement).style.borderColor = COLOR_BORDER_MUTED;
-        }}
+        className="group flex items-center gap-1 px-1 text-[12px] transition-colors"
+        style={{ color: isActive ? COLOR_ACCENT : COLOR_SUB_DEFAULT }}
+        onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#fff'; }}
+        onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = COLOR_SUB_DEFAULT; }}
       >
-        <span>{item.label}</span>
+        <span className="relative">
+          {item.label}
+          {isActive && (
+            <span
+              className="absolute left-0 right-0"
+              style={{ bottom: -3, height: 1.5, backgroundColor: COLOR_ACCENT, borderRadius: 1 }}
+            />
+          )}
+        </span>
         <button
           onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
           className={clsx(
             (alwaysShowPin || pinned) ? 'inline-flex' : 'hidden group-hover:inline-flex',
             'items-center',
           )}
-          style={{ color: pinned ? COLOR_ACCENT : COLOR_TEXT_DEFAULT, padding: 0, lineHeight: 1 }}
+          style={{ color: pinned ? COLOR_ACCENT : COLOR_SUB_DEFAULT, padding: 0, lineHeight: 1 }}
           title={pinned ? 'Unpin from favourites' : 'Pin to favourites'}
         >
           <PinIcon filled={pinned} />
@@ -361,12 +356,12 @@ export function TopBar() {
           {showGroupRow ? (
             <>
               {accessibleGroups.map(section =>
-                renderGroupPill(section.id, section.label, activeSection?.id === section.id),
+                renderGroupPill(section.id, section.label),
               )}
-              {hasFavourites && renderGroupPill(FAVOURITES_ID, 'Favourites', false)}
+              {hasFavourites && renderGroupPill(FAVOURITES_ID, 'Favourites')}
             </>
           ) : (
-            collapsedItems.map(item => renderMemberPill(item, false))
+            collapsedItems.map(item => renderMemberItem(item, false))
           )}
         </nav>
 
@@ -457,13 +452,13 @@ export function TopBar() {
           in the group row above. ── */}
       {showGroupRow && (
         <div
-          className="flex items-center px-4 gap-2 shrink-0 overflow-x-auto"
-          style={{ height: 44, backgroundColor: '#1f1e21', borderBottom: '1px solid #2f2f33' }}
+          className="flex items-center px-4 gap-4 shrink-0 overflow-x-auto"
+          style={{ height: 32, backgroundColor: '#1f1e21', borderBottom: '1px solid #2f2f33' }}
         >
-          {/* spacer keeps the row aligned under the nav, past the logo */}
+          {/* subtle indent — children sit under the group row, past the logo */}
           <div className="shrink-0" style={{ width: 40 }} />
           {memberItems.map(item =>
-            renderMemberPill(item, activeGroupId === FAVOURITES_ID),
+            renderMemberItem(item, activeGroupId === FAVOURITES_ID),
           )}
         </div>
       )}
