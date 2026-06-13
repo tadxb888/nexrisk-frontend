@@ -313,7 +313,7 @@ export function TopBar() {
       <NavLink
         key={item.path}
         to={item.path}
-        className="group flex items-center gap-1 px-1 text-[13px] transition-colors"
+        className="group flex items-center gap-1 px-1 text-[14px] transition-colors"
         style={{ color: isActive ? COLOR_ACCENT : COLOR_SUB_DEFAULT }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#fff'; }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = COLOR_SUB_DEFAULT; }}
