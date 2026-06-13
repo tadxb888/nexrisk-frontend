@@ -394,7 +394,8 @@ type ModalState =
   | { type: 'resendInvite'; user: PlatformUser };
 
 export function UserManagementPage() {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, hasPermission } = useAuth();
+  const canEdit = hasPermission('users', 'EDIT');
 
   const [users, setUsers]           = useState<PlatformUser[]>([]);
   const [roles, setRoles]           = useState<Role[]>([]);
@@ -527,6 +528,7 @@ export function UserManagementPage() {
           <option value="PENDING">Pending Enrollment</option>
         </select>
 
+        {canEdit && (
         <div className="ml-auto">
           <button onClick={() => setModal({ type: 'add' })}
             className="flex items-center gap-2 px-4 py-1.5 rounded text-sm font-semibold font-mono bg-accent text-background hover:bg-accent-hover transition-colors">
@@ -538,6 +540,7 @@ export function UserManagementPage() {
             Add User
           </button>
         </div>
+        )}
       </div>
 
       {/* Table */}
@@ -581,6 +584,7 @@ export function UserManagementPage() {
                     {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
                   </td>
                   <td className="px-6 py-3">
+                    {canEdit && (
                     <div className="flex items-center justify-end gap-2">
                       <button onClick={() => setModal({ type: 'editName', user: u })}
                         className="px-2.5 py-1 rounded text-xs font-mono text-text-secondary border border-border hover:text-accent hover:border-accent transition-colors">
@@ -612,6 +616,7 @@ export function UserManagementPage() {
                         )
                       )}
                     </div>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -11,6 +11,7 @@ import React, { useState, useCallback, useContext, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { clsx } from 'clsx';
+import { useAuth } from '@/stores/AuthContext';
 import { clusteringApi } from '@/services/api';
 
 // ─────────────────────────────────────────────
@@ -127,6 +128,8 @@ function FModified({ label, hint, path, current, children }: {
 
 // Reset to factory button — used inside drawers
 function ResetBtn({ onClick, loading }: { onClick: () => void; loading: boolean }) {
+  const { hasPermission } = useAuth();
+  if (!hasPermission('archetype', 'EDIT')) return null;
   return (
     <button
       onClick={onClick}
@@ -225,6 +228,8 @@ function ConfirmResetModal({ onConfirm, onCancel, loading }: {
 
 // Reset All button for tab headers
 function ResetAllBtn({ onClick }: { onClick: () => void }) {
+  const { hasPermission } = useAuth();
+  if (!hasPermission('archetype', 'EDIT')) return null;
   return (
     <button
       onClick={onClick}
@@ -236,6 +241,8 @@ function ResetAllBtn({ onClick }: { onClick: () => void }) {
 }
 
 function EditBtn({ onClick }: { onClick: () => void }) {
+  const { hasPermission } = useAuth();
+  if (!hasPermission('archetype', 'EDIT')) return null;
   return (
     <button onClick={onClick} className="text-xs text-white/50 hover:text-white border border-white/20 px-2 py-0.5 rounded transition-colors shrink-0">
       Edit
@@ -255,6 +262,8 @@ function Drawer({
   children: React.ReactNode;
   onReset?: () => void; resetting?: boolean;
 }) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('archetype', 'EDIT');
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -272,9 +281,11 @@ function Drawer({
         <div className="flex-1 overflow-y-auto p-5 space-y-3">{children}</div>
         {error && <div className="px-5 py-2 bg-red-950/20 border-t border-red-900/15 text-xs text-red-500">{error}</div>}
         <div className="border-t border-[#3a3a3c] px-5 py-4 flex gap-3">
+          {canEdit && (
           <button onClick={onSave} disabled={saving} className="flex-1 text-sm py-2 rounded bg-[#4a7a8a] text-[#1e1e20] font-semibold hover:bg-[#4a7a8a] disabled:opacity-50 transition-colors">
             {saving ? 'Saving…' : 'Save Changes'}
           </button>
+          )}
           {onReset && <ResetBtn onClick={onReset} loading={!!resetting} />}
           <button onClick={onClose} className="px-4 text-sm py-2 rounded border border-[#3a3a3c] text-white/50 hover:text-white transition-colors">Cancel</button>
         </div>
@@ -326,6 +337,9 @@ type DrawerKind = null | 'global' | 'risk_severity' | 'decision_engine' | 'anoma
 
 function ClassifierTab({ cfg }: { cfg: any }) {
   const qc = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('archetype', 'EDIT');
+
   const [dk, setDk] = useState<DrawerKind>(null);
   const [form, setForm] = useState<Record<string, any>>({});
   const [err, setErr] = useState<string | null>(null);
@@ -490,7 +504,7 @@ function ClassifierTab({ cfg }: { cfg: any }) {
               <Card key={d.key} className="!p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-semibold" style={{ color: d.color }}>{d.label}</span>
-                  <button onClick={() => open({ detector: d.key }, det ? { ...det } : {})} className="text-sm text-orange-500 hover:text-white transition-colors">Edit</button>
+                  {canEdit && <button onClick={() => open({ detector: d.key }, det ? { ...det } : {})} className="text-sm text-orange-500 hover:text-white transition-colors">Edit</button>}
                 </div>
                 {det ? (
                   <div className="space-y-0.5">
@@ -849,6 +863,9 @@ function fmtRelTime(iso?: string) {
 
 function ClusteringTab() {
   const qc = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('archetype', 'EDIT');
+
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [cfgDrawer, setCfgDrawer] = useState(false);
   const [cfgForm, setCfgForm] = useState<Record<string, any>>({});
@@ -987,6 +1004,7 @@ function ClusteringTab() {
             <span>Mapped: <span className="text-green-500 font-mono">{profiles.filter((p: any) => p.mappedArchetypeId).length}</span></span>
           </div>
           <div className="ml-auto">
+            {canEdit && (
             <button
               onClick={() => triggerRun.mutate()}
               disabled={triggerRun.isPending}
@@ -994,6 +1012,7 @@ function ClusteringTab() {
             >
               {triggerRun.isPending ? '⟳ Running…' : '▶ Run Clustering'}
             </button>
+            )}
           </div>
         </div>
 
@@ -1006,9 +1025,11 @@ function ClusteringTab() {
               <div className="h-full flex items-center justify-center">
                 <div className="text-center py-12">
                   <div className="text-sm text-white/50 mb-3">No clustering runs found</div>
+                  {canEdit && (
                   <button onClick={() => triggerRun.mutate()} className="text-xs px-4 py-2 rounded border border-white/20 text-white/60 hover:bg-white/5 transition-colors">
                     Run first clustering
                   </button>
+                  )}
                 </div>
               </div>
             ) : loadingProfiles ? (
@@ -1315,6 +1336,9 @@ type LLMDrawer = null | 'providers' | 'claude' | 'ollama' | 'api_key' | 'routing
 
 function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
   const qc = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('archetype', 'EDIT');
+
   const [dk, setDk] = useState<LLMDrawer>(null);
   const [form, setForm] = useState<Record<string, any>>({});
   const [err, setErr] = useState<string | null>(null);
@@ -1446,7 +1470,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2"><SectionLabel>Claude</SectionLabel>{claude && <Toggle on={claude.enabled} />}</div>
             <div className="flex gap-1">
-              <button onClick={() => open('api_key', { api_key: '' })} className="text-xs text-white/50 hover:text-white border border-zinc-700 px-1.5 py-0.5 rounded transition-colors">Key</button>
+              {canEdit && <button onClick={() => open('api_key', { api_key: '' })} className="text-xs text-white/50 hover:text-white border border-zinc-700 px-1.5 py-0.5 rounded transition-colors">Key</button>}
               <EditBtn onClick={() => open('claude', claude ? { enabled: claude.enabled, model: claude.model, timeout_sec: claude.timeout_sec, max_tokens: claude.max_tokens, temperature: claude.temperature } : {})} />
             </div>
           </div>

@@ -6,6 +6,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/stores/AuthContext';
 
 // ── API ───────────────────────────────────────────────────────
 const BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8080';
@@ -459,6 +460,8 @@ function DeleteConfirm({ m, onConfirm, onClose }: { m: LPMapping; onConfirm: () 
 // ── Main Page ──────────────────────────────────────────────────
 export function SymbolMappingPage() {
   const qc = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('symbol_map', 'EDIT');
 
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -952,7 +955,7 @@ export function SymbolMappingPage() {
           {unmappedPending.length > 0 && <span style={{ color: '#e0a020' }} className="font-mono">{unmappedPending.length} unmapped</span>}
           <div className="w-px h-4 bg-[#505050]" />
           <button onClick={() => setHistoryOpen(true)} className="text-white hover:text-white flex items-center gap-1.5"><IcoHistory />Import Log</button>
-          <button onClick={() => setBulkOpen(true)} className="text-white hover:text-white flex items-center gap-1.5"><IcoUpload />Bulk CSV</button>
+          {canEdit && <button onClick={() => setBulkOpen(true)} className="text-white hover:text-white flex items-center gap-1.5"><IcoUpload />Bulk CSV</button>}
         </div>
       </div>
 
@@ -960,11 +963,12 @@ export function SymbolMappingPage() {
       {unmappedPending.length > 0 && (
         <div className="px-4 py-2 border-b border-[#c08820] flex items-center justify-between text-xs flex-shrink-0" style={{ backgroundColor: '#2a2010' }}>
           <span style={{ color: '#e0a020' }}>⚠ {unmappedPending.length} symbol{unmappedPending.length !== 1 ? 's' : ''} with open positions have no LP mapping: <span className="font-mono">{unmappedPending.map(u => u.mt5_symbol).join(', ')}</span></span>
-          <button onClick={() => setAutoMapRows(buildAutoMapRows())} className="ml-4 text-xs px-2.5 py-1 rounded" style={{ backgroundColor: '#1a1e20', color: '#49b3b3', border: '1px solid #2a4040' }}>Review &amp; Map →</button>
+          {canEdit && <button onClick={() => setAutoMapRows(buildAutoMapRows())} className="ml-4 text-xs px-2.5 py-1 rounded" style={{ backgroundColor: '#1a1e20', color: '#49b3b3', border: '1px solid #2a4040' }}>Review &amp; Map →</button>}
         </div>
       )}
 
-      {/* Add Mapping bar */}
+      {/* Add Mapping bar — hidden without EDIT on symbol_map */}
+      {canEdit && (
       <div className="px-4 py-2 border-b border-[#505050] flex items-center gap-3 flex-wrap flex-shrink-0" style={{ backgroundColor: '#2a292c' }}>
         <span className="text-[10px] text-[#ccc] uppercase tracking-wider font-medium whitespace-nowrap">Add Mapping</span>
         <select value={nodeId ?? ''} onChange={e => setNodeId(e.target.value === '' ? null : Number(e.target.value))} className={iCls} style={{ width: 150, color: '#fff' }}>
@@ -996,6 +1000,7 @@ export function SymbolMappingPage() {
         {addErr && <span className="text-xs text-[#ff5c5c] font-mono flex items-center gap-1"><IcoWarn />{addErr}</span>}
         {statusMsg && <span className="text-xs font-mono ml-auto" style={{ color: statusMsg.ok ? '#66e07a' : '#ff5c5c' }}>{statusMsg.text}</span>}
       </div>
+      )}
 
       {/* Toolbar */}
       <div className="px-4 py-1.5 border-b border-[#404040] flex items-center gap-3 flex-shrink-0" style={{ backgroundColor: '#252427' }}>
@@ -1153,8 +1158,8 @@ export function SymbolMappingPage() {
                               <svg viewBox="0 0 24 24" fill="currentColor" width="9" height="9"><path d="M22,11h-3.28A6.993,6.993,0,0,0,13,5.28V2a1,1,0,0,0-2,0V5.28A6.993,6.993,0,0,0,5.28,11H2a1,1,0,0,0,0,2H5.28A6.993,6.993,0,0,0,11,18.72V22a1,1,0,0,0,2,0V18.72A6.993,6.993,0,0,0,18.72,13H22a1,1,0,0,0,0-2Z"/></svg>
                               {sq?.status === 'loading' ? '…' : 'Quote'}
                             </button>
-                            <button onClick={() => { setRowErr(null); startEdit(m); }} style={btnS({ backgroundColor: '#2a2a2c', color: '#fff', borderColor: '#404040' })}><IcoEdit />Edit</button>
-                            <button onClick={() => setDeleteTarget(m)} style={btnS({ backgroundColor: '#2c1417', color: '#ff5c5c', borderColor: '#5a2530' })}><IcoTrash /></button>
+                            {canEdit && <button onClick={() => { setRowErr(null); startEdit(m); }} style={btnS({ backgroundColor: '#2a2a2c', color: '#fff', borderColor: '#404040' })}><IcoEdit />Edit</button>}
+                            {canEdit && <button onClick={() => setDeleteTarget(m)} style={btnS({ backgroundColor: '#2c1417', color: '#ff5c5c', borderColor: '#5a2530' })}><IcoTrash /></button>}
                           </>
                         )}
                       </div>

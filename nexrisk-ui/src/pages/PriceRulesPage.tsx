@@ -6,6 +6,7 @@
 import React, {
   useState, useEffect, useCallback, useRef, useMemo,
 } from 'react';
+import { useAuth } from '@/stores/AuthContext';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 import { themeQuartz } from 'ag-grid-community';
@@ -713,6 +714,8 @@ const feedToForm = (f: FeedConfig): FeedForm => ({
 function FeedConfigTab({ feeds, onFeedsChange, stats }: {
   feeds: FeedConfig[]; onFeedsChange: (f: FeedConfig[]) => void; stats: FeedStats | null;
 }) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('price_rules', 'EDIT');
   const [drawerFeedId, setDrawerFeedId] = useState<number | 'new' | null>(null);
   const [selFeedId,    setSelFeedId]    = useState<number | null>(null);
   const [form, setForm]   = useState<FeedForm>(blankFeedForm());
@@ -873,7 +876,7 @@ function FeedConfigTab({ feeds, onFeedsChange, stats }: {
           display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
           backgroundColor: C.panel,
         }}>
-          <BtnPrimary small onClick={openNew}>+ New Feed</BtnPrimary>
+          {canEdit && <BtnPrimary small onClick={openNew}>+ New Feed</BtnPrimary>}
           {err && <ErrorBanner msg={err} onDismiss={() => setErr(null)} />}
           {ok  && <span style={{ fontSize: 12, color: C.green }}>{ok}</span>}
         </div>
@@ -883,7 +886,7 @@ function FeedConfigTab({ feeds, onFeedsChange, stats }: {
           {feeds.length === 0 && !drawerOpen && (
             <div style={{ marginTop: 60, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
               <span style={{ fontSize: 14, color: C.textHint }}>No feeds configured yet.</span>
-              <BtnPrimary onClick={openNew}>+ Create your first feed</BtnPrimary>
+              {canEdit && <BtnPrimary onClick={openNew}>+ Create your first feed</BtnPrimary>}
             </div>
           )}
           {feeds.length > 0 && (
@@ -965,10 +968,10 @@ function FeedConfigTab({ feeds, onFeedsChange, stats }: {
                             }}>
                             <span style={{ fontSize: 13 }}>↻</span> Sync
                           </button>
-                          <button onClick={e => { e.stopPropagation(); deleteFeed(feed.feed_id, feed.name); }} disabled={deleting === feed.feed_id} style={{
+                          {canEdit && <button onClick={e => { e.stopPropagation(); deleteFeed(feed.feed_id, feed.name); }} disabled={deleting === feed.feed_id} style={{
                             fontSize: 12, padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
                             backgroundColor: 'transparent', color: C.red, border: `1px solid ${C.red}55`,
-                          }}>{deleting === feed.feed_id ? 'Deleting…' : 'Delete'}</button>
+                          }}>{deleting === feed.feed_id ? 'Deleting…' : 'Delete'}</button>}
                         </div>
                       </td>
                     </tr>
@@ -1134,9 +1137,11 @@ function FeedConfigTab({ feeds, onFeedsChange, stats }: {
             </div>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
 
+              {canEdit && (
               <BtnPrimary small onClick={save} disabled={saving}>
                 {saving ? 'Saving…' : drawerFeedId === 'new' ? 'Create' : 'Save'}
               </BtnPrimary>
+              )}
               <button onClick={closeDrawer} style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 color: C.textHint, fontSize: 20, lineHeight: 1,
@@ -1147,7 +1152,8 @@ function FeedConfigTab({ feeds, onFeedsChange, stats }: {
           {/* Panel body */}
           <div style={{ flex: 1, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', minHeight: 0 }}>
 
-            {/* Status — ACTIVE and STOP only */}
+            {/* Status — hidden without EDIT on price_rules */}
+            {canEdit && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
               {([
                 { s: 'ACTIVE'  as FeedStatus, sub: 'Ticks flow · ATR evaluates' },
@@ -1171,6 +1177,7 @@ function FeedConfigTab({ feeds, onFeedsChange, stats }: {
                 );
               })}
             </div>
+            )}
 
             {/* Name + Priority */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'end' }}>
@@ -1419,6 +1426,8 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
   onSave: () => void;
   onClose: () => void;
 }) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('price_rules', 'EDIT');
   const defaultFeedId = feeds.length === 1 ? feeds[0].feed_id : undefined;
   const [form, setForm] = useState<RuleFormState>(rule ? ruleToForm(rule) : blankRule(defaultFeedId));
   const [saving, setSaving] = useState(false);
@@ -1556,9 +1565,11 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
           <span style={{ fontSize: 12, color: form.enabled ? C.green : C.textHint }}>
             {form.enabled ? 'Enabled' : 'Disabled'}
           </span>
+          {canEdit && (
           <BtnPrimary small onClick={save} disabled={saving}>
             {saving ? 'Saving…' : rule ? 'Save' : 'Create'}
           </BtnPrimary>
+          )}
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textHint, fontSize: 20 }}>×</button>
         </div>
       </div>
@@ -1901,6 +1912,8 @@ function RuleEditor({ feeds, rule, nextPriority, mappedSymbols, mt5Groups, onTog
 // ─────────────────────────────────────────────────────────────
 
 function SpreadRulesTab({ feeds }: { feeds: FeedConfig[] }) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('price_rules', 'EDIT');
   const [allRules, setAllRules] = useState<SpreadRule[]>([]);
   const [loading,  setLoading]  = useState(false);
   const [editRule, setEditRule] = useState<SpreadRule | null | 'new'>(null);
@@ -2088,12 +2101,14 @@ function SpreadRulesTab({ feeds }: { feeds: FeedConfig[] }) {
                 color: isOpen ? C.teal : C.textSec,
                 border: `1px solid ${isOpen ? C.teal : C.border}`,
               }}>Edit</button>
+            {canEdit && (
             <button
               onClick={() => setConfirmDelete(r)}
               style={{
                 fontSize: 12, padding: '3px 10px', borderRadius: 4, cursor: 'pointer',
                 backgroundColor: 'transparent', color: C.red, border: `1px solid ${C.red}55`,
               }}>Delete</button>
+            )}
           </div>
         );
       },
@@ -2111,7 +2126,7 @@ function SpreadRulesTab({ feeds }: { feeds: FeedConfig[] }) {
           display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
           backgroundColor: C.panel,
         }}>
-          <BtnPrimary small onClick={() => setEditRule('new')}>+ New Rule</BtnPrimary>
+          {canEdit && <BtnPrimary small onClick={() => setEditRule('new')}>+ New Rule</BtnPrimary>}
           {loading && <span style={{ fontSize: 12, color: C.textHint }}>Loading…</span>}
           {err && <ErrorBanner msg={err} onDismiss={() => setErr(null)} />}
         </div>
@@ -2121,7 +2136,7 @@ function SpreadRulesTab({ feeds }: { feeds: FeedConfig[] }) {
           {!loading && allRules.length === 0 ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, height: '100%' }}>
               <span style={{ fontSize: 14, color: C.textHint }}>No spread rules yet.</span>
-              <BtnPrimary onClick={() => setEditRule('new')}>+ Create First Rule</BtnPrimary>
+              {canEdit && <BtnPrimary onClick={() => setEditRule('new')}>+ Create First Rule</BtnPrimary>}
               <span style={{ fontSize: 12, color: C.textHint }}>Rules fire in priority order. First match wins.</span>
             </div>
           ) : (
@@ -2235,6 +2250,8 @@ interface GsRowData {
 }
 
 function GroupSpreadsTab() {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('price_rules', 'EDIT');
   const [allRules, setAllRules]     = useState<GroupSpreadRule[]>([]);
   const [loading,  setLoading]      = useState(true);
   const [err,      setErr]          = useState<string | null>(null);
@@ -2424,10 +2441,10 @@ function GroupSpreadsTab() {
               fontSize: 12, padding: '3px 10px', borderRadius: 4, cursor: 'pointer',
               backgroundColor: C.card, color: C.textSec, border: `1px solid ${C.border}`,
             }}>Edit</button>
-            <button onClick={() => full && resetSpread(full)} style={{
+            {canEdit && <button onClick={() => full && resetSpread(full)} style={{
               fontSize: 12, padding: '3px 10px', borderRadius: 4, cursor: 'pointer',
               backgroundColor: 'transparent', color: C.red, border: `1px solid ${C.red}55`,
-            }}>Reset</button>
+            }}>Reset</button>}
           </div>
         );
       },
@@ -2446,7 +2463,7 @@ function GroupSpreadsTab() {
           display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
           backgroundColor: C.panel,
         }}>
-          <BtnPrimary small onClick={openNew}>+ Add New Symbol Spread</BtnPrimary>
+          {canEdit && <BtnPrimary small onClick={openNew}>+ Add New Symbol Spread</BtnPrimary>}
           <button onClick={syncToMT5} disabled={syncing} style={{
             fontSize: 12, padding: '5px 12px', borderRadius: 4, cursor: syncing ? 'default' : 'pointer',
             backgroundColor: C.card, color: C.textSec, border: `1px solid ${C.border}`,
@@ -2460,7 +2477,7 @@ function GroupSpreadsTab() {
           {!loading && allRules.length === 0 ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, height: '100%' }}>
               <span style={{ fontSize: 14, color: C.textHint }}>No group spread rules configured yet.</span>
-              <BtnPrimary onClick={openNew}>+ Spread a New Symbol</BtnPrimary>
+              {canEdit && <BtnPrimary onClick={openNew}>+ Spread a New Symbol</BtnPrimary>}
               <span style={{ fontSize: 12, color: C.textHint, maxWidth: 360, textAlign: 'center' }}>
                 Group spreads apply directly to MT5 group configuration via SpreadDiff.
               </span>
@@ -2505,9 +2522,11 @@ function GroupSpreadsTab() {
               {formErr && <div style={{ fontSize: 12, color: C.red,    marginTop: 2 }}>{formErr}</div>}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {canEdit && (
               <BtnPrimary small onClick={saveSpread} disabled={saving}>
                 {saving ? 'Applying…' : 'Apply to MT5'}
               </BtnPrimary>
+              )}
               <button onClick={() => setFormOpen(false)} style={{
                 background: 'none', border: 'none', cursor: 'pointer', color: C.textHint, fontSize: 20,
               }}>×</button>

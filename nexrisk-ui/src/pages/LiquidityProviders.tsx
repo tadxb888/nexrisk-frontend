@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { clsx } from 'clsx';
+import { useAuth } from '@/stores/AuthContext';
 
 // ============================================================
 // ICONS — SVG only, no emojis
@@ -571,6 +572,8 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
   const stopped = isStopped(lp.state);
   const active  = isActive(lp.state);
   const busy = lp.state === 'CONNECTING';
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('lp_admin', 'EDIT');
 
   return (
     <div className="panel flex flex-col overflow-hidden cursor-pointer hover:border-[#555] transition-colors"
@@ -659,7 +662,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
         onClick={e => e.stopPropagation()}>
 
         {/* Start / Stop */}
-        {active ? (
+        {canEdit && (active ? (
           <button onClick={onStop}
             className="btn text-xs px-2.5 py-1 flex items-center gap-1"
             style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
@@ -673,7 +676,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
               : { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }}>
             <IcoPlay /> {busy ? 'Starting...' : 'Start'}
           </button>
-        )}
+        ))}
 
         {/* Test connection */}
         <button onClick={onTest}
@@ -682,7 +685,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
         </button>
 
         {/* Credentials */}
-        {!lp.credentials_set && (
+        {canEdit && !lp.credentials_set && (
           <button onClick={onCredentials}
             className="btn text-xs px-2.5 py-1 flex items-center gap-1"
             style={{ backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}>
@@ -690,6 +693,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
           </button>
         )}
 
+        {canEdit && (
         <div className="ml-auto flex items-center gap-1">
           <button onClick={onEdit} disabled={!stopped}
             className="btn btn-ghost text-xs border border-border px-2.5 py-1"
@@ -704,6 +708,7 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
             <IcoTrash />
           </button>
         </div>
+        )}
       </div>
     </div>
   );
@@ -1162,9 +1167,12 @@ function LPListView({ lps, healthMap, onAdd, onEdit, onDelete, onStart, onStop, 
   onCredentials: (lp: LPConfig) => void;
   onDetail: (lp: LPConfig) => void;
 }) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('lp_admin', 'EDIT');
   return (
     <div className="space-y-4">
       {/* Add button row */}
+      {canEdit && (
       <div className="flex items-center justify-end">
         <button onClick={onAdd}
           className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
@@ -1172,16 +1180,19 @@ function LPListView({ lps, healthMap, onAdd, onEdit, onDelete, onStart, onStop, 
           <IcoPlus /> Add LP
         </button>
       </div>
+      )}
 
       {/* Cards grid */}
       {lps.length === 0 ? (
         <div className="panel p-12 flex flex-col items-center justify-center">
           <span className="text-text-muted text-sm mb-2">No liquidity providers configured</span>
+          {canEdit && (
           <button onClick={onAdd}
             className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
             style={{ backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }}>
             <IcoPlus /> Add your first LP
           </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -1222,6 +1233,8 @@ function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showTo
   const [loading, setLoading] = useState(false);
 
   const isLive = isActive(lp.state);
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('lp_admin', 'EDIT');
 
   // Load tab data
   useEffect(() => {
@@ -1271,6 +1284,7 @@ function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showTo
           </div>
           <span className="text-xs font-mono text-text-muted">{lp.lp_id}</span>
         </div>
+        {canEdit && (
         <div className="flex items-center gap-2">
           {!lp.credentials_set && (
             <button onClick={onCredentials}
@@ -1295,6 +1309,7 @@ function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showTo
             </button>
           )}
         </div>
+        )}
       </div>
 
       {/* Tabs */}

@@ -22,6 +22,7 @@ import React, {
   useState, useEffect, useCallback, useMemo, useRef, type ReactNode,
   type KeyboardEvent, type ChangeEvent,
 } from 'react';
+import { useAuth } from '@/stores/AuthContext';
 
 // ══════════════════════════════════════════════════════════════
 // CONSTANTS — color tokens (matches BBookPage / Cockpit reference)
@@ -961,6 +962,8 @@ const FINAL_FALLBACK_CFG: Record<FinalFallback, { color: string; label: string; 
 // MAIN COMPONENT
 // ══════════════════════════════════════════════════════════════
 export function HedgeRulesPage() {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('hedge_strat', 'EDIT');
 
   // ── Data state ──────────────────────────────────────────────
   const [rules,       setRules]       = useState<HedgeRule[]>([]);
@@ -1586,6 +1589,7 @@ export function HedgeRulesPage() {
               ✓ {toast}
             </span>
           )}
+          {canEdit && (
           <button
             onClick={handleNewStrategy}
             disabled={isCreating}
@@ -1599,6 +1603,7 @@ export function HedgeRulesPage() {
           >
             + New Strategy
           </button>
+          )}
         </div>
       </div>
 
@@ -1706,7 +1711,7 @@ export function HedgeRulesPage() {
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   {/* Status actions — edit mode only */}
-                  {isEditMode && selectedRule && (
+                  {canEdit && isEditMode && selectedRule && (
                     <>
                       {selectedRule.status !== 'ACTIVE'  && <ActionBtn label="Activate" color={GREEN} onClick={() => handleStatusAction('activate')} />}
                       {selectedRule.status === 'ACTIVE'  && (
@@ -1733,6 +1738,7 @@ export function HedgeRulesPage() {
                     </button>
                   )}
                   {/* Save */}
+                  {canEdit && (
                   <button onClick={handleSave} disabled={saving} style={{
                     padding: '5px 16px', borderRadius: 4, cursor: saving ? 'default' : 'pointer',
                     fontSize: 12, fontWeight: 600,
@@ -1743,6 +1749,7 @@ export function HedgeRulesPage() {
                   }}>
                     {saving ? 'Saving…' : isCreating ? 'Create Strategy' : (isDirtyAny ? '● Save Changes' : 'Saved')}
                   </button>
+                  )}
                 </div>
               </div>
 
