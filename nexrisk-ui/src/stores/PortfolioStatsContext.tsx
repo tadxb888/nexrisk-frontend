@@ -22,10 +22,12 @@ import {
 
 import {
   connectPortfolioWebSocket,
+  getPortfolioSummary,
   type PortfolioWsEvent,
   type PortfolioWsBookFields,
   type PortfolioWsTotalFields,
   type PortfolioWsPeriod,
+  type PortfolioSummaryData,
 } from '@/services/api';
 
 // =============================================================================
@@ -139,6 +141,9 @@ export interface PortfolioStatsValue {
   periodFrom:     string | null;
   periodTo:       string | null;
   baselineDate:   string | null;
+  /** Pre-formatted 'dd/mm/yyyy — hh:mm:ss' of the latest snapshot (periodTo),
+   *  local time. Null until first snapshot/seed arrives. */
+  lastUpdated:    string | null;
 
   wsStatus:       'open' | 'closed' | 'error' | 'connecting';
 }
@@ -149,11 +154,12 @@ const DEFAULT_VALUE: PortfolioStatsValue = {
   cbook: EMPTY_BOOK_STATS,
   cost:  EMPTY_COST_STATS,
   total: EMPTY_TOTAL_STATS,
-  cardsPeriod:    'today',
+  cardsPeriod:    'this_month',
   setCardsPeriod: () => { /* no-op fallback */ },
   periodFrom:   null,
   periodTo:     null,
   baselineDate: null,
+  lastUpdated:  null,
   wsStatus:     'connecting',
 };
 
@@ -185,6 +191,17 @@ export const fmtHdrCompact = (val: number, prefix = ''): string => {
 
 export const pnlColor = (v: number | null | undefined): string =>
   v == null ? '#d2d6e2' : v > 0 ? '#6aaa78' : v < 0 ? '#d07070' : '#d2d6e2';
+
+/** Format an ISO timestamp as 'dd/mm/yyyy — hh:mm:ss' in local time.
+ *  Used for the "Updated …" caption so a quiet-market (weekend/holiday)
+ *  reading is visibly distinct from a live one. */
+export const fmtLastUpdated = (iso: string | null): string | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} — ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
 
 // =============================================================================
 // CARDS PERIOD
@@ -291,7 +308,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       if (raw === 'today') return 'today';
       if (raw && raw !== '') return 'this_month';
     } catch { /* ignore */ }
-    return 'today';
+    return 'this_month';   // unset → default to This Month (weekend-friendly)
   });
 
   const setCardsPeriod = useCallback((p: CardsPeriod) => {
@@ -321,23 +338,42 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
     setCbook(EMPTY_BOOK_STATS);
     setTotal(EMPTY_TOTAL_STATS);
 
+    let cancelled = false;
+    // Per-run flag: once a live WS SNAPSHOT arrives for this period, the REST
+    // seed must not overwrite it (live wins, regardless of arrival order).
+    const live = { received: false };
+
+    const applySnapshot = (d: PortfolioSummaryData) => {
+      setBbook(mapBook(d.books.B));
+      setAbook(mapBook(d.books.A));
+      setCbook(mapBook(d.books.C));
+      setTotal(mapTotal(d.total));
+      setPeriodFrom(d.from ?? null);
+      setPeriodTo(d.to ?? null);
+      setBaselineDate(d.baseline ?? null);
+    };
+
     const cleanup = connectPortfolioWebSocket(
       periodToWs(cardsPeriod),
       (event: PortfolioWsEvent) => {
         if (event.type === 'SNAPSHOT') {
-          const d = event.data;
-          setBbook(mapBook(d.books.B));
-          setAbook(mapBook(d.books.A));
-          setCbook(mapBook(d.books.C));
-          setTotal(mapTotal(d.total));
-          setPeriodFrom(d.from ?? null);
-          setPeriodTo(d.to ?? null);
-          setBaselineDate(d.baseline ?? null);
+          live.received = true;
+          if (!cancelled) applySnapshot(event.data);
         }
       },
-      (status) => setWsStatus(status),
+      (status) => { if (!cancelled) setWsStatus(status); },
     );
-    return cleanup;
+
+    // One-shot REST seed (the portfolio.summary REST mirror). Populates the
+    // grid immediately on mount and — crucially — on weekends/holidays when
+    // the live WS pushes nothing. Applied only if no live SNAPSHOT has landed
+    // for this period and the effect is still current. Best-effort: failure
+    // leaves the WS as the sole source.
+    getPortfolioSummary(periodToWs(cardsPeriod))
+      .then((data) => { if (!cancelled && !live.received) applySnapshot(data); })
+      .catch(() => { /* seed is best-effort; WS remains primary */ });
+
+    return () => { cancelled = true; cleanup(); };
   }, [cardsPeriod]);
 
   const cost: CostCardStats = EMPTY_COST_STATS;
@@ -347,6 +383,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       bbook, abook, cbook, cost, total,
       cardsPeriod, setCardsPeriod,
       periodFrom, periodTo, baselineDate,
+      lastUpdated: fmtLastUpdated(periodTo),
       wsStatus,
     }),
     [bbook, abook, cbook, cost, total,

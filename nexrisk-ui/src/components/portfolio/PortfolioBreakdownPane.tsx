@@ -39,7 +39,7 @@ export function PortfolioBreakdownPane({
   mt5NodeId,
   onMt5Node,
 }: Props) {
-  const { bbook, abook, cbook, total } = usePortfolioStats();
+  const { bbook, abook, cbook, total, lastUpdated } = usePortfolioStats();
 
   // ── Collapsed state: 28px vertical strip with chevron + rotated label
   if (collapsed) {
@@ -90,6 +90,13 @@ export function PortfolioBreakdownPane({
       <div className="px-3 py-2 border-b border-[#3a3a3c] flex items-center gap-4 flex-shrink-0">
         <CardsPeriodSelector />
         <Mt5NodeSelector value={mt5NodeId} onChange={onMt5Node} />
+        <div
+          className="ml-auto text-[10px] uppercase tracking-wider whitespace-nowrap"
+          style={{ color: '#8a8a8a' }}
+          title="Time of the most recent portfolio snapshot. On weekends and market holidays this is the last business-day reading — values do not update while markets are closed."
+        >
+          Updated {lastUpdated ?? '—'}
+        </div>
       </div>
 
       {/* Breakdown body — single CSS grid: label rail + 4 card columns,

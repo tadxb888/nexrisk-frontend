@@ -991,6 +991,22 @@ export type PortfolioWsEvent =
 export type PortfolioWsPeriod = 'today' | 'month';
 
 /**
+ * REST mirror of the portfolio.summary.{period} WebSocket topic. Returns a
+ * payload byte-identical to a WS SNAPSHOT for the same period (books A/B/C +
+ * total + from/to/baseline). Used to SEED the breakdown grid on mount so the
+ * page is populated immediately — including weekends/holidays when the live
+ * WS feed is silent (no market activity → no push). The WS stays the source
+ * of truth: a live SNAPSHOT overwrites this seed.
+ *
+ * Only 'today' | 'month' are supported here ('week' returns HTTP 400).
+ */
+export async function getPortfolioSummary(
+  period: PortfolioWsPeriod,
+): Promise<PortfolioSummaryData> {
+  return fetchAPI<PortfolioSummaryData>(`/api/v1/portfolio/summary?period=${period}`);
+}
+
+/**
  * Open a managed WebSocket to the Portfolio Summary feed for a given period.
  * Switching periods closes and re-opens this connection (caller responsibility).
  */
