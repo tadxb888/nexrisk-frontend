@@ -24,7 +24,7 @@ import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { CardsPeriodSelector } from './CardsPeriodSelector';
 import { Mt5NodeSelector } from './Mt5NodeSelector';
 import { BreakdownGrid } from './BreakdownGrid';
-import { usePortfolioStats, fmtHdrMoney } from '@/stores/PortfolioStatsContext';
+import { usePortfolioStats, fmtHdrMoney, pnlColor } from '@/stores/PortfolioStatsContext';
 
 interface Props {
   collapsed:    boolean;
@@ -128,6 +128,12 @@ export function PortfolioBreakdownPane({
               <span className="uppercase tracking-wider" style={{ color: '#8a8a8a' }}>
                 vs Prior Month · Net Realized
               </span>
+              {thisVal != null && (
+                <span className="font-mono" style={{ color: pnlColor(thisVal) }}>
+                  this {fmtHdrMoney(thisVal)}
+                </span>
+              )}
+              <span style={{ color: '#5a5a5a' }}>·</span>
               <span className="font-mono" style={{ color: '#8a8a8a' }}>
                 prior {fmtHdrMoney(prior)}
               </span>
