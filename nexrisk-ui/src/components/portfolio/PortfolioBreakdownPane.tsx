@@ -24,7 +24,7 @@ import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { CardsPeriodSelector } from './CardsPeriodSelector';
 import { Mt5NodeSelector } from './Mt5NodeSelector';
 import { BreakdownGrid } from './BreakdownGrid';
-import { usePortfolioStats } from '@/stores/PortfolioStatsContext';
+import { usePortfolioStats, fmtHdrMoney } from '@/stores/PortfolioStatsContext';
 
 interface Props {
   collapsed:    boolean;
@@ -39,7 +39,7 @@ export function PortfolioBreakdownPane({
   mt5NodeId,
   onMt5Node,
 }: Props) {
-  const { bbook, abook, cbook, total, lastUpdated } = usePortfolioStats();
+  const { bbook, abook, cbook, total, lastUpdated, vsPriorMonth } = usePortfolioStats();
 
   // ── Collapsed state: 28px vertical strip with chevron + rotated label
   if (collapsed) {
@@ -108,6 +108,41 @@ export function PortfolioBreakdownPane({
           accent stripes (Portfolio yellow, B/A/C teal). */}
       <div className="flex-1 min-h-0 overflow-y-auto p-2">
         <BreakdownGrid total={total} bbook={bbook} abook={abook} cbook={cbook} />
+
+        {/* ── Under-total slim row: This Month vs prior month, NET REALIZED.
+            Pace gauge — are we ahead of or behind last month at the same
+            point? `vsPriorMonth.total` is prior-MTD net realized; we compare
+            it to this period's net realized (total.realized). Shown only when
+            the backend supplies the comparison (period=month). ── */}
+        {vsPriorMonth?.available && (() => {
+          const thisVal = total.realized;
+          const prior   = vsPriorMonth.total;
+          const delta   = thisVal != null ? thisVal - prior : null;
+          const up      = delta != null && delta >= 0;
+          return (
+            <div
+              className="mt-2 px-2 py-1.5 rounded flex items-center gap-3 text-[11px]"
+              style={{ backgroundColor: '#1b1b1d', border: '1px solid #3a3a3c' }}
+              title={`Net Realized pace vs the same point last month (${vsPriorMonth.from} → ${vsPriorMonth.to}). This: ${thisVal != null ? fmtHdrMoney(thisVal) : '—'} · Prior: ${fmtHdrMoney(prior)}`}
+            >
+              <span className="uppercase tracking-wider" style={{ color: '#8a8a8a' }}>
+                vs Prior Month · Net Realized
+              </span>
+              <span className="font-mono" style={{ color: '#8a8a8a' }}>
+                prior {fmtHdrMoney(prior)}
+              </span>
+              {delta != null && (
+                <span
+                  className="ml-auto font-mono inline-flex items-center gap-1"
+                  style={{ color: up ? '#6aaa78' : '#d07070' }}
+                >
+                  {up ? '▲' : '▼'} {fmtHdrMoney(Math.abs(delta))}
+                  <span style={{ color: '#8a8a8a' }}>{up ? 'ahead' : 'behind'}</span>
+                </span>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

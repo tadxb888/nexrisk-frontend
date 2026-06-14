@@ -968,6 +968,17 @@ export interface PortfolioWsTotalFields extends PortfolioWsBookFields {
   hedge_direction_notional: number;
 }
 
+/** Prior-period comparison block. Present on the period=month payload only.
+ *  `total` is prior-month NET REALIZED measured to the same day-of-month as
+ *  the current MTD window (e.g. this month 1→14 vs last month 1→14), so the
+ *  two are pace-comparable. `from`/`to` describe that prior window. */
+export interface PortfolioVsPriorMonth {
+  available: boolean;
+  from:      string;            // YYYY-MM-DD — start of prior window
+  to:        string;            // YYYY-MM-DD — same day-of-month, prior month
+  total:     number;            // prior-month-to-date NET REALIZED
+}
+
 /** Push payload for topic "portfolio.summary.{period}". */
 export interface PortfolioSummaryData {
   period:   string;             // "today" | "month"
@@ -980,6 +991,8 @@ export interface PortfolioSummaryData {
     C: PortfolioWsBookFields;
   };
   total: PortfolioWsTotalFields;
+  /** Prior-month pace comparison — present on period=month only. */
+  vs_prior_month?: PortfolioVsPriorMonth;
 }
 
 export type PortfolioWsEvent =

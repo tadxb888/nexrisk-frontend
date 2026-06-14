@@ -28,6 +28,7 @@ import {
   type PortfolioWsTotalFields,
   type PortfolioWsPeriod,
   type PortfolioSummaryData,
+  type PortfolioVsPriorMonth,
 } from '@/services/api';
 
 // =============================================================================
@@ -144,6 +145,9 @@ export interface PortfolioStatsValue {
   /** Pre-formatted 'dd/mm/yyyy — hh:mm:ss' of the latest snapshot (periodTo),
    *  local time. Null until first snapshot/seed arrives. */
   lastUpdated:    string | null;
+  /** Prior-month pace comparison (net realized). Null outside This Month or
+   *  when the backend marks it unavailable. */
+  vsPriorMonth:   PortfolioVsPriorMonth | null;
 
   wsStatus:       'open' | 'closed' | 'error' | 'connecting';
 }
@@ -160,6 +164,7 @@ const DEFAULT_VALUE: PortfolioStatsValue = {
   periodTo:     null,
   baselineDate: null,
   lastUpdated:  null,
+  vsPriorMonth: null,
   wsStatus:     'connecting',
 };
 
@@ -326,6 +331,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   const [periodFrom,   setPeriodFrom]   = useState<string | null>(null);
   const [periodTo,     setPeriodTo]     = useState<string | null>(null);
   const [baselineDate, setBaselineDate] = useState<string | null>(null);
+  const [vsPriorMonth, setVsPriorMonth] = useState<PortfolioVsPriorMonth | null>(null);
   const [wsStatus, setWsStatus] = useState<'open' | 'closed' | 'error' | 'connecting'>('connecting');
 
   // ─── WS subscription ───────────────────────────────────────────────────────
@@ -337,6 +343,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
     setAbook(EMPTY_BOOK_STATS);
     setCbook(EMPTY_BOOK_STATS);
     setTotal(EMPTY_TOTAL_STATS);
+    setVsPriorMonth(null);
 
     let cancelled = false;
     // Per-run flag: once a live WS SNAPSHOT arrives for this period, the REST
@@ -351,6 +358,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       setPeriodFrom(d.from ?? null);
       setPeriodTo(d.to ?? null);
       setBaselineDate(d.baseline ?? null);
+      setVsPriorMonth(d.vs_prior_month ?? null);
     };
 
     const cleanup = connectPortfolioWebSocket(
@@ -384,11 +392,13 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       cardsPeriod, setCardsPeriod,
       periodFrom, periodTo, baselineDate,
       lastUpdated: fmtLastUpdated(periodTo),
+      vsPriorMonth,
       wsStatus,
     }),
     [bbook, abook, cbook, cost, total,
      cardsPeriod, setCardsPeriod,
      periodFrom, periodTo, baselineDate,
+     vsPriorMonth,
      wsStatus],
   );
 
