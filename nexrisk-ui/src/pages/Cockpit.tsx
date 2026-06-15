@@ -385,7 +385,7 @@ function Card1Money({ today, month }: Card1Props) {
     //   - no MTD snapshot yet                  → "Collecting data…"
     //   - prior month available=false           → "Collecting data…"
     //   - prior month net_pnl is null           → "Collecting data…"
-    //   - prior |net_pnl| below floor ($50K)    → render "—" (too small to ratio)
+    //   - prior |net_pnl| below floor ($1K)     → render "—" (too small to ratio)
     //
     // Prior basis: vs_prior_month.net_pnl is realized + unrealized EOD at the
     // window end (same DOM as today, prior month). Apples-to-apples with the
@@ -396,7 +396,10 @@ function Card1Money({ today, month }: Card1Props) {
       if (vsPrior.available && vsPrior.net_pnl !== null) {
         const current = month.total.realized + month.total.unrealized;
         const prior   = vsPrior.net_pnl;
-        const FLOOR   = 50_000;
+        // Prior-month net P&L is a real, rankable figure that routinely sits
+        // below $50K — a $50K floor wrongly suppressed it. Guard only against a
+        // near-zero denominator (volatile %). Tunable.
+        const FLOOR   = 1_000;
         if (Math.abs(prior) < FLOOR) {
           row3 = { display: '—', status: undefined };
         } else {
