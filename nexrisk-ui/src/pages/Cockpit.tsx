@@ -93,6 +93,7 @@ interface PortfolioSummary {
     to:        string;
     available: boolean;
     total:     number | null;
+    net_pnl:   number | null;
   };
 }
 
@@ -381,20 +382,20 @@ function Card1Money({ today, month }: Card1Props) {
 
     // Row 3 — MTM Performance %
     // Honest fallbacks:
-    //   - no MTD snapshot yet                 → "Collecting data…"
-    //   - prior month available=false          → "Collecting data…"
-    //   - prior month total is null            → "Collecting data…"
-    //   - prior |total| below floor ($50K)     → render "—" (too small to ratio)
+    //   - no MTD snapshot yet                  → "Collecting data…"
+    //   - prior month available=false           → "Collecting data…"
+    //   - prior month net_pnl is null           → "Collecting data…"
+    //   - prior |net_pnl| below floor ($50K)    → render "—" (too small to ratio)
+    //
+    // Prior basis: vs_prior_month.net_pnl is realized + unrealized EOD at the
+    // window end (same DOM as today, prior month). Apples-to-apples with the
+    // current MTD figure (realized + live unrealized) on Row 2.
     let row3: { display: string; status?: RowStatus } | null = null;
     if (month?.total && month.vs_prior_month) {
       const vsPrior = month.vs_prior_month;
-      if (vsPrior.available && vsPrior.total !== null) {
-        // Net P&L on this card is realized + unrealized (matches Rows 1–2 and
-        // is why the figures tick live). The prior comparator must therefore
-        // ALSO be realized + unrealized for the ratio to be valid — see note
-        // below if vs_prior_month.total is realized-only.
+      if (vsPrior.available && vsPrior.net_pnl !== null) {
         const current = month.total.realized + month.total.unrealized;
-        const prior   = vsPrior.total;
+        const prior   = vsPrior.net_pnl;
         const FLOOR   = 50_000;
         if (Math.abs(prior) < FLOOR) {
           row3 = { display: '—', status: undefined };

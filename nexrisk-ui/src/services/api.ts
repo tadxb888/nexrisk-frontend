@@ -976,7 +976,8 @@ export interface PortfolioVsPriorMonth {
   available: boolean;
   from:      string;            // YYYY-MM-DD — start of prior window
   to:        string;            // YYYY-MM-DD — same day-of-month, prior month
-  total:     number;            // prior-month-to-date NET REALIZED
+  total:     number | null;     // legacy — realized + delta_unrealized over window
+  net_pnl:   number | null;     // realized + unrealized EOD at window end (MTM basis)
 }
 
 /** Push payload for topic "portfolio.summary.{period}". */
