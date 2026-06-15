@@ -10,12 +10,13 @@ import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   connectCockpitWebSocket,
+  getPortfolioSummary,
   type CockpitWsEvent,
   cockpitApi,
   type CockpitTraderRisk,
   type CockpitPredictions,
 } from '@/services/api';
-import { fmtHdrMoney } from '@/stores/PortfolioStatsContext';
+import { fmtHdrMoney, fmtHdrCompact } from '@/stores/PortfolioStatsContext';
 import { Link } from 'react-router-dom';
 import { HelpIcon } from '../help/HelpIcon';
 
@@ -112,8 +113,10 @@ type RowStatus = 'ok' | 'warning' | 'critical' | undefined;
 // which follow a period toggle. Owns its own WS subscription rather than
 // extending PortfolioStatsContext, so changes here don't affect other pages.
 //
-// On every (re)connect the backend automatically sends SNAPSHOTs for both
-// topics, so no separate REST fetch is needed.
+// On weekdays the backend pushes SNAPSHOTs for both topics on (re)connect.
+// On weekends/holidays the live feed is silent (no market activity), so a
+// one-shot REST seed (portfolio.summary mirror) fills both periods on mount;
+// a live SNAPSHOT, whenever it arrives, overwrites the seed (live wins).
 //
 // Reconnect strategy mirrors useBBookWebSocket: exponential back-off
 // (1s → 2s → 4s … cap 30s).
@@ -126,6 +129,10 @@ function useCockpitPortfolio() {
 
   const retryRef   = useRef(0);
   const mountedRef = useRef(true);
+  // Per-period guards: once a live SNAPSHOT lands, the REST seed must not
+  // overwrite it (live wins, regardless of arrival order).
+  const liveToday  = useRef(false);
+  const liveMonth  = useRef(false);
   const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
 
@@ -136,8 +143,10 @@ function useCockpitPortfolio() {
     const cleanup = connectCockpitWebSocket(
       (ev: CockpitWsEvent) => {
         if (ev.topic === 'portfolio.summary.today' && ev.type === 'SNAPSHOT') {
+          liveToday.current = true;
           setToday(ev.data as PortfolioSummary);
         } else if (ev.topic === 'portfolio.summary.month' && ev.type === 'SNAPSHOT') {
+          liveMonth.current = true;
           setMonth(ev.data as PortfolioSummary);
         } else if (ev.topic === 'portfolio.exposure.symbols' && ev.type === 'SNAPSHOT') {
           setSymbols(ev.data as SymbolsPayload);
@@ -172,6 +181,20 @@ function useCockpitPortfolio() {
       cleanupRef.current?.();
     };
   }, [connect]);
+
+  // One-shot REST seed for both periods — populates the cards immediately on
+  // mount and, crucially, on weekends/holidays when the WS pushes nothing.
+  // Applied only if no live SNAPSHOT has landed for that period yet.
+  useEffect(() => {
+    let cancelled = false;
+    getPortfolioSummary('today')
+      .then((d) => { if (!cancelled && !liveToday.current) setToday(d as unknown as PortfolioSummary); })
+      .catch(() => { /* best-effort; WS remains primary */ });
+    getPortfolioSummary('month')
+      .then((d) => { if (!cancelled && !liveMonth.current) setMonth(d as unknown as PortfolioSummary); })
+      .catch(() => { /* best-effort; WS remains primary */ });
+    return () => { cancelled = true; };
+  }, []);
 
   return { today, month, symbols, wsStatus };
 }
@@ -328,7 +351,8 @@ function CockpitCard({ title, question, rows, helpCardId }: CockpitCardProps) {
 // Wire-source contract:
 //   today.total.realized + today.total.unrealized  → Today Net P&L
 //   month.total.realized + month.total.unrealized  → MTD  Net P&L
-//   month.vs_prior_month.total                     → prior comparator
+//   month.vs_prior_month.total                     → prior comparator (must be
+//                                                   realized+unrealized to match)
 //
 // MTM Performance %: (current MTD − prior) / |prior| × 100.
 // |denominator| guards against sign inversion when prior was a losing month;
@@ -365,6 +389,10 @@ function Card1Money({ today, month }: Card1Props) {
     if (month?.total && month.vs_prior_month) {
       const vsPrior = month.vs_prior_month;
       if (vsPrior.available && vsPrior.total !== null) {
+        // Net P&L on this card is realized + unrealized (matches Rows 1–2 and
+        // is why the figures tick live). The prior comparator must therefore
+        // ALSO be realized + unrealized for the ratio to be valid — see note
+        // below if vs_prior_month.total is realized-only.
         const current = month.total.realized + month.total.unrealized;
         const prior   = vsPrior.total;
         const FLOOR   = 50_000;
@@ -728,6 +756,13 @@ function Card5RiskMgrPerf({ month }: Card5Props) {
     return v > 0 && !formatted.startsWith('+') ? `+${formatted}` : formatted;
   };
 
+  // Compact, signed — for the large notional/revenue figures so a $3.48B
+  // reads as "$3.48B" rather than "$3,482,082,770.10".
+  const fmtSignedCompact = (v: number): string => {
+    const s = fmtHdrCompact(Math.abs(v), '$');
+    return v > 0 ? `+${s}` : v < 0 ? `-${s}` : s;
+  };
+
   // ── Compute values once ──────────────────────────────────────────────
   const A = month?.books?.A;
   const B = month?.books?.B;
@@ -752,7 +787,7 @@ function Card5RiskMgrPerf({ month }: Card5Props) {
         status:  yieldPerMillion > 0 ? 'ok' : yieldPerMillion < 0 ? 'critical' : undefined,
       };
     }
-    row1Total = `→ ${fmtHdrMoney(aHedgedNv)} total`;
+    row1Total = `→ ${fmtHdrCompact(aHedgedNv, '$')} total`;
   }
 
   // Row 2 — hedge coverage
@@ -761,13 +796,13 @@ function Card5RiskMgrPerf({ month }: Card5Props) {
     if (Math.abs(bIntakeNv) < FLOOR) {
       // No meaningful intake → can't show a ratio. Show literal zeros.
       row2 = {
-        display: `— hedged → ${fmtHdrMoney(aHedgedNv)} / ${fmtHdrMoney(bIntakeNv)} intake`,
+        display: `— hedged → ${fmtHdrCompact(aHedgedNv, '$')} / ${fmtHdrCompact(bIntakeNv, '$')} intake`,
         status:  undefined,
       };
     } else {
       const pct = (aHedgedNv / bIntakeNv) * 100;
       row2 = {
-        display: `${pct.toFixed(0)}% hedged → ${fmtHdrMoney(aHedgedNv)} / ${fmtHdrMoney(bIntakeNv)} intake`,
+        display: `${pct.toFixed(0)}% hedged → ${fmtHdrCompact(aHedgedNv, '$')} / ${fmtHdrCompact(bIntakeNv, '$')} intake`,
         status:  undefined,
       };
     }
@@ -784,7 +819,7 @@ function Card5RiskMgrPerf({ month }: Card5Props) {
       pctLabel = `${pct.toFixed(0)}%`;
     }
     row3 = {
-      display: `${fmtSignedMoney(cRevenue)} · ${pctLabel} of ${fmtSignedMoney(acTotal)} A+C`,
+      display: `${fmtSignedCompact(cRevenue)} · ${pctLabel} of ${fmtSignedCompact(acTotal)} A+C`,
       status:  cRevenue > 0 ? 'ok' : cRevenue < 0 ? 'critical' : undefined,
     };
   }
