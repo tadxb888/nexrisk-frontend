@@ -183,6 +183,7 @@ export const fmtHdrMoney = (val: number): string => {
 export const fmtHdrCompact = (val: number, prefix = ''): string => {
   const abs  = Math.abs(val);
   const sign = val < 0 ? '-' : '';
+  if (abs >= 1_000_000_000) return `${sign}${prefix}${(abs / 1_000_000_000).toFixed(3)}B`;
   if (abs >= 10_000_000) return `${sign}${prefix}${(abs / 1_000_000).toFixed(0)}M`;
   if (abs >= 1_000_000)  return `${sign}${prefix}${(abs / 1_000_000).toFixed(1)}M`;
   if (abs >= 10_000)     return `${sign}${prefix}${(abs / 1_000).toFixed(0)}K`;
