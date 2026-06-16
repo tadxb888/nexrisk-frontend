@@ -130,8 +130,17 @@ export function periodToDateRange(period: ChartPeriod, now: Date = new Date()): 
     case 'last_month':    return { from: ISO(lastMonthStart), to: ISO(thisMonthStart) };
     case 'this_quarter':  return { from: ISO(thisQuarterStart), to: ISO(now) };
     case 'last_quarter':  return { from: ISO(lastQuarterStart), to: ISO(thisQuarterStart) };
-    case 'h1':            return { from: ISO(h1Start),        to: ISO(h2Start) };
-    case 'h2':            return { from: ISO(h2Start),        to: ISO(nextYearStart) };
+    // H1/H2: if the half is in progress, end at `now`; if elapsed, end at
+    // the start of the next half. Matches the file-wide convention used by
+    // this_month / this_year above.
+    case 'h1': {
+      const inProgress = now < h2Start;
+      return { from: ISO(h1Start), to: ISO(inProgress ? now : h2Start) };
+    }
+    case 'h2': {
+      const inProgress = now < nextYearStart;
+      return { from: ISO(h2Start), to: ISO(inProgress ? now : nextYearStart) };
+    }
     case 'this_year':     return { from: ISO(thisYearStart),  to: ISO(now) };
     case 'last_year':     return { from: ISO(lastYearStart),  to: ISO(thisYearStart) };
     case 'trailing_3m':   return { from: ISO(trailing3mStart),  to: ISO(now) };

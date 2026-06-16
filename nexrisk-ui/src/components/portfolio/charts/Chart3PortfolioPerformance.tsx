@@ -197,20 +197,8 @@ export function Chart3PortfolioPerformance({ period }: ChartComponentProps) {
           {/* Subtle zero baseline so the colour split is visually anchored. */}
           <ReferenceLine y={0} stroke="#808080" strokeDasharray="2 4" />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#252429',
-              border:          '1px solid #3a3a3c',
-              fontFamily:      'IBM Plex Mono, monospace',
-              fontSize:        12,
-            }}
-            formatter={(value: number, _name: string, item: any) => {
-              const daily = item?.payload?.daily_pnl;
-              const sign  = daily != null && daily >= 0 ? '+' : '';
-              return [
-                `${fmtMoney(value)}${daily != null ? `   (day: ${sign}${fmtMoney(daily)})` : ''}`,
-                'Cumulative P/L',
-              ];
-            }}
+            cursor={{ stroke: '#808080', strokeDasharray: '2 4' }}
+            content={<DayClosedTooltip />}
           />
           <Area
             type="monotone"
@@ -263,6 +251,34 @@ function BodyMessage({
       style={{ color: tone === 'error' ? '#d07070' : '#808080' }}
     >
       {children}
+    </div>
+  );
+}
+// ── DayClosedTooltip ───────────────────────────────────────────
+// Single-line "Jun 15: +$4.89k closed" — the realized P/L closed
+// on the hovered day. The cumulative position is read from where
+// the dot sits on the Y-axis; no need to repeat it here.
+function DayClosedTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0]?.payload;
+  if (!p) return null;
+  const daily = p.daily_pnl;
+  if (daily == null) return null;
+
+  const sign = daily >= 0 ? '+' : '';
+  return (
+    <div
+      style={{
+        backgroundColor: '#252429',
+        border:          '1px solid #3a3a3c',
+        fontFamily:      'IBM Plex Mono, monospace',
+        fontSize:        12,
+        padding:         '4px 8px',
+        color:           '#d2d6e2',
+        whiteSpace:      'nowrap',
+      }}
+    >
+      {p.label}: {sign}{fmtMoney(daily)} closed
     </div>
   );
 }

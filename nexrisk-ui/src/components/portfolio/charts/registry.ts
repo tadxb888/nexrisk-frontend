@@ -138,7 +138,9 @@ export const CHART_REGISTRY: ChartEntry[] = [
     label:         'Portfolio Performance - Cumulative P/L',
     description:   'Cumulative realised P/L over the selected period. Green positive, red negative.',
     defaultPeriod: 'this_month',
-    periodOptions: ['today', 'this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
+    // 'today' excluded — a cumulative-P/L line over a single day is a degenerate
+    // chart (one point). Today's realised P/L lives in the Portfolio panel.
+    periodOptions: ['this_week', 'this_month', 'last_month', 'h1', 'h2', 'this_year'],
     Icon:          PortfolioPerformanceIcon,
     Component:     Chart3PortfolioPerformance,
   },
