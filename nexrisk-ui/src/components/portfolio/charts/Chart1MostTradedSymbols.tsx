@@ -157,12 +157,16 @@ export function Chart1MostTradedSymbols({ period }: ChartComponentProps) {
         />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#252429',
-            border:          '1px solid #3a3a3c',
+            backgroundColor: '#1a1a1c',
+            border:          '1px solid #b87333',  // copper accent — matches BBookCharts HEDGE_COLORS
+            borderRadius:    '4px',
             fontFamily:      'IBM Plex Mono, monospace',
             fontSize:        12,
+            padding:         '6px 10px',
+            color:           '#e6e6e6',
           }}
-          // Tooltip body: "EURUSD — 206.4 lots (186 deals)"
+          labelStyle={{ color: '#b87333', fontWeight: 600, marginBottom: '2px' }}
+          itemStyle={{ color: '#e6e6e6' }}
           formatter={(value: number, _name: string, item: any) => {
             const dealCount = item?.payload?.deal_count;
             return [
