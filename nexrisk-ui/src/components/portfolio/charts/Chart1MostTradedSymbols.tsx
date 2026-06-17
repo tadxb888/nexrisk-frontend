@@ -28,6 +28,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -38,13 +39,13 @@ import {
 import type { ChartComponentProps } from './registry';
 import { fetchMostTradedSymbols, periodToDateRange } from '@/services/chartsApi';
 import type { SymbolVolume } from '@/types/charts';
-import { BOOK_COLORS } from './bookColors';
-
 const POLL_INTERVAL_MS = 60_000;
 const SYMBOL_LIMIT     = 20;
 
-// B-Book brand color — primary, since this chart is B-Book volume only.
-const BAR_COLOR = BOOK_COLORS.b;
+// Alternating two-color palette matching the rest of the app
+// (BBookCharts BLUE_GRADIENT + TEAL_GRADIENT mid tones).
+// Bars cycle even / odd to give a clean rhythm to the chart.
+const BAR_COLORS = ['#577a9e', '#5b9b9b'] as const;
 
 // ── Format helpers ─────────────────────────────────────────────
 /** Compact lots: 206.4 / 1.2k / 1.2M */
@@ -171,10 +172,11 @@ export function Chart1MostTradedSymbols({ period }: ChartComponentProps) {
           }}
           cursor={{ fill: '#ffffff10' }}
         />
-        <Bar
-          dataKey="volume_lots"
-          fill={BAR_COLOR}
-        />
+        <Bar dataKey="volume_lots">
+          {symbols.map((_, i) => (
+            <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} />
+          ))}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
