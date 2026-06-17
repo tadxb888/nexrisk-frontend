@@ -243,7 +243,7 @@ export function Chart2Combination({ period }: ChartComponentProps) {
             pointerEvents: 'none',
           }}
         >
-          All values $0 — daily P&L pipeline pending
+          No closes recorded yet for this period
         </div>
       )}
     </div>
