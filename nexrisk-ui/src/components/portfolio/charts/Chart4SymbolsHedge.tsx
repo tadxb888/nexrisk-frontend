@@ -49,12 +49,11 @@ const SYMBOL_LIMIT     = 20;
 // Inner bar drawn at this fraction of the outer bar's width.
 const INNER_WIDTH_RATIO = 0.5;
 
-// Outer = B-Book volume (B-Book brand color from central palette).
-// Inner = Coverage (A+C combined) — uses Portfolio teal because it
-// represents the aggregated hedge side, distinct from the per-book
-// A or C colors which would be ambiguous when combined.
-const COLOR_OUTER = BOOK_COLORS.b;
-const COLOR_INNER = BOOK_COLORS.portfolio;
+// Two-color palette matching Chart 1 — slate blue (outer = B-Book)
+// and muted teal (inner = Coverage). Both pulled from BBookCharts'
+// established palette; same visual rhythm as the rest of the app.
+const COLOR_OUTER = '#577a9e';   // slate blue
+const COLOR_INNER = '#5b9b9b';   // muted teal
 
 // ── Format helpers ─────────────────────────────────────────────
 function fmtLots(n: number | null | undefined): string {
@@ -145,7 +144,7 @@ function NestedBarShape(props: NestedBarShapeProps) {
 }
 
 // ── Component ──────────────────────────────────────────────────
-export function Chart4SymbolsHedge({ period }: ChartComponentProps) {
+export function Chart4SymbolsHedge({ period, hedgeSide }: ChartComponentProps) {
   const [rows,    setRows]    = useState<SymbolsHedgeRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -166,7 +165,10 @@ export function Chart4SymbolsHedge({ period }: ChartComponentProps) {
           from:  range.from,
           to:    range.to,
           limit: SYMBOL_LIMIT,
-        });
+          // hedgeSide drives whether the chart shows long-only, short-only,
+          // or both. Default 'both' when undefined.
+          side:  hedgeSide ?? 'both',
+        } as any);
         if (!mounted || ctrl.signal.aborted) return;
         setRows(json.symbols);
         setError(null);
@@ -186,7 +188,7 @@ export function Chart4SymbolsHedge({ period }: ChartComponentProps) {
       clearInterval(id);
       if (abortRef.current) abortRef.current.abort();
     };
-  }, [period]);
+  }, [period, hedgeSide]);
 
   // ── Render branches ──────────────────────────────────────────
   if (loading && rows.length === 0) {
@@ -241,15 +243,16 @@ export function Chart4SymbolsHedge({ period }: ChartComponentProps) {
         />
         <Tooltip
           contentStyle={{
-            backgroundColor: '#252429',
-            border:          '1px solid #3a3a3c',
+            backgroundColor: '#1a1a1c',
+            border:          '1px solid #b87333',
+            borderRadius:    '4px',
             fontFamily:      'IBM Plex Mono, monospace',
             fontSize:        12,
+            padding:         '6px 10px',
+            color:           '#e6e6e6',
           }}
-          // We bind the Bar's dataKey to b_book_volume only (so Recharts
-          // sizes the slot by it), but the tooltip needs to show BOTH
-          // values per row. Custom formatter pulls hedge_volume from
-          // the payload directly.
+          labelStyle={{ color: '#b87333', fontWeight: 600, marginBottom: '2px' }}
+          itemStyle={{ color: '#e6e6e6' }}
           formatter={(value: number, _name: string, item: any) => {
             const hedge = item?.payload?.hedge_volume;
             return [
