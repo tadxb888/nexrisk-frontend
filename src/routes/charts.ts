@@ -40,6 +40,7 @@ const periodWithLimitQuery = z.object({
   from:  z.string().optional(),
   to:    z.string().optional(),
   limit: z.coerce.number().int().positive().optional(),
+  side:  z.enum(['long', 'short', 'both']).optional(),
 });
 
 /** Limit-only — Chart 6 (Top Holders) ignores from/to backend-side, Chart 7
