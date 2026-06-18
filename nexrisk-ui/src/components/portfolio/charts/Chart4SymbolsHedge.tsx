@@ -41,7 +41,6 @@ import {
 import type { ChartComponentProps } from './registry';
 import { fetchSymbolsHedge, periodToDateRange } from '@/services/chartsApi';
 import type { SymbolsHedgeRow } from '@/types/charts';
-import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 60_000;
 const SYMBOL_LIMIT     = 20;
@@ -49,9 +48,8 @@ const SYMBOL_LIMIT     = 20;
 // Inner bar drawn at this fraction of the outer bar's width.
 const INNER_WIDTH_RATIO = 0.5;
 
-// Two-color palette matching Chart 1 — slate blue (outer = B-Book)
-// and muted teal (inner = Coverage). Both pulled from BBookCharts'
-// established palette; same visual rhythm as the rest of the app.
+// Two-color palette — slate blue (outer = B-Book) and muted teal
+// (inner = Coverage). Original Chart 4 palette, kept by request.
 const COLOR_OUTER = '#577a9e';   // slate blue
 const COLOR_INNER = '#5b9b9b';   // muted teal
 
@@ -65,31 +63,25 @@ function fmtLots(n: number | null | undefined): string {
 }
 
 // ── NestedBarShape — custom SVG renderer for one bar slot ──────
-// Recharts calls this for each data point. We get the geometry of
-// the OUTER bar slot (x, y, width, height) plus the row's full data
-// payload via `payload`. We render two <rect>s:
-//   1. Outer rectangle = B-Book volume (the slot Recharts already sized)
-//   2. Inner rectangle = Coverage volume, centered horizontally at
-//      INNER_WIDTH_RATIO of the slot width, with its own height
-//      computed from the row's hedge_volume scaled against
-//      b_book_volume's height.
+// The <Bar/> is bound to max(b_book_volume, hedge_volume) (see dataKey below),
+// so the slot Recharts hands us — and the Y-axis domain — is sized to whichever
+// of the two is LARGER. That fixes the old defect where the axis scaled to
+// B-Book only: when Coverage > B-Book the inner bar got clamped to the outer's
+// height and the two looked identical despite different values.
 //
-// The y-axis is set to scale to b_book_volume's max via Recharts'
-// auto-domain; that means the outer bar's pixel height ALWAYS
-// represents b_book_volume's value to scale. We compute the inner
-// bar's pixel height proportionally:
-//     innerHeightPx = outerHeightPx × (hedge / b_book)
-// That keeps inner perfectly aligned to the same Y-axis scale.
+// Given the slot geometry (x, y, width, height) representing scaleMax lots:
+//   perLot   = height / scaleMax           (pixels per lot, shared scale)
+//   baseline = y + height                  (Y = 0)
+//   outer    = b_book_volume × perLot      (slate / B-Book)
+//   inner    = hedge_volume  × perLot      (orange / Coverage), centered
+// Both rise from the same baseline on the same scale, so inner is taller than
+// outer exactly when Coverage > B-Book — and shorter when it isn't.
 //
 // Edge cases:
-//   • If b_book_volume = 0 but hedge_volume > 0: outer rect has zero
-//     height; we fall back to drawing the inner at the inner ratio
-//     directly against the chart's Y-pixel domain — but that's hard
-//     without the chart's scale. Acceptable degradation: hide outer,
-//     and skip inner too. The data point shows as nothing — which is
-//     fine because for THIS chart's purpose, b_book_volume = 0 means
-//     no client trades, so "no bar" is meaningful.
-//   • If hedge_volume = 0: only outer rect renders.
+//   • B-Book = 0, Coverage > 0  → outer has zero height, inner still renders
+//     (symbol traded only as A/C — e.g. metals with no B-Book flow).
+//   • Coverage = 0              → only the outer renders.
+//   • both 0                    → nothing.
 interface NestedBarShapeProps {
   x?:        number;
   y?:        number;
@@ -105,31 +97,34 @@ function NestedBarShape(props: NestedBarShapeProps) {
   const bVol = payload.b_book_volume ?? 0;
   const hVol = payload.hedge_volume  ?? 0;
 
-  // No outer bar = no inner bar either (see edge-case note above).
-  if (bVol <= 0) return null;
+  const scaleMax = Math.max(bVol, hVol);
+  if (scaleMax <= 0) return null;          // nothing traded — no bar
 
-  // Inner bar geometry
-  const innerWidth   = width * INNER_WIDTH_RATIO;
-  const innerX       = x + (width - innerWidth) / 2;
-  // Pixel height of the outer bar represents bVol on the y-scale.
-  // The inner's pixel height is proportional: hVol / bVol of that.
-  // Clamp at outer's full height (in case hedge > b_book — visual
-  // "overflow" prevented; tooltip still shows real value).
-  const innerHeightRaw = (height * hVol) / bVol;
-  const innerHeight    = Math.min(Math.max(innerHeightRaw, 0), height);
-  const innerY         = y + (height - innerHeight);
+  // Shared pixel-per-lot scale derived from the slot (sized to scaleMax).
+  const perLot   = height / scaleMax;
+  const baseline = y + height;             // Y = 0
+
+  const outerHeight = bVol * perLot;
+  const outerY      = baseline - outerHeight;
+
+  const innerWidth  = width * INNER_WIDTH_RATIO;
+  const innerX      = x + (width - innerWidth) / 2;
+  const innerHeight = hVol * perLot;
+  const innerY      = baseline - innerHeight;
 
   return (
     <g>
       {/* Outer = B-Book volume */}
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        fill={COLOR_OUTER}
-      />
-      {/* Inner = Coverage (A+C) volume — only render if there's coverage */}
+      {bVol > 0 && (
+        <rect
+          x={x}
+          y={outerY}
+          width={width}
+          height={outerHeight}
+          fill={COLOR_OUTER}
+        />
+      )}
+      {/* Inner = Coverage (A+C) volume */}
       {hVol > 0 && (
         <rect
           x={innerX}
@@ -253,10 +248,11 @@ export function Chart4SymbolsHedge({ period, hedgeSide }: ChartComponentProps) {
           }}
           labelStyle={{ color: '#b87333', fontWeight: 600, marginBottom: '2px' }}
           itemStyle={{ color: '#e6e6e6' }}
-          formatter={(value: number, _name: string, item: any) => {
+          formatter={(_value: number, _name: string, item: any) => {
+            const b     = item?.payload?.b_book_volume;
             const hedge = item?.payload?.hedge_volume;
             return [
-              `B-Book: ${fmtLots(value)} lots${hedge != null ? `   Coverage: ${fmtLots(hedge)} lots` : ''}`,
+              `B-Book: ${fmtLots(b)} lots${hedge != null ? `   Coverage: ${fmtLots(hedge)} lots` : ''}`,
               '',
             ];
           }}
@@ -273,12 +269,16 @@ export function Chart4SymbolsHedge({ period, hedgeSide }: ChartComponentProps) {
           ]}
         />
 
-        {/* Single Bar with custom shape — renders BOTH outer and inner
-            rectangles per data point. dataKey b_book_volume drives the
-            Y-axis scale. The inner Coverage rect height is computed
-            inside NestedBarShape using payload.hedge_volume. */}
+        {/* Single Bar with custom shape — renders BOTH outer (B-Book) and
+            inner (Coverage) rectangles per data point. dataKey returns
+            max(b_book_volume, hedge_volume) so the Y-axis and the slot scale
+            to whichever is larger; NestedBarShape draws both rects against
+            that shared scale, so the inner can legitimately exceed the outer
+            when Coverage > B-Book. */}
         <Bar
-          dataKey="b_book_volume"
+          dataKey={(d: SymbolsHedgeRow) =>
+            Math.max(d.b_book_volume ?? 0, d.hedge_volume ?? 0)
+          }
           shape={<NestedBarShape />}
         />
       </BarChart>
