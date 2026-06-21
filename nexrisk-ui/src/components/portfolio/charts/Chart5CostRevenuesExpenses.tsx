@@ -212,7 +212,7 @@ export function Chart5CostRevenuesExpenses({ period }: ChartComponentProps) {
         </Bar>
 
         {/* net_revenue — teal positive / red negative */}
-        <Bar dataKey="net_revenue" name="Net Revenue" fill={COLOR_NET_REV}>
+        <Bar dataKey="net_revenue" name="Spread Revenue" fill={COLOR_NET_REV}>
           {rows.map((r, i) => (
             <Cell
               key={`net-${i}`}
