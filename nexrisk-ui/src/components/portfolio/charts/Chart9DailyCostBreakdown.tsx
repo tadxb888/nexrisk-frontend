@@ -39,7 +39,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
   BarChart,
   Bar,
-  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -55,19 +54,17 @@ import {
   periodToDateOnlyRange,
   type DailyCostsResponse,
 } from '@/services/chartsApi';
-import { BOOK_COLORS } from './bookColors';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
-// Per-book total-bar colours — sourced from the central palette.
-const COLOR_A         = BOOK_COLORS.a;
-const COLOR_B         = BOOK_COLORS.b;
-const COLOR_C         = BOOK_COLORS.c;
-const COLOR_PORTFOLIO = BOOK_COLORS.portfolio;
-
-// Sign-driven colours — breakdown segments. Independent of book identity.
-const COLOR_POSITIVE = '#6aaa78';
-const COLOR_NEGATIVE = '#d07070';
+// Component colours — one fixed hue per cost component, identical in every
+// book group so a single component reads across books at a glance. Sourced
+// from the app palette (chart-7 / BBook). Sign is shown by bar DIRECTION
+// (above / below the zero line), never by colour.
+const COLOR_COMMISSIONS = '#3d5a80'; // blue
+const COLOR_SWAPS       = '#3d7d7d'; // teal
+const COLOR_REBATES     = '#5c4d7d'; // purple
+const COLOR_TOTAL       = '#b87333'; // copper — per-book total only, never a book colour
 
 // ── Format helpers ─────────────────────────────────────────────
 function fmtMoney(n: number | null | undefined): string {
@@ -79,30 +76,17 @@ function fmtMoney(n: number | null | undefined): string {
   return `${sign}$${abs.toFixed(2)}`;
 }
 
-// ── Row shape for the 8 X-axis slots ───────────────────────────
-type RowKind = 'breakdown' | 'total';
-
+// ── Row shape — one per book (4 X-axis groups) ─────────────────
 interface ChartRow {
-  /** X-axis label, e.g. "B Breakdown" or "B Total". */
-  label:      string;
-  /** Which book this row belongs to — drives color of the total bar. */
-  book:       'b' | 'a' | 'c' | 'portfolio';
-  /** Distinguishes breakdown rows (stacked) from total rows (single bar). */
-  kind:       RowKind;
-  /** Stacked-bar values — non-zero only on breakdown rows. */
+  /** X-axis group label, e.g. "B-Book". */
+  label:       string;
+  book:        'b' | 'a' | 'c' | 'portfolio';
+  /** All four values populated per book; rendered as grouped bars. */
   commissions: number;
   swaps:       number;
   rebates:     number;
-  /** Total bar value — non-zero only on total rows. */
   total:       number;
 }
-
-const BOOK_COLOR: Record<ChartRow['book'], string> = {
-  a:         COLOR_A,
-  b:         COLOR_B,
-  c:         COLOR_C,
-  portfolio: COLOR_PORTFOLIO,
-};
 
 const BOOK_LABEL: Record<ChartRow['book'], string> = {
   b:         'B-Book',
@@ -111,34 +95,22 @@ const BOOK_LABEL: Record<ChartRow['book'], string> = {
   portfolio: 'Portfolio',
 };
 
-/** Build the 8 rows in the order: B-Breakdown, B-Total, A-Breakdown,
- *  A-Total, C-Breakdown, C-Total, Portfolio-Breakdown, Portfolio-Total.
- *  Per Ross — books in B/A/C order, each pair (breakdown then total). */
+/** Build 4 rows — one per book, in B / A / C / Portfolio order. Each row
+ *  carries all four values (commissions, swaps, rebates, total) rendered
+ *  as grouped bars within the book's X-axis slot. */
 function buildRows(books: DailyCostsResponse['books']): ChartRow[] {
   const order: Array<ChartRow['book']> = ['b', 'a', 'c', 'portfolio'];
-  const rows: ChartRow[] = [];
-  for (const book of order) {
+  return order.map(book => {
     const f = books[book];
-    rows.push({
-      label:       `${BOOK_LABEL[book]} Breakdown`,
+    return {
+      label:       BOOK_LABEL[book],
       book,
-      kind:        'breakdown',
       commissions: f.commissions,
       swaps:       f.swaps,
       rebates:     f.rebates,
-      total:       0,
-    });
-    rows.push({
-      label:       `${BOOK_LABEL[book]} Total`,
-      book,
-      kind:        'total',
-      commissions: 0,
-      swaps:       0,
-      rebates:     0,
       total:       f.total,
-    });
-  }
-  return rows;
+    };
+  });
 }
 
 // ── Component ──────────────────────────────────────────────────
@@ -205,18 +177,16 @@ export function Chart9DailyCostBreakdown({ period }: ChartComponentProps) {
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={rows}
-          margin={{ top: 8, right: 16, bottom: 24, left: 0 }}
+          margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
           barCategoryGap="15%"
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#3a3a3c" vertical={false} />
           <XAxis
             dataKey="label"
             stroke="#808080"
-            tick={{ fill: '#d2d6e2', fontSize: 10, fontFamily: 'IBM Plex Mono, monospace' }}
+            tick={{ fill: '#d2d6e2', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
             interval={0}
-            angle={-25}
-            textAnchor="end"
-            height={50}
+            height={28}
           />
           <YAxis
             tickFormatter={fmtMoney}
@@ -229,7 +199,7 @@ export function Chart9DailyCostBreakdown({ period }: ChartComponentProps) {
           <Tooltip
             contentStyle={{
               backgroundColor: '#252429',
-              border:          '1px solid #3a3a3c',
+              border:          '1px solid #b87333',
               fontFamily:      'IBM Plex Mono, monospace',
               fontSize:        12,
             }}
@@ -247,51 +217,22 @@ export function Chart9DailyCostBreakdown({ period }: ChartComponentProps) {
             // ("commissions", "swaps", "rebates", "total") are not what
             // we want shown to the user. Render explanatory chips.
             payload={[
-              { value: 'Commissions',      type: 'square', color: '#aaa',           id: 'c' },
-              { value: 'Swaps',            type: 'square', color: '#aaa',           id: 's' },
-              { value: 'Rebates',          type: 'square', color: '#aaa',           id: 'r' },
-              { value: 'Positive segment', type: 'square', color: COLOR_POSITIVE,   id: 'p' },
-              { value: 'Negative segment', type: 'square', color: COLOR_NEGATIVE,   id: 'n' },
-              { value: 'Total (book)',     type: 'square', color: COLOR_PORTFOLIO, id: 't' },
+              { value: 'Commissions', type: 'square', color: COLOR_COMMISSIONS, id: 'c' },
+              { value: 'Swaps',       type: 'square', color: COLOR_SWAPS,       id: 's' },
+              { value: 'Rebates',     type: 'square', color: COLOR_REBATES,     id: 'r' },
+              { value: 'Total',       type: 'square', color: COLOR_TOTAL,       id: 't' },
             ]}
           />
 
-          {/* Stacked breakdown bars — only render on breakdown rows.
-              The three series share a stackId so they pile vertically.
-              Each cell color is sign-driven (positive green / negative
-              red). Total rows have zero in all three keys → no bars. */}
-          <Bar dataKey="commissions" stackId="cost" name="Commissions">
-            {rows.map((r, i) => (
-              <Cell
-                key={`comm-${i}`}
-                fill={r.commissions >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE}
-              />
-            ))}
-          </Bar>
-          <Bar dataKey="swaps" stackId="cost" name="Swaps">
-            {rows.map((r, i) => (
-              <Cell
-                key={`swap-${i}`}
-                fill={r.swaps >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE}
-              />
-            ))}
-          </Bar>
-          <Bar dataKey="rebates" stackId="cost" name="Rebates">
-            {rows.map((r, i) => (
-              <Cell
-                key={`reb-${i}`}
-                fill={r.rebates >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE}
-              />
-            ))}
-          </Bar>
-
-          {/* Total bar — its own (un-stacked) bar, only renders on total
-              rows. Color comes from the row's book. */}
-          <Bar dataKey="total" name="Total">
-            {rows.map((r, i) => (
-              <Cell key={`tot-${i}`} fill={BOOK_COLOR[r.book]} />
-            ))}
-          </Bar>
+          {/* Grouped bars — four per book group (B / A / C / Portfolio).
+              Colour encodes the COMPONENT (fixed per series, identical
+              across groups); sign is shown by direction — Recharts draws
+              negative values below the y=0 reference line automatically.
+              Total is the copper sum bar, never a book colour. */}
+          <Bar dataKey="commissions" name="Commissions" fill={COLOR_COMMISSIONS} />
+          <Bar dataKey="swaps"       name="Swaps"       fill={COLOR_SWAPS} />
+          <Bar dataKey="rebates"     name="Rebates"     fill={COLOR_REBATES} />
+          <Bar dataKey="total"       name="Total"       fill={COLOR_TOTAL} />
         </BarChart>
       </ResponsiveContainer>
 
