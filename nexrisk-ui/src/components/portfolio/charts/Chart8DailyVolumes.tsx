@@ -120,6 +120,29 @@ function decorate(points: DailyVolumePoint[], mode: VolumeMode): ChartRow[] {
   }));
 }
 
+// ── Log-axis domain ────────────────────────────────────────────
+// A fixed log floor only suits one unit: 0.1 fits lots (which bottom
+// out near a tenth of a lot) but wastes most of the height in notional
+// mode, where the smallest day is still hundreds of thousands of units
+// — leaving the lower half of the chart empty. Derive floor/ceiling
+// from the actual positive data, padded to clean powers of ten so the
+// ticks stay 1 / 10 / 100 / 1k / ...
+function computeLogDomain(rows: ChartRow[]): [number, number] {
+  let min = Infinity;
+  let max = 0;
+  for (const r of rows) {
+    for (const v of [r.b_value, r.a_value, r.c_value, r.p_value]) {
+      if (v == null || v <= 0) continue;   // log can't place 0 / negatives
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  if (!isFinite(min) || max <= 0) return [LOG_FLOOR, 1];   // no positive data
+  const lo = Math.pow(10, Math.floor(Math.log10(min)));
+  const hi = Math.pow(10, Math.ceil(Math.log10(max)));
+  return [lo, hi];
+}
+
 // ── Component ──────────────────────────────────────────────────
 export function Chart8DailyVolumes({ period }: ChartComponentProps) {
   const [points,     setPoints]     = useState<DailyVolumePoint[]>([]);
@@ -177,6 +200,10 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
 
   // Re-decorate whenever points or mode change. Cheap (small arrays).
   const data = decorate(points, volumeMode);
+
+  // Log axis can't use a fixed floor (see computeLogDomain): track the
+  // real positive min/max so notional fills the height like lots does.
+  const logDomain = computeLogDomain(data);
 
   const toggleBook = (k: BookKey) => {
     setHidden(prev => ({ ...prev, [k]: !prev[k] }));
@@ -275,7 +302,7 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
             />
             <YAxis
               scale={scaleMode === 'log' ? 'log' : 'linear'}
-              domain={scaleMode === 'log' ? [LOG_FLOOR, 'dataMax'] : [0, 'auto']}
+              domain={scaleMode === 'log' ? logDomain : [0, 'auto']}
               allowDataOverflow={scaleMode === 'log'}
               tickFormatter={fmtCompact}
               stroke="#808080"
