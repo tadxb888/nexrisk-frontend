@@ -52,6 +52,12 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;   // 5 minutes per spec
 
 // ── Local volume mode toggle ──────────────────────────────────
 type VolumeMode = 'lots' | 'notional';
+type ScaleMode  = 'linear' | 'log';
+
+// Log can't plot 0 (log(0) = -∞), so zero-volume days drop out of the
+// line in log mode. Floor just below the smallest real size (0.1 lot)
+// so 0.1-lot days still land on the axis. Linear shows 0 days honestly.
+const LOG_FLOOR = 0.1;
 
 // ── Series identity — drives line + legend + tooltip rendering ────
 type BookKey = 'b' | 'a' | 'c' | 'portfolio';
@@ -120,6 +126,7 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
   const [loading,    setLoading]    = useState<boolean>(true);
   const [error,      setError]      = useState<string | null>(null);
   const [volumeMode, setVolumeMode] = useState<VolumeMode>('lots');
+  const [scaleMode,  setScaleMode]  = useState<ScaleMode>('log');
   // Per-book hidden state — map from BookKey → true means hidden.
   // Click a legend chip to toggle. Hidden lines render at 0 opacity
   // so the chart re-layouts smoothly (vs. removing the <Line> entirely
@@ -192,7 +199,24 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
     <div className="h-full w-full flex flex-col">
       {/* ── Top strip — Lots/Notional toggle ───────────────────── */}
       <div className="flex-shrink-0 flex items-center justify-end gap-2 pb-2 px-1">
-        <span className="text-[10px] font-mono text-[#808080]">Volume:</span>
+        <span className="text-[10px] font-mono text-[#808080]">Scale:</span>
+        <div className="flex bg-[#232225] border border-[#555] rounded overflow-hidden">
+          {(['linear', 'log'] as ScaleMode[]).map((m, i) => (
+            <button
+              key={m}
+              onClick={() => setScaleMode(m)}
+              className={
+                'px-2 py-0.5 text-[11px] font-mono transition-colors ' +
+                (scaleMode === m ? 'text-white' : 'text-[#aaa] hover:text-white') +
+                (i > 0 ? ' border-l border-[#555]' : '')
+              }
+              style={scaleMode === m ? { backgroundColor: '#2a6d6d' } : undefined}
+            >
+              {m === 'linear' ? 'Linear' : 'Log'}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] font-mono text-[#808080] ml-2">Volume:</span>
         <div className="flex bg-[#232225] border border-[#555] rounded overflow-hidden">
           {(['lots', 'notional'] as VolumeMode[]).map((m, i) => (
             <button
@@ -250,12 +274,16 @@ export function Chart8DailyVolumes({ period }: ChartComponentProps) {
               minTickGap={32}
             />
             <YAxis
+              scale={scaleMode === 'log' ? 'log' : 'linear'}
+              domain={scaleMode === 'log' ? [LOG_FLOOR, 'dataMax'] : [0, 'auto']}
+              allowDataOverflow={scaleMode === 'log'}
               tickFormatter={fmtCompact}
               stroke="#808080"
               tick={{ fill: '#d2d6e2', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
               width={64}
               label={{
-                value:    volumeMode === 'lots' ? 'volume (lots)' : 'volume (units)',
+                value:    (volumeMode === 'lots' ? 'volume (lots)' : 'volume (units)')
+                            + (scaleMode === 'log' ? ' (log scale)' : ''),
                 angle:    -90,
                 position: 'insideLeft',
                 offset:   10,
