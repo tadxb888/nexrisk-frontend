@@ -214,6 +214,7 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
                   fontFamily:      'IBM Plex Mono, monospace',
                   fontSize:        12,
                 }}
+                itemStyle={{ color: '#b87333' }}
                 formatter={(_value: number, _name: string, item: any) => {
                   const p = item?.payload as PieDatum | undefined;
                   if (!p) return ['', ''];
