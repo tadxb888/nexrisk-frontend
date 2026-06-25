@@ -34,7 +34,6 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
-  Cell,
   ResponsiveContainer,
 } from 'recharts';
 
@@ -48,8 +47,7 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;   // 5 minutes per spec
 const COLOR_COMMISSION = '#6aaa78';   // green
 const COLOR_SWAP       = '#c9b87c';   // yellow
 const COLOR_NET_REV    = '#4ecdc4';   // teal
-const COLOR_LP_PAID    = '#d07070';   // red
-const COLOR_NEGATIVE   = '#d07070';   // sign-flipped values render in this
+const COLOR_LP_PAID    = '#b87333';   // copper — distinct from any negative bar
 
 // ── Format helpers ─────────────────────────────────────────────
 /** "2026-04" → "Apr '26" */
@@ -176,7 +174,7 @@ export function Chart5CostRevenuesExpenses({ period }: ChartComponentProps) {
           // to its display value, (b) rename _signed dataKey to a
           // human label.
           formatter={(value: number, name: string, item: any) => {
-            if (name === 'LP Commission Paid') {
+            if (name === 'Commissions Paid to LPs') {
               // lp_commission_paid_signed is shown — flip back.
               const original = item?.payload?.lp_commission_paid ?? Math.abs(value);
               return [`-${fmtMoney(Math.abs(original))}`, name];
@@ -189,45 +187,18 @@ export function Chart5CostRevenuesExpenses({ period }: ChartComponentProps) {
           wrapperStyle={{ fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
         />
 
-        {/* commission_earned — green (red if anomalous negative) */}
-        <Bar dataKey="commission_earned" name="Commission Earned" fill={COLOR_COMMISSION}>
-          {rows.map((r, i) => (
-            <Cell
-              key={`com-${i}`}
-              fill={r.commission_earned < 0 ? COLOR_NEGATIVE : COLOR_COMMISSION}
-            />
-          ))}
-        </Bar>
+        {/* Each series keeps its own colour regardless of sign. Sign is
+            shown by direction: negatives render below the y=0 line. Using
+            red for negatives collapsed all four series into one red when
+            several went negative in the same month, and clashed with LP
+            Commission Paid. */}
+        <Bar dataKey="commission_earned" name="Commission Earned" fill={COLOR_COMMISSION} />
+        <Bar dataKey="swap_earned"       name="Swap Earned"       fill={COLOR_SWAP} />
+        <Bar dataKey="net_revenue"       name="Spread Revenue"    fill={COLOR_NET_REV} />
 
-        {/* swap_earned — yellow when positive, red when negative
-            (legit case: broker net-pays swap on a high-positive-swap
-            currency where clients hold long overnight). */}
-        <Bar dataKey="swap_earned" name="Swap Earned" fill={COLOR_SWAP}>
-          {rows.map((r, i) => (
-            <Cell
-              key={`swap-${i}`}
-              fill={r.swap_earned < 0 ? COLOR_NEGATIVE : COLOR_SWAP}
-            />
-          ))}
-        </Bar>
-
-        {/* net_revenue — teal positive / red negative */}
-        <Bar dataKey="net_revenue" name="Spread Revenue" fill={COLOR_NET_REV}>
-          {rows.map((r, i) => (
-            <Cell
-              key={`net-${i}`}
-              fill={r.net_revenue < 0 ? COLOR_NEGATIVE : COLOR_NET_REV}
-            />
-          ))}
-        </Bar>
-
-        {/* lp_commission_paid — always red, always below zero (we
-            flipped the sign in `decorate`). */}
-        <Bar dataKey="lp_commission_paid_signed" name="LP Commission Paid" fill={COLOR_LP_PAID}>
-          {rows.map((_r, i) => (
-            <Cell key={`lp-${i}`} fill={COLOR_LP_PAID} />
-          ))}
-        </Bar>
+        {/* lp_commission_paid — copper, always below zero (sign flipped in
+            decorate). */}
+        <Bar dataKey="lp_commission_paid_signed" name="Commissions Paid to LPs" fill={COLOR_LP_PAID} />
       </BarChart>
     </ResponsiveContainer>
   );
