@@ -37,11 +37,9 @@ import {
   type PortfolioExposureSymbolsData,
   type PortfolioExposureSymbolRow,
 } from '@/services/api';
-import { BOOK_COLORS } from './bookColors';
-
-const COLOR_A = BOOK_COLORS.a;
-const COLOR_B = BOOK_COLORS.b;
-const COLOR_C = BOOK_COLORS.c;
+const COLOR_A = '#5c4d7d'; // A-Book — purple  (BBook PURPLE_GRADIENT[0])
+const COLOR_B = '#3d7d7d'; // B-Book — teal    (BBook TEAL_GRADIENT[0])
+const COLOR_C = '#3d5a80'; // C-Book — blue    (BBook BLUE_GRADIENT[0])
 
 type BookKey = 'a' | 'b' | 'c';
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
@@ -212,7 +210,7 @@ export function Chart7NetVolume(_props: ChartComponentProps) {
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#252429',
-                  border:          '1px solid #3a3a3c',
+                  border:          '1px solid #b87333',
                   fontFamily:      'IBM Plex Mono, monospace',
                   fontSize:        12,
                 }}
