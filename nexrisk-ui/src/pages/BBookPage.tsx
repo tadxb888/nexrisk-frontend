@@ -147,6 +147,18 @@ function useBBookWebSocket(opts: {
           const d = ev.data as Partial<MT5PositionWithNode> & { position_id: number };
           opts.onMerge(d);
 
+        } else if ((ev as any).type === 'POSITION_BATCH' || (ev as any).data?.type === 'POSITION_BATCH') {
+          // Per-tick P/L stream (new). One array per symbol, ~every 500ms.
+          // Each element is the same changed-fields delta as a single
+          // POSITION_CHANGE, so reuse the merge path and price_current keeps
+          // updating. Wire shape unverified: the discriminator and the array
+          // may sit on the envelope or inside data, so accept either placement.
+          const batch = ((ev as any).data?.positions ?? (ev as any).positions) as
+            (Partial<MT5PositionWithNode> & { position_id: number })[] | undefined;
+          if (Array.isArray(batch)) {
+            for (const d of batch) opts.onMerge(d);
+          }
+
         } else if (ev.type === 'POSITION_DELETE') {
           const d = ev.data as { position_id: number };
           opts.onRemove(d.position_id);
