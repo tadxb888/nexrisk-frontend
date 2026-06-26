@@ -936,9 +936,16 @@ export function NetExposurePage() {
           return;
         }
 
-        // Upsert on add/change. Event names per api.ts BBookWsEvent union.
-        if (msg.type === 'POSITION_ADD' || msg.type === 'POSITION_CHANGE') {
-          const p = msg.data as MT5PositionWithNode | undefined;
+        // Upsert a single MT5 position into the B-Book grid. Merge — DO NOT
+        // replace. The C++ backend's per-position event is a delta: it carries
+        // only the fields that change tick-to-tick (price_current, profit, swap,
+        // commission) and omits the static lifetime fields (action, volume_lots,
+        // price_open, time_create etc.). A naïve `next[idx] = p` would strip
+        // those from the row, turning Net Vol into NaN and Mkt Px / Break-Even
+        // Px into 0 the first time a tick arrives after the REST/SNAPSHOT
+        // bootstrap. Spreading the existing row first preserves the static
+        // fields; the delta then overwrites only what it actually contains.
+        const upsertBBookPosition = (p: MT5PositionWithNode | undefined): void => {
           if (!p || !p.nodeName) return;
           lastKnownBBookPnlRef.current.set(p.position_id, allInPnl(p));
           const keyOf = (pp: MT5PositionWithNode) =>
@@ -946,18 +953,28 @@ export function NetExposurePage() {
           const k = keyOf(p);
           setBBookPositions((prev) => {
             const idx = prev.findIndex((q) => keyOf(q) === k);
-            // Merge — DO NOT replace. The C++ backend's POSITION_CHANGE is a
-            // delta event: it carries only the fields that change tick-to-tick
-            // (price_current, profit, swap, commission) and omits the static
-            // lifetime fields (action, volume_lots, price_open, time_create
-            // etc.). A naïve `next[idx] = p` would strip those from the row,
-            // turning Net Vol into NaN and Mkt Px / Break-Even Px into 0 the
-            // first time a tick arrives after the REST/SNAPSHOT bootstrap.
-            // Spreading the existing row first preserves the static fields;
-            // the delta then overwrites only what it actually contains.
             if (idx >= 0) { const next = [...prev]; next[idx] = { ...next[idx], ...p }; return next; }
             return [...prev, p];
           });
+        };
+
+        // Single position add/change (real MT5 state change). Event names per
+        // api.ts BBookWsEvent union.
+        if (msg.type === 'POSITION_ADD' || msg.type === 'POSITION_CHANGE') {
+          upsertBBookPosition(msg.data as MT5PositionWithNode | undefined);
+          return;
+        }
+
+        // Batch per-tick P/L stream (new). The discriminator may sit on the
+        // envelope (msg.type) or inside the payload (msg.data.type), and the
+        // positions array likewise — the C++ wire shape for this frame is
+        // unverified, so accept either placement. Each element is the same
+        // position object as the single path, so reuse the identical upsert.
+        if (msg.type === 'POSITION_BATCH' || msg.data?.type === 'POSITION_BATCH') {
+          const batch = msg.data?.positions ?? msg.positions;
+          if (Array.isArray(batch)) {
+            for (const p of batch) upsertBBookPosition(p as MT5PositionWithNode);
+          }
           return;
         }
 
