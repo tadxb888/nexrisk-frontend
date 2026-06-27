@@ -529,7 +529,6 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
                 onChange={e => upd('node_type', e.target.value)}>
                 {!lockMasterOption && <option value="MASTER">MASTER</option>}
                 <option value="STANDBY">STANDBY</option>
-                <option value="BACKUP">BACKUP</option>
                 <option value="CLIENT">CLIENT</option>
                 <option value="PARTNER">PARTNER</option>
               </select>
