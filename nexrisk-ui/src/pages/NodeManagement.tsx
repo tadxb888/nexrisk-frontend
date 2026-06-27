@@ -432,9 +432,15 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
   onClose: () => void;
   onSave:  (f: FormData) => void;
 }) {
-  const [form, setForm] = useState<FormData>(
-    mode === 'edit' && node ? nodeToForm(node) : emptyForm()
-  );
+  const [form, setForm] = useState<FormData>(() => {
+    if (mode === 'edit' && node) return nodeToForm(node);
+    const f = emptyForm();
+    // Add path can never mint a second MASTER (backend returns 409). If a
+    // MASTER already exists, the option is hidden below — default to STANDBY
+    // so the controlled <select> always matches a rendered option.
+    if (nodes.some(n => n.node_type === 'MASTER')) f.node_type = 'STANDBY';
+    return f;
+  });
   const [showPwd, setShowPwd] = useState(false);
   const [testState, setTestState] = useState<'idle'|'testing'|'ok'|'fail'>('idle');
 
@@ -447,6 +453,9 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
   const hasStandby = nodes.some(n => n.node_type === 'STANDBY' && (!node || n.id !== node.id));
   const showMasterWarn  = form.node_type === 'MASTER'  && hasMaster;
   const showStandbyWarn = form.node_type === 'STANDBY' && hasStandby;
+  // Making a node MASTER is a promote/update on an existing STANDBY, not an Add.
+  // Once a MASTER exists, picking MASTER in Add returns a 409 — so don't offer it.
+  const lockMasterOption = mode === 'add' && hasMaster;
 
   const [testLatency, setTestLatency] = useState<number | null>(null);
   const runTest = async () => {
@@ -518,7 +527,7 @@ function NodeModal({ mode, node, nodes, onClose, onSave }: {
               </label>
               <select className="select w-full text-sm" value={form.node_type}
                 onChange={e => upd('node_type', e.target.value)}>
-                <option value="MASTER">MASTER</option>
+                {!lockMasterOption && <option value="MASTER">MASTER</option>}
                 <option value="STANDBY">STANDBY</option>
                 <option value="BACKUP">BACKUP</option>
                 <option value="CLIENT">CLIENT</option>
