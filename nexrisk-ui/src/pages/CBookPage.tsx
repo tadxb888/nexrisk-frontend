@@ -810,11 +810,16 @@ export function CBookPage() {
           if (cancelled || !json) return;
           const records: { lp_position_id?: string | null; rule_name?: string | null }[] =
             json.data ?? (Array.isArray(json) ? json : []);
-          const map = new Map<string, string>();
+          // Merge into the existing map — never replace it. A position's strategy is
+          // fixed for its lifetime, so labels must be sticky. The records endpoint can
+          // stop returning a position (page_size cap, or backend clearing lp_position_id
+          // via the pending FIX-tag-527 propagation gap), and hedge.fill (WS, below) also
+          // writes here. A wholesale replace would drop those entries, and the next
+          // position rebuild would relabel the row 'Terminal'.
+          const map = hedgeRecordMapRef.current;
           for (const r of records) {
             if (r.lp_position_id && r.rule_name) map.set(r.lp_position_id, r.rule_name);
           }
-          hedgeRecordMapRef.current = map;
           console.log('[HEDGE map]', [...map.entries()]);
           // Backfill two places so bookStats (derived from livePositions)
           // re-evaluates and the Strategy / A-Book cards render. If we only update
