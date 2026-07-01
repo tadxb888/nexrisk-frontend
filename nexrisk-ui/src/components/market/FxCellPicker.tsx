@@ -79,6 +79,10 @@ export function FxCellPicker({ open, nodes, onClose, onConfirm }: FxCellPickerPr
     );
   }, [symbols, search]);
 
+  // Only the Master node streams prices, so it is the only valid FX-cell source.
+  // Narrow the passed active nodes down to the master before showing the picker.
+  const masterNodes = useMemo(() => nodes.filter(n => n.is_master), [nodes]);
+
   if (!open) return null;
 
   return (
@@ -149,7 +153,7 @@ export function FxCellPicker({ open, nodes, onClose, onConfirm }: FxCellPickerPr
         {/* Body */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {step === 'source' ? (
-            <SourceList nodes={nodes} onPick={(n) => { setSelectedNode(n); setStep('symbol'); }} />
+            <SourceList nodes={masterNodes} onPick={(n) => { setSelectedNode(n); setStep('symbol'); }} />
           ) : (
             <SymbolList
               symbols={filteredSymbols}
@@ -213,7 +217,7 @@ function SourceList({
   if (nodes.length === 0) {
     return (
       <div style={{ padding: 18, color: '#aaa', fontSize: 12 }}>
-        No active MT5 sources. Connect a node in <em>System → MT5 Servers</em>.
+        No Master MT5 node. Designate one in <em>System → MT5 Servers</em>.
       </div>
     );
   }
