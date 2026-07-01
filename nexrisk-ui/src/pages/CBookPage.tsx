@@ -698,6 +698,13 @@ export function CBookPage() {
   // DOM Trader (posOverrideRef) takes precedence over this map.
   const hedgeRecordMapRef = useRef<Map<string, string>>(new Map());
 
+  // Once a position resolves to a strategy name, that label is fixed for its
+  // lifetime — same lifecycle guarantee posOverrideRef gives DOM Trader. Pinned
+  // here by position_id so a later rebuild that misses hedgeRecordMapRef never
+  // demotes a resolved strategy row back to 'Terminal'. In-memory only (not
+  // persisted): survives rebuilds within a session, cleared on close.
+  const resolvedHedgeTypeRef = useRef<Map<string, string>>(new Map());
+
   // Names of currently-ACTIVE hedge rules, refreshed alongside hedge records.
   // Drives the Strategy card dropdown so configured-but-idle strategies are still
   // selectable (independent of whether they have open positions or closes today).
@@ -963,7 +970,13 @@ export function CBookPage() {
             const row = positionToCBook(p, gridLpId, instrMap);
             // Identify hedge strategy positions (lower priority than DOM Trader override)
             const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
-            if (hedgeName) row.type = hedgeName;
+            if (hedgeName) {
+              row.type = hedgeName;
+              resolvedHedgeTypeRef.current.set(p.position_id, hedgeName); // pin for lifetime
+            } else {
+              const sticky = resolvedHedgeTypeRef.current.get(p.position_id);
+              if (sticky) row.type = sticky; // never demote a resolved strategy row
+            }
             // DOM Trader: consume a pending DOM entry if one matches symbol+side.
             if (!hedgeName && !posOverrideRef.current.has(p.position_id)) {
               const comment = consumePendingDom(row.symbol, row.side);
@@ -1106,7 +1119,13 @@ export function CBookPage() {
               .map((p) => {
                 const row = positionToCBook(p, domLpId, instrMap);
                 const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
-                if (hedgeName) row.type = hedgeName;
+                if (hedgeName) {
+                  row.type = hedgeName;
+                  resolvedHedgeTypeRef.current.set(p.position_id, hedgeName); // pin for lifetime
+                } else {
+                  const sticky = resolvedHedgeTypeRef.current.get(p.position_id);
+                  if (sticky) row.type = sticky; // never demote a resolved strategy row
+                }
                 return row;
               })
           );
@@ -1164,7 +1183,13 @@ export function CBookPage() {
                       const row = positionToCBook(p, lpSnap, instrMap);
                       // Identify hedge strategy positions (lower priority than DOM Trader override)
                       const hedgeName = hedgeRecordMapRef.current.get(p.position_id);
-                      if (hedgeName) row.type = hedgeName;
+                      if (hedgeName) {
+                        row.type = hedgeName;
+                        resolvedHedgeTypeRef.current.set(p.position_id, hedgeName); // pin for lifetime
+                      } else {
+                        const sticky = resolvedHedgeTypeRef.current.get(p.position_id);
+                        if (sticky) row.type = sticky; // never demote a resolved strategy row
+                      }
                       // DOM Trader: if this position_id has no existing override or hedge
                       // match, try to consume a pending DOM entry with matching symbol+side.
                       if (!hedgeName && !posOverrideRef.current.has(p.position_id)) {
@@ -1221,6 +1246,7 @@ export function CBookPage() {
             if (lpPosId && ruleName) {
               // Update the map so subsequent position loads pick it up
               hedgeRecordMapRef.current.set(lpPosId, ruleName);
+              resolvedHedgeTypeRef.current.set(lpPosId, ruleName); // pin for lifetime
               // Immediately update the grid row if the position is already present
               const rowId = `pos-${gridLpIdRef.current || wsLpIdRef.current}-${lpPosId}`;
               const node  = gridRef.current?.api?.getRowNode(rowId);
@@ -1368,7 +1394,13 @@ export function CBookPage() {
               const row = positionToCBook(pos, resolvedLp, instrMap);
               // Identify hedge strategy positions (lower priority than DOM Trader override)
               const hedgeName = hedgeRecordMapRef.current.get(pos.position_id);
-              if (hedgeName) row.type = hedgeName;
+              if (hedgeName) {
+                row.type = hedgeName;
+                resolvedHedgeTypeRef.current.set(pos.position_id, hedgeName); // pin for lifetime
+              } else {
+                const sticky = resolvedHedgeTypeRef.current.get(pos.position_id);
+                if (sticky) row.type = sticky; // never demote a resolved strategy row
+              }
               // DOM Trader: if this position_id has no existing override or hedge
               // match, try to consume a pending DOM entry with matching symbol+side.
               if (!hedgeName && !posOverrideRef.current.has(pos.position_id)) {
@@ -1413,10 +1445,13 @@ export function CBookPage() {
             // Look up strategy BEFORE clearing anything. We keep the
             // hedgeRecordMapRef entry in place so subsequent lookups still work,
             // but we need the rule_name to route realized P/L into strategyDayStats.
-            const ruleNameForClose = pid ? hedgeRecordMapRef.current.get(pid) : undefined;
+            const ruleNameForClose = pid
+              ? (hedgeRecordMapRef.current.get(pid) ?? resolvedHedgeTypeRef.current.get(pid))
+              : undefined;
             if (pid) {
               closedPositionIdsRef.current.add(pid);
               saveClosedIds();
+              resolvedHedgeTypeRef.current.delete(pid); // pin no longer needed once closed
               setLivePositions((prev) => prev.filter((p) => p.positionId !== pid));
               gridRef.current?.api?.applyTransaction({
                 remove: [{ id: `pos-${resolvedCloseLp}-${pid}` } as CBookOrder]
