@@ -27,7 +27,9 @@ import {
   Graticule,
 } from 'react-simple-maps';
 
-const GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+// World topology, self-hosted same-origin (public/countries-110m.json) so it
+// isn't blocked by CSP/Incognito. Fetch it once into public/ — see setup note.
+const GEO_URL = '/countries-110m.json';
 
 // ── Types (mirror the backend brief) ────────────────────────────────────────
 type NodeRole = 'frontend' | 'backend' | 'mt5_master' | 'mt5';
