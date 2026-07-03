@@ -1,19 +1,17 @@
 // ============================================================================
-// NetworkClusterPage — infrastructure world map
+// NetworkClusterPage — infrastructure + liquidity world map
 //
-// A dark Equal-Earth world map with one pin per deployed node. Clicking a pin
-// opens a detail card: Country · IP · CPU · RAM · Disk · Users. Pin colour =
-// node status (online / degraded / offline).
+// A dark Equal-Earth world map with two pin layers:
+//   • Nodes (circles)            — deployed boxes: CPU/RAM/Disk/Users
+//   • Liquidity Providers (◆)    — connected venues: status/RTT/last activity
+// Clicking a pin opens a detail card tailored to its kind.
 //
-// Data: GET /api/v1/cluster/nodes (BFF → C++), polled every 30s. See
-// backend-brief-cluster-nodes.md for the contract. Until the endpoint ships,
-// a PREVIEW fallback inventory renders so the layout is reviewable — replace
-// the coordinates with the real ones (they'll come from the server inventory
-// once live).
+// Data: GET /api/v1/cluster/nodes (BFF → C++), polled every 30s. Contract in
+// backend-brief-cluster-nodes.md + backend-brief-cluster-lps.md. A PREVIEW
+// fallback renders until the endpoint ships.
 //
-// Requires: `npm i react-simple-maps @types/react-simple-maps`
-// World topology loaded from world-atlas (CDN; self-host by dropping
-// countries-110m.json into public/ and pointing GEO_URL at it).
+// Requires: react-simple-maps (+ @types/react-simple-maps) and a same-origin
+// world topology at public/countries-110m.json (see GEO_URL).
 // ============================================================================
 
 import { useEffect, useState } from 'react';
@@ -27,13 +25,13 @@ import {
   Graticule,
 } from 'react-simple-maps';
 
-// World topology, self-hosted same-origin (public/countries-110m.json) so it
-// isn't blocked by CSP/Incognito. Fetch it once into public/ — see setup note.
+// World topology, self-hosted same-origin (public/countries-110m.json).
 const GEO_URL = '/countries-110m.json';
 
-// ── Types (mirror the backend brief) ────────────────────────────────────────
+// ── Types (mirror the backend briefs) ───────────────────────────────────────
 type NodeRole = 'frontend' | 'backend' | 'mt5_master' | 'mt5';
 type NodeStatus = 'online' | 'degraded' | 'offline';
+type LpStatus = 'active' | 'connected' | 'offline';
 
 interface ClusterNode {
   id: string;
@@ -51,23 +49,43 @@ interface ClusterNode {
   age_ms?: number;
 }
 
+interface LiquidityProvider {
+  id: string;
+  name: string;
+  ip: string; // FIX gateway host
+  country: string;
+  country_code: string;
+  lat: number;
+  lng: number;
+  status: LpStatus;
+  rtt_ms: number | null;
+  last_activity_age_ms?: number;
+  session?: string;
+}
+
+type Selection = { kind: 'node' | 'lp'; id: string } | null;
+
 // ── Tokens ──────────────────────────────────────────────────────────────────
 const BG_PAGE   = '#1a1a1c';
 const BG_CARD   = '#222327';
-const BG_FIELD  = '#232225';
-const OCEAN     = '#161619';
-const LAND      = '#2b2b31';
-const LAND_LINE = '#3a3a40';
-const GRATICULE = '#242429';
-const TEAL      = '#4ecdc4';
-const TEXT      = '#ffffff';
-const MUTED     = '#9a9aa2';
-const MONO      = 'IBM Plex Mono, monospace';
+const OCEAN      = '#161619';
+const LAND       = '#2b2b31';
+const LAND_LINE  = '#3a3a40';
+const GRATICULE  = '#242429';
+const TEAL       = '#4ecdc4';
+const TEXT       = '#ffffff';
+const MUTED      = '#9a9aa2';
+const MONO       = 'IBM Plex Mono, monospace';
 
-const STATUS: Record<NodeStatus, { color: string; label: string }> = {
+const NODE_STATUS: Record<NodeStatus, { color: string; label: string }> = {
   online:   { color: '#66e07a', label: 'Online' },
   degraded: { color: '#e0a020', label: 'Degraded' },
   offline:  { color: '#ff6b6b', label: 'Offline' },
+};
+const LP_STATUS: Record<LpStatus, { color: string; label: string }> = {
+  active:    { color: '#66e07a', label: 'Active' },
+  connected: { color: '#e0a020', label: 'Connected' },
+  offline:   { color: '#ff6b6b', label: 'Offline' },
 };
 
 const ROLE_LABEL: Record<NodeRole, string> = {
@@ -98,29 +116,39 @@ function flagEmoji(cc?: string): string {
   const base = 0x1f1e6;
   return String.fromCodePoint(...[...cc.toUpperCase()].map(c => base + c.charCodeAt(0) - 65));
 }
-
 function metricColor(v: number | null): string {
   if (v == null) return MUTED;
   if (v >= 90) return '#ff6b6b';
   if (v >= 75) return '#e0a020';
   return TEAL;
 }
-
 function fmtAge(ms?: number): string {
   if (ms == null) return '';
   if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
   return `${Math.round(ms / 60_000)}m ago`;
 }
 
-// ── PREVIEW fallback — replace coords with the real inventory ────────────────
+// ── PREVIEW fallbacks — replaced by the live endpoint's inventory ────────────
 const FALLBACK_NODES: ClusterNode[] = [
   { id: 'fe-1', role: 'frontend', label: 'NexRisk Frontend', ip: '—', country: 'United Kingdom', country_code: 'GB', lat: 51.5074, lng: -0.1278, status: 'online', metrics: { cpu_pct: 34, ram_pct: 58, disk_pct: 41 }, users_connected: 7 },
   { id: 'be-1', role: 'backend', label: 'NexRisk Backend', ip: '—', country: 'Germany', country_code: 'DE', lat: 50.1109, lng: 8.6821, status: 'online', metrics: { cpu_pct: 52, ram_pct: 64, disk_pct: 38 }, users_connected: null },
   { id: 'mt5-2', role: 'mt5_master', label: 'Master MT5 · Ross Weiler', ip: '—', country: 'United States', country_code: 'US', lat: 40.7128, lng: -74.006, status: 'degraded', metrics: { cpu_pct: 78, ram_pct: 71, disk_pct: 55 }, users_connected: null },
   { id: 'mt5-4', role: 'mt5', label: 'Highness Investment', ip: '—', country: 'Singapore', country_code: 'SG', lat: 1.3521, lng: 103.8198, status: 'online', metrics: { cpu_pct: 22, ram_pct: 40, disk_pct: 29 }, users_connected: null },
 ];
+const FALLBACK_LPS: LiquidityProvider[] = [
+  { id: 'lp-te', name: 'TraderEvolution Sandbox', ip: '—', country: 'Cyprus', country_code: 'CY', lat: 34.7071, lng: 33.0226, status: 'active', rtt_ms: 42, last_activity_age_ms: 1500, session: 'TE-SB-01' },
+  { id: 'lp-pb', name: 'Prime Broker FIX', ip: '—', country: 'Switzerland', country_code: 'CH', lat: 47.3769, lng: 8.5417, status: 'connected', rtt_ms: 88, last_activity_age_ms: 12000, session: 'PB-02' },
+];
 
-// ── Metric bar ──────────────────────────────────────────────────────────────
+// ── Small row + metric bar ──────────────────────────────────────────────────
+function Row({ label, value, mono, color }: { label: string; value: string; mono?: boolean; color?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, marginTop: 6 }}>
+      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ color: color ?? TEXT, fontFamily: mono ? MONO : undefined }}>{value}</span>
+    </div>
+  );
+}
 function MetricBar({ label, value }: { label: string; value: number | null }) {
   const color = metricColor(value);
   return (
@@ -141,9 +169,10 @@ function MetricBar({ label, value }: { label: string; value: number | null }) {
 // ══════════════════════════════════════════════════════════════════════════
 export function NetworkClusterPage() {
   const [nodes, setNodes] = useState<ClusterNode[] | null>(null);
+  const [lps, setLps] = useState<LiquidityProvider[] | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [live, setLive] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Selection>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,14 +181,14 @@ export function NetworkClusterPage() {
         const r = await fetch('/api/v1/cluster/nodes', { credentials: 'include' });
         if (!r.ok) return;
         const j = await r.json();
-        const payload = j?.data ?? j;
-        if (!cancelled && Array.isArray(payload?.nodes)) {
-          setNodes(payload.nodes);
-          setGeneratedAt(payload.generated_at ?? null);
-          setLive(true);
-        }
+        const p = j?.data ?? j;
+        if (cancelled) return;
+        let any = false;
+        if (Array.isArray(p?.nodes)) { setNodes(p.nodes); any = true; }
+        if (Array.isArray(p?.lps)) { setLps(p.lps); any = true; }
+        if (any) { setGeneratedAt(p.generated_at ?? null); setLive(true); }
       } catch {
-        /* keep whatever we have (fallback stays visible) */
+        /* keep fallback */
       }
     };
     load();
@@ -168,16 +197,25 @@ export function NetworkClusterPage() {
   }, []);
 
   const displayNodes = nodes ?? FALLBACK_NODES;
-  const selected = displayNodes.find(n => n.id === selectedId) ?? null;
+  const displayLps = lps ?? FALLBACK_LPS;
+  const selNode = selected?.kind === 'node' ? displayNodes.find(n => n.id === selected.id) ?? null : null;
+  const selLp = selected?.kind === 'lp' ? displayLps.find(l => l.id === selected.id) ?? null : null;
+
+  const pinLabel = (label: string, y: number, active: boolean) => (
+    <text
+      textAnchor="middle" y={y}
+      style={{
+        fontFamily: 'system-ui, sans-serif', fontSize: 9, fill: active ? TEXT : MUTED,
+        paintOrder: 'stroke', stroke: BG_PAGE, strokeWidth: 3, strokeLinejoin: 'round', pointerEvents: 'none',
+      }}
+    >
+      {label}
+    </text>
+  );
 
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%', backgroundColor: BG_PAGE, overflow: 'hidden' }}>
-      {/* ── Map ──────────────────────────────────────────────────────────── */}
-      <ComposableMap
-        projection="geoEqualEarth"
-        projectionConfig={{ scale: 175 }}
-        style={{ width: '100%', height: '100%' }}
-      >
+      <ComposableMap projection="geoEqualEarth" projectionConfig={{ scale: 175 }} style={{ width: '100%', height: '100%' }}>
         <ZoomableGroup zoom={1} center={[10, 15]} minZoom={1} maxZoom={6}>
           <Sphere id="sphere" stroke="#000000" strokeWidth={0} fill={OCEAN} />
           <Graticule stroke={GRATICULE} strokeWidth={0.35} />
@@ -200,42 +238,46 @@ export function NetworkClusterPage() {
             }
           </Geographies>
 
+          {/* Nodes — circles */}
           {displayNodes.map(n => {
-            const color = STATUS[n.status].color;
-            const isSel = n.id === selectedId;
+            const color = NODE_STATUS[n.status].color;
+            const isSel = selected?.kind === 'node' && selected.id === n.id;
             return (
               <Marker
                 key={n.id}
                 coordinates={[n.lng, n.lat]}
-                onClick={() => setSelectedId(n.id)}
+                onClick={() => setSelected({ kind: 'node', id: n.id })}
                 style={{ default: { cursor: 'pointer' }, hover: { cursor: 'pointer' }, pressed: { cursor: 'pointer' } }}
               >
                 <circle r={5} fill={color} className="cluster-pulse" />
                 <circle r={isSel ? 6 : 4.5} fill={color} stroke={BG_PAGE} strokeWidth={1.3} />
                 <circle r={1.6} fill="#ffffff" opacity={0.9} />
-                <text
-                  textAnchor="middle"
-                  y={-11}
-                  style={{
-                    fontFamily: 'system-ui, sans-serif',
-                    fontSize: 9,
-                    fill: isSel ? TEXT : MUTED,
-                    paintOrder: 'stroke',
-                    stroke: BG_PAGE,
-                    strokeWidth: 3,
-                    strokeLinejoin: 'round',
-                    pointerEvents: 'none',
-                  }}
-                >
-                  {n.label}
-                </text>
+                {pinLabel(n.label, -11, isSel)}
+              </Marker>
+            );
+          })}
+
+          {/* Liquidity providers — diamonds */}
+          {displayLps.map(lp => {
+            const color = LP_STATUS[lp.status].color;
+            const isSel = selected?.kind === 'lp' && selected.id === lp.id;
+            return (
+              <Marker
+                key={lp.id}
+                coordinates={[lp.lng, lp.lat]}
+                onClick={() => setSelected({ kind: 'lp', id: lp.id })}
+                style={{ default: { cursor: 'pointer' }, hover: { cursor: 'pointer' }, pressed: { cursor: 'pointer' } }}
+              >
+                {lp.status === 'active' && <path d="M0,-6 L6,0 L0,6 L-6,0 Z" fill={color} className="cluster-pulse" />}
+                <path d={`M0,${isSel ? -6.5 : -5.5} L${isSel ? 6.5 : 5.5},0 L0,${isSel ? 6.5 : 5.5} L${isSel ? -6.5 : -5.5},0 Z`} fill={color} stroke={BG_PAGE} strokeWidth={1.3} />
+                {pinLabel(lp.name, -11, isSel)}
               </Marker>
             );
           })}
         </ZoomableGroup>
       </ComposableMap>
 
-      {/* ── Header ───────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '18px 22px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', pointerEvents: 'none' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -246,78 +288,77 @@ export function NetworkClusterPage() {
               </span>
             )}
           </div>
-          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>Live infrastructure across regions</div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>Live infrastructure &amp; liquidity across regions</div>
         </div>
         <div style={{ textAlign: 'right', fontSize: 12, color: MUTED }}>
-          <div>{displayNodes.length} nodes</div>
+          <div>{displayNodes.length} nodes · {displayLps.length} LPs</div>
           {generatedAt && (
-            <div style={{ fontFamily: MONO, marginTop: 2 }}>
-              {new Date(generatedAt).toLocaleTimeString('en-GB', { hour12: false })}
-            </div>
+            <div style={{ fontFamily: MONO, marginTop: 2 }}>{new Date(generatedAt).toLocaleTimeString('en-GB', { hour12: false })}</div>
           )}
         </div>
       </div>
 
-      {/* ── Legend ───────────────────────────────────────────────────────── */}
-      <div style={{ position: 'absolute', left: 22, bottom: 18, display: 'flex', gap: 16, fontSize: 12, color: MUTED }}>
-        {(Object.keys(STATUS) as NodeStatus[]).map(s => (
-          <span key={s} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: STATUS[s].color }} />
-            {STATUS[s].label}
-          </span>
-        ))}
+      {/* Legend */}
+      <div style={{ position: 'absolute', left: 22, bottom: 18, display: 'flex', alignItems: 'center', gap: 18, fontSize: 12, color: MUTED }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill={MUTED} /></svg> Node
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <svg width="12" height="12" viewBox="-6 -6 12 12"><path d="M0,-5 L5,0 L0,5 L-5,0 Z" fill={MUTED} /></svg> Liquidity Provider
+        </span>
+        <span style={{ width: 1, height: 12, backgroundColor: LAND_LINE }} />
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#66e07a' }} /> Healthy</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#e0a020' }} /> Degraded / idle</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff6b6b' }} /> Offline</span>
       </div>
 
-      {/* ── Detail card ──────────────────────────────────────────────────── */}
-      {selected && (
-        <div
-          style={{
-            position: 'absolute', top: 70, right: 22, width: 290,
-            backgroundColor: BG_CARD, border: `1px solid ${LAND_LINE}`, borderRadius: 10,
-            boxShadow: '0 12px 40px rgba(0,0,0,0.45)', padding: 16,
-          }}
-        >
+      {/* Detail card — node */}
+      {selNode && (
+        <div style={{ position: 'absolute', top: 70, right: 22, width: 290, backgroundColor: BG_CARD, border: `1px solid ${LAND_LINE}`, borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.45)', padding: 16 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: TEXT }}>{selected.label}</div>
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{ROLE_LABEL[selected.role]}</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: TEXT }}>{selNode.label}</div>
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{ROLE_LABEL[selNode.role]}</div>
             </div>
-            <button
-              onClick={() => setSelectedId(null)}
-              style={{ color: MUTED, fontSize: 16, lineHeight: 1, padding: 2 }}
-              title="Close"
-            >
-              ✕
-            </button>
+            <button onClick={() => setSelected(null)} style={{ color: MUTED, fontSize: 16, lineHeight: 1, padding: 2 }} title="Close">✕</button>
           </div>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: STATUS[selected.status].color }} />
-            <span style={{ fontSize: 12, color: STATUS[selected.status].color }}>{STATUS[selected.status].label}</span>
-            {selected.age_ms != null && <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto', fontFamily: MONO }}>{fmtAge(selected.age_ms)}</span>}
+            <span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: NODE_STATUS[selNode.status].color }} />
+            <span style={{ fontSize: 12, color: NODE_STATUS[selNode.status].color }}>{NODE_STATUS[selNode.status].label}</span>
+            {selNode.age_ms != null && <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto', fontFamily: MONO }}>{fmtAge(selNode.age_ms)}</span>}
           </div>
-
           <div style={{ height: 1, backgroundColor: LAND_LINE, margin: '12px 0' }} />
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13 }}>
-            <span style={{ color: MUTED }}>Country</span>
-            <span style={{ color: TEXT }}>{flagEmoji(selected.country_code)} {selected.country}</span>
+          <Row label="Country" value={`${flagEmoji(selNode.country_code)} ${selNode.country}`} />
+          <Row label="IP address" value={selNode.ip} mono />
+          <MetricBar label="CPU" value={selNode.metrics.cpu_pct} />
+          <MetricBar label="RAM" value={selNode.metrics.ram_pct} />
+          <MetricBar label="Disk" value={selNode.metrics.disk_pct} />
+          <div style={{ marginTop: 12 }}>
+            <Row label="Users" value={selNode.users_connected == null ? '—' : String(selNode.users_connected)} mono color={selNode.users_connected == null ? MUTED : TEAL} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, marginTop: 6 }}>
-            <span style={{ color: MUTED }}>IP address</span>
-            <span style={{ fontFamily: MONO, color: TEXT }}>{selected.ip}</span>
-          </div>
+        </div>
+      )}
 
-          <MetricBar label="CPU" value={selected.metrics.cpu_pct} />
-          <MetricBar label="RAM" value={selected.metrics.ram_pct} />
-          <MetricBar label="Disk" value={selected.metrics.disk_pct} />
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, marginTop: 12 }}>
-            <span style={{ color: MUTED }}>Users</span>
-            <span style={{ fontFamily: MONO, color: selected.users_connected == null ? MUTED : TEAL }}>
-              {selected.users_connected == null ? '—' : selected.users_connected}
-            </span>
+      {/* Detail card — liquidity provider */}
+      {selLp && (
+        <div style={{ position: 'absolute', top: 70, right: 22, width: 290, backgroundColor: BG_CARD, border: `1px solid ${LAND_LINE}`, borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.45)', padding: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: TEXT }}>{selLp.name}</div>
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>Liquidity Provider</div>
+            </div>
+            <button onClick={() => setSelected(null)} style={{ color: MUTED, fontSize: 16, lineHeight: 1, padding: 2 }} title="Close">✕</button>
           </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: LP_STATUS[selLp.status].color }} />
+            <span style={{ fontSize: 12, color: LP_STATUS[selLp.status].color }}>{LP_STATUS[selLp.status].label}</span>
+            {selLp.last_activity_age_ms != null && <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto', fontFamily: MONO }}>{fmtAge(selLp.last_activity_age_ms)}</span>}
+          </div>
+          <div style={{ height: 1, backgroundColor: LAND_LINE, margin: '12px 0' }} />
+          <Row label="Country" value={`${flagEmoji(selLp.country_code)} ${selLp.country}`} />
+          <Row label="FIX host" value={selLp.ip} mono />
+          <Row label="RTT" value={selLp.rtt_ms == null ? '—' : `${selLp.rtt_ms} ms`} mono color={selLp.rtt_ms == null ? MUTED : TEXT} />
+          {selLp.session && <Row label="Session" value={selLp.session} mono />}
         </div>
       )}
     </div>
