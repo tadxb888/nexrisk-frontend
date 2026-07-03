@@ -1409,7 +1409,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
   const cc     = cfg?.cost_controls;
   const cache  = cfg?.caching;
 
-  const usagePct   = usage?.daily_usage_pct ?? 0;
+  const usagePct   = usage?.mtd_usage_pct ?? usage?.daily_usage_pct ?? 0;
   const usageColor = usagePct >= 80 ? '#c0392b' : usagePct >= 50 ? '#b85c1a' : '#2e7d4f';
   const fmtTTL     = (s: number) => s >= 3600 ? `${(s/3600).toFixed(0)}h` : `${Math.floor(s/60)}m`;
 
@@ -1424,7 +1424,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
       {usage && (
         <Card>
           <div className="flex items-center justify-between mb-3">
-            <SectionLabel>Today's Usage</SectionLabel>
+            <SectionLabel>Month-to-Date Usage</SectionLabel>
             <div className="flex items-center gap-3">
               <span className={clsx('text-xs px-2 py-0.5 rounded font-mono', claude?.api_key_configured ? 'bg-green-950/40 text-green-500' : 'bg-red-950/30 text-red-500')}>
                 {claude?.api_key_configured ? 'API Key ✓' : 'API Key Not Set ✗'}
@@ -1433,11 +1433,11 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           </div>
           <div className="grid grid-cols-5 gap-4 mb-4">
             {[
-              { label: 'Cost Today',      value: `$${usage.today_cost_usd?.toFixed(3)}`,          sub: `of $${usage.daily_limit_usd} limit`,  color: usageColor },
-              { label: 'API Calls',       value: String(usage.today_call_count),                   sub: 'calls today',                         color: 'white' },
+              { label: 'Cost MTD',        value: `$${(usage.mtd_cost_usd ?? usage.today_cost_usd)?.toFixed(3)}`,                       sub: `of $${usage.monthly_limit_usd ?? usage.daily_limit_usd} limit`, color: usageColor },
+              { label: 'API Calls',       value: String(usage.mtd_call_count ?? usage.today_call_count),                             sub: 'calls this month',                    color: 'white' },
               { label: 'Auto-Gen / hr',   value: String(usage.auto_gen_this_hour),                 sub: `of ${usage.hourly_auto_gen_limit} limit`, color: 'white' },
               { label: 'Cache Hit Rate',  value: `${usage.cache_hit_rate_pct?.toFixed(0)}%`,       sub: `${usage.cache_hits} hits / ${usage.cache_misses} misses`, color: 'white' },
-              { label: 'Remaining',       value: `$${usage.daily_limit_remaining_usd?.toFixed(2)}`,sub: 'daily budget left',                   color: usagePct > 80 ? '#c0392b' : '#2e7d4f' },
+              { label: 'Remaining',       value: `$${(usage.monthly_limit_remaining_usd ?? usage.daily_limit_remaining_usd)?.toFixed(2)}`, sub: 'monthly budget left',            color: usagePct > 80 ? '#c0392b' : '#2e7d4f' },
             ].map(({ label, value, sub, color }) => (
               <div key={label} className="text-center">
                 <div className="text-2xl font-mono font-bold" style={{ color }}>{value}</div>
@@ -1449,11 +1449,12 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           <div className="h-2 bg-[#2a2a2c] rounded-full overflow-hidden">
             <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(usagePct, 100)}%`, backgroundColor: usageColor }} />
           </div>
-          <div className="text-xs text-white/50 mt-1 text-right">{usagePct.toFixed(1)}% of daily budget used</div>
+          <div className="text-xs text-white/50 mt-1 text-right">{usagePct.toFixed(1)}% of monthly budget used</div>
         </Card>
       )}
 
-      {/* Providers + Claude + Ollama */}
+      {/* Providers + Claude + Ollama — HIDDEN per request 2026-07-03. Restore by changing false → true. */}
+      {false && (
       <div className="grid grid-cols-3 gap-4">
         {/* Provider selection */}
         <Card>
@@ -1499,6 +1500,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           )}
         </Card>
       </div>
+      )}
 
       {/* Routing Matrix */}
       <Card>
@@ -1547,11 +1549,12 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
         <Card>
           <div className="flex items-center justify-between mb-3">
             <SectionLabel>Cost Controls</SectionLabel>
-            <EditBtn onClick={() => open('cost_controls', cc ? { daily_cost_limit_usd: cc.daily_cost_limit_usd, max_auto_generates_per_hour: cc.max_auto_generates_per_hour } : {})} />
+            <EditBtn onClick={() => open('cost_controls', cc ? { daily_cost_limit_usd: cc.daily_cost_limit_usd, monthly_cost_limit_usd: cc.monthly_cost_limit_usd, max_auto_generates_per_hour: cc.max_auto_generates_per_hour } : {})} />
           </div>
           {cc && (
             <>
               <KV label="Daily Cost Limit"         value={`$${cc.daily_cost_limit_usd?.toFixed(2)}`} />
+              <KV label="Monthly Cost Limit"       value={cc.monthly_cost_limit_usd != null ? `$${cc.monthly_cost_limit_usd.toFixed(2)}` : '—'} />
               <KV label="Max Auto-Gen / Hour"       value={String(cc.max_auto_generates_per_hour)} />
             </>
           )}
@@ -1627,6 +1630,9 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
       <Drawer open={dk === 'cost_controls'} title="Cost Controls" onClose={() => setDk(null)} onSave={() => save.mutate()} saving={save.isPending} error={err} onReset={() => resetSubsection('cost_controls')} resetting={resetting === 'cost_controls'}>
         <F label="Daily Cost Limit (USD)" hint="1.00–500.00 — auto-gen pauses above this, on-demand still works">
           <Num v={form.daily_cost_limit_usd ?? 10} set={v => setForm(f => ({ ...f, daily_cost_limit_usd: v }))} min={1} max={500} step={1} />
+        </F>
+        <F label="Monthly Cost Limit (USD)" hint="1.00–15000.00 — hard monthly ceiling across all days">
+          <Num v={form.monthly_cost_limit_usd ?? 300} set={v => setForm(f => ({ ...f, monthly_cost_limit_usd: v }))} min={1} max={15000} step={10} />
         </F>
         <F label="Max Auto-Generates per Hour" hint="10–1000">
           <Num v={form.max_auto_generates_per_hour ?? 100} set={v => setForm(f => ({ ...f, max_auto_generates_per_hour: v }))} min={10} max={1000} step={10} />
@@ -2065,7 +2071,7 @@ export function ArchetypePage() {
         <div className="flex items-start justify-between mb-3">
           <div>
             <h1 className="text-base font-semibold text-white tracking-tight">Archetype Intelligence</h1>
-            <p className="text-xs text-white/40">Behaviour classifier config · detection thresholds · HDBSCAN clustering · LLM explanation engine</p>
+            <p className="text-xs text-white/40">Behaviour classifier config · detection thresholds · clustering · explanation engine</p>
           </div>
           <div className="flex items-center gap-2">
             <button
