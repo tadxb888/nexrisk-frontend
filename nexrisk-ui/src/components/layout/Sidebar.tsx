@@ -48,8 +48,11 @@ const COLLAPSE_KEY    = 'taiga:rail-collapsed';
 const NETWORK_CLUSTER: SubItem = { path: '/infra', label: 'Network Cluster', module: 'infra_monitor' };
 
 const HELP_ID = '__help__';
-const FRONTEND_VERSION = '—'; // TODO wire to real build version
-const BACKEND_VERSION  = '—'; // TODO wire from /health or build info
+
+// Frontend build version, injected by Vite at build time (see vite.config.ts
+// `define`). Backend version is fetched at runtime — see the component.
+declare const __APP_VERSION__: string;
+const FRONTEND_VERSION = __APP_VERSION__;
 
 // ── Pin persistence (shares the existing key with the top bar) ───────────────
 const PIN_KEY = 'taiga:pinned-items';
@@ -122,6 +125,18 @@ export function Sidebar() {
 
   const [pins, setPins] = useState<string[]>(loadPins);
   const [copied, setCopied] = useState<string | null>(null);
+
+  // Backend version — fetched from /api/health. Shows '—' until the backend
+  // exposes it (see backend-brief-version-endpoint.md); lights up once present.
+  const [backendVersion, setBackendVersion] = useState('—');
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/health', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (!cancelled && d?.versions?.service) setBackendVersion(d.versions.service); })
+      .catch(() => { /* health unreachable — leave placeholder */ });
+    return () => { cancelled = true; };
+  }, []);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
   });
@@ -321,7 +336,7 @@ export function Sidebar() {
               <div style={{ paddingBottom: 6 }}>
                 {renderLeaf({ path: '/help/manual', label: 'Operational Manual', module: '__help__' }, { showPin: false })}
                 {renderVersionRow('Frontend version', FRONTEND_VERSION)}
-                {renderVersionRow('Backend version', BACKEND_VERSION)}
+                {renderVersionRow('Backend version', backendVersion)}
               </div>
             )}
           </div>
