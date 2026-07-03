@@ -1,33 +1,21 @@
 // ============================================
-// TopBar — Primary Navigation (two-row group switcher: group row + member row)
+// TopBar — status chrome (brand · clock · account · reserved strip)
 //
-// Three navigation modes:
-//   • Main:        Browse all top-level sections.
-//   • Drilldown:   Browse a section's children (with pin toggles).
-//   • Favourites:  Browse pinned items (with unpin toggles).
+// Navigation moved to the left rail (Sidebar.tsx). This bar now carries only
+// the always-on chrome:
+//   • Header (height 44): logo + clock + account dropdown
+//   • Reserved strip (height 56): Alerts Bar FX cells + app-wide notification
+//     slot + Portfolio card on /portfolio
 //
-// Persistent on the left in every mode: Main button + Favourites button.
-// Favourites button is greyed when the pin list is empty.
-//
-// Layout:
-//   • Row 1 (height 56): Logo + mode-nav + clock + account dropdown
-//   • Row 2 (height 40): Reserved strip — empty for now; future home of
-//                        most-traded ticker, news releases, archetype
-//                        detection events (Scalper, BOT, etc.)
-//
-// Colour convention:
-//   #f5802c (orange) — Main-mode emphasis: active Main mode, drill-down
-//                      breadcrumb, active drill-down child, "you-are-here"
-//                      indicator on the section that owns the current page.
-//   #e9f244 (yellow) — Favourites-mode emphasis: active Favourites mode,
-//                      active favourite leaf.
+// Still owns the one-time favourites seed and re-exports NAV_SECTIONS /
+// moduleForPath / sectionForPath / loadPins / savePins so existing importers
+// keep working after the rail split.
 // ============================================
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/stores/AuthContext';
 import { type SubItem, type NavSection, NAV_SECTIONS, moduleForPath } from '@/config/navPermissions';
-import { clsx } from 'clsx';
 import { PortfolioCard } from '@/components/portfolio/PortfolioCard';
 import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
 import { AlertsBar } from '@/components/market/AlertsBar';
@@ -39,17 +27,6 @@ import { AlertsBarNotifications } from '@/components/market/AlertsBarNotificatio
 // Re-exported below so existing imports from this module keep working.
 export { NAV_SECTIONS, moduleForPath };
 export type { SubItem, NavSection };
-
-// ── Colours ──────────────────────────────────────────────────
-const COLOR_GROUP         = '#f5802c'; // amber — selected group pill (parent)
-const COLOR_ACCENT        = '#49b3b3'; // teal  — active sub + pinned star
-const COLOR_SUB_DEFAULT   = '#ddd';    // soft white — inactive sub text
-const COLOR_BORDER_MUTED  = '#444';    // inactive group pill border
-const COLOR_BORDER_HOVER  = '#666';    // hover affordance
-const COLOR_TEXT_DEFAULT  = '#fff';    // group pill text (inactive)
-
-// Sentinel id for the Favourites tab (not a structural NavSection).
-const FAVOURITES_ID = '__favourites__';
 
 // ── Pin persistence ──────────────────────────────────────────
 // Reuses the existing storage key so users with pre-redesign pins keep them.
@@ -100,9 +77,6 @@ function seedDefaultsIfNeeded() {
   } catch { /* localStorage unavailable; skip seeding */ }
 }
 
-// canSeeItem (role-based) removed — visibility now derives from permissions
-// via hasPermission(item.module, 'VIEW'); see RoutePermissionGuard / spec.
-
 // ── Resolve which section owns a path ────────────────────────
 export function sectionForPath(pathname: string): NavSection | undefined {
   // Exact match first
@@ -115,15 +89,6 @@ export function sectionForPath(pathname: string): NavSection | undefined {
   }
   // Default: overview owns "/"
   if (pathname === '/') return NAV_SECTIONS[0];
-  return undefined;
-}
-
-// Find a SubItem by path across all sections
-function findItem(path: string): SubItem | undefined {
-  for (const s of NAV_SECTIONS) {
-    const found = s.items.find(i => i.path === path);
-    if (found) return found;
-  }
   return undefined;
 }
 
@@ -143,41 +108,24 @@ function accountInitials(user: { email: string; first_name?: string; last_name?:
   return user.email[0]?.toUpperCase() ?? 'U';
 }
 
-// ── Pin icon ─────────────────────────────────────────────────
-const PinIcon = ({ filled }: { filled: boolean }) => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
-    <path d="M9.068,16.347l4.9,4.9.707-.707a7.977,7.977,0,0,0,2.075-7.619l-.246-1,2.086-2.086.217.217a3.085,3.085,0,0,0,3.938.4,3,3,0,0,0,.38-4.565L18.2.954a3.085,3.085,0,0,0-3.938-.4,3,3,0,0,0-.38,4.565l.293.293L12.085,7.5,11.1,7.258A7.985,7.985,0,0,0,3.464,9.33l-.707.707,4.9,4.895L.293,22.293l1.414,1.414Z" />
-  </svg>
-);
-
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
 
 export function TopBar() {
   const location = useLocation();
-  const { user, logout, hasPermission } = useAuth();
+  const { user, logout } = useAuth();
 
-  // One-time default seeding on first mount.
+  // One-time default favourites seed (consumed by the left rail, Sidebar.tsx).
   useEffect(() => { seedDefaultsIfNeeded(); }, []);
 
-  const [pins, setPins] = useState<string[]>(loadPins);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  // Whether the AlertsBar notification slot is currently filled. Drives
-  // the /portfolio compact-mode swap of PortfolioCard (collapses to its
-  // first cell when a notification is showing; expands back on dismiss).
-  // Toggled by AlertsBarNotifications.onSlotFilledChange.
+  // Whether the AlertsBar notification slot is filled — drives the /portfolio
+  // compact-mode swap of PortfolioCard. Toggled by AlertsBarNotifications.
   const [notificationActive, setNotificationActive] = useState(false);
-
-  // Pin sync — kept in case any other component dispatches the event.
-  useEffect(() => {
-    const sync = () => setPins(loadPins());
-    window.addEventListener('taiga:pins-changed', sync);
-    return () => window.removeEventListener('taiga:pins-changed', sync);
-  }, []);
 
   // Clock
   useEffect(() => {
@@ -194,158 +142,13 @@ export function TopBar() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Pin toggle
-  const togglePin = useCallback((path: string) => {
-    setPins(prev => {
-      const next = prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path];
-      savePins(next);
-      window.dispatchEvent(new Event('taiga:pins-changed'));
-      return next;
-    });
-  }, []);
-
-  // "You-are-here": which structural section owns the current page.
-  const activeSection = sectionForPath(location.pathname);
-
   const fmt     = (d: Date) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-
-  // Visible favourites — filtered by permission so a perm loss hides the pin.
-  const visibleFavourites: SubItem[] = pins
-    .map(findItem)
-    .filter((i): i is SubItem => !!i && hasPermission(i.module, 'VIEW'));
-
-  // Structural groups the user can see (>=1 accessible child).
-  const accessibleGroups = NAV_SECTIONS.filter(s =>
-    s.items.some(i => hasPermission(i.module, 'VIEW')),
-  );
-  const hasFavourites = visibleFavourites.length > 0;
-
-  // Top (group) row appears only when there are >=2 things to switch between
-  // (groups + Favourites). One group and no favourites → collapse to a single
-  // row of that group's items.
-  const showGroupRow = accessibleGroups.length + (hasFavourites ? 1 : 0) >= 2;
-
-  // Selected group for the member row. Initialised to the page's owning
-  // section so the member row is relevant on first load.
-  const [activeGroupId, setActiveGroupId] = useState<string>(
-    () => activeSection?.id ?? accessibleGroups[0]?.id ?? '',
-  );
-
-  // Navigating syncs the selected group to the page's owning section, so the
-  // member row always reflects where you are. (Favourites is a launcher: you
-  // open it, pick a page, and land in that page's structural group.)
-  useEffect(() => {
-    // Don't yank the user out of Favourites: while browsing favourites,
-    // clicking one navigates but keeps the Favourites row open so they can
-    // pick another. In a structural group, follow the page into its group.
-    setActiveGroupId(prev => {
-      if (prev === FAVOURITES_ID) return prev;
-      const owner = sectionForPath(location.pathname);
-      return owner ? owner.id : prev;
-    });
-  }, [location.pathname]);
-
-  // Favourites drained while selected → fall back to a structural group.
-  useEffect(() => {
-    if (activeGroupId === FAVOURITES_ID && !hasFavourites) {
-      setActiveGroupId(accessibleGroups[0]?.id ?? '');
-    }
-  }, [hasFavourites, activeGroupId, accessibleGroups]);
-
-  // Selected group became inaccessible (perm change) → fall back.
-  useEffect(() => {
-    if (
-      activeGroupId !== FAVOURITES_ID &&
-      activeGroupId &&
-      !accessibleGroups.some(s => s.id === activeGroupId)
-    ) {
-      setActiveGroupId(accessibleGroups[0]?.id ?? '');
-    }
-  }, [accessibleGroups, activeGroupId]);
-
-  // Items shown on the member row for the current selection.
-  const activeGroup = accessibleGroups.find(s => s.id === activeGroupId);
-  const memberItems: SubItem[] =
-    activeGroupId === FAVOURITES_ID
-      ? visibleFavourites
-      : activeGroup
-        ? activeGroup.items.filter(i => hasPermission(i.module, 'VIEW'))
-        : [];
-
-  // Collapsed (single group, no favourites): that group's items ARE the nav.
-  const collapsedItems: SubItem[] = showGroupRow
-    ? []
-    : accessibleGroups[0]?.items.filter(i => hasPermission(i.module, 'VIEW')) ?? [];
-
-  // ── Render helpers ─────────────────────────────────────────
-
-  /** Top-row group pill (parent). Amber border when selected. Clicking
-   *  selects the group (switches the member row); it does NOT navigate. */
-  const renderGroupPill = (id: string, label: string) => {
-    const isActive = activeGroupId === id;
-    return (
-      <button
-        key={id}
-        onClick={() => setActiveGroupId(id)}
-        className="px-2.5 py-0.5 text-[14px] rounded transition-colors"
-        style={{
-          border: `1px solid ${isActive ? COLOR_GROUP : COLOR_BORDER_MUTED}`,
-          color: isActive ? COLOR_GROUP : COLOR_TEXT_DEFAULT,
-          backgroundColor: 'transparent',
-        }}
-        onMouseEnter={e => { if (!isActive) e.currentTarget.style.borderColor = COLOR_BORDER_HOVER; }}
-        onMouseLeave={e => { if (!isActive) e.currentTarget.style.borderColor = COLOR_BORDER_MUTED; }}
-      >
-        {label}
-      </button>
-    );
-  };
-
-  /** Member-row item (child) — bare text, lighter than the parent pills.
-   *  Active page: teal text + teal underline. Soft white otherwise; brightens
-   *  on hover. Pin sits inline (always shown in Favourites). */
-  const renderMemberItem = (item: SubItem, alwaysShowPin: boolean) => {
-    const isActive = location.pathname === item.path;
-    const pinned = pins.includes(item.path);
-
-    return (
-      <NavLink
-        key={item.path}
-        to={item.path}
-        className="group flex items-center gap-1 px-1 text-[14px] transition-colors"
-        style={{ color: isActive ? COLOR_ACCENT : COLOR_SUB_DEFAULT }}
-        onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#fff'; }}
-        onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = COLOR_SUB_DEFAULT; }}
-      >
-        <span className="relative">
-          {item.label}
-          {isActive && (
-            <span
-              className="absolute left-0 right-0"
-              style={{ bottom: -3, height: 1.5, backgroundColor: COLOR_ACCENT, borderRadius: 1 }}
-            />
-          )}
-        </span>
-        <button
-          onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
-          className={clsx(
-            (alwaysShowPin || pinned) ? 'inline-flex' : 'hidden group-hover:inline-flex',
-            'items-center',
-          )}
-          style={{ color: pinned ? COLOR_ACCENT : COLOR_SUB_DEFAULT, padding: 0, lineHeight: 1 }}
-          title={pinned ? 'Unpin from favourites' : 'Pin to favourites'}
-        >
-          <PinIcon filled={pinned} />
-        </button>
-      </NavLink>
-    );
-  };
 
   // ── Render ─────────────────────────────────────────────────
   return (
     <div className="shrink-0 flex flex-col" style={{ userSelect: 'none' }}>
-      {/* ── Row 1: Group row + chrome ───────────────────────────────── */}
+      {/* ── Header: brand + status chrome ───────────────────────────── */}
       <header
         className="flex items-center px-4 shrink-0 gap-3"
         style={{ height: 44, backgroundColor: '#232326', borderBottom: '1px solid #3a3a3e' }}
@@ -354,22 +157,6 @@ export function TopBar() {
         <div className="flex items-center shrink-0" style={{ marginRight: 12 }}>
           <img src="/taiga-mark.svg" alt="taiga" style={{ height: 28, objectFit: 'contain' }} draggable={false} />
         </div>
-
-        {/* Group row — structural groups + Favourites, permission-filtered.
-            Collapses to the single group's items when there's nothing to
-            switch between. */}
-        <nav className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto">
-          {showGroupRow ? (
-            <>
-              {accessibleGroups.map(section =>
-                renderGroupPill(section.id, section.label),
-              )}
-              {hasFavourites && renderGroupPill(FAVOURITES_ID, 'Favourites')}
-            </>
-          ) : (
-            collapsedItems.map(item => renderMemberItem(item, false))
-          )}
-        </nav>
 
         {/* Right — clock + account dropdown */}
         <div className="ml-auto flex items-center gap-3 shrink-0">
@@ -452,22 +239,6 @@ export function TopBar() {
           </div>
         </div>
       </header>
-
-      {/* ── Member row: pages of the selected group. Hidden when collapsed
-          (single accessible group + no favourites) — those pages then live
-          in the group row above. ── */}
-      {showGroupRow && (
-        <div
-          className="flex items-center px-4 gap-4 shrink-0 overflow-x-auto"
-          style={{ height: 32, backgroundColor: '#1f1e21', borderTop: '1px solid rgba(78,205,196,0.35)', borderBottom: '1px solid #2f2f33' }}
-        >
-          {/* subtle indent — children sit under the group row, past the logo */}
-          <div className="shrink-0" style={{ width: 40 }} />
-          {memberItems.map(item =>
-            renderMemberItem(item, activeGroupId === FAVOURITES_ID),
-          )}
-        </div>
-      )}
 
       {/* ── Reserved strip ────────────────────────────────────
           Left half: Alerts Bar FX cells (≤ 4 user-chosen ticks).
