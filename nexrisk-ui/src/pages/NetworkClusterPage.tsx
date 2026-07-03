@@ -132,16 +132,9 @@ function fmtAge(ms?: number): string {
 }
 
 // ── PREVIEW fallbacks — replaced by the live endpoint's inventory ────────────
-const FALLBACK_NODES: ClusterNode[] = [
-  { id: 'fe-1', role: 'frontend', label: 'Taiga Frontend', ip: '—', country: 'United Kingdom', country_code: 'GB', lat: 51.5074, lng: -0.1278, status: 'online', metrics: { cpu_pct: 34, ram_pct: 58, disk_pct: 41 }, users_connected: 7 },
-  { id: 'be-1', role: 'backend', label: 'Taiga Backend', ip: '—', country: 'Germany', country_code: 'DE', lat: 50.1109, lng: 8.6821, status: 'online', metrics: { cpu_pct: 52, ram_pct: 64, disk_pct: 38 }, users_connected: null },
-  { id: 'mt5-2', role: 'mt5_master', label: 'Master MT5 · Ross Weiler', ip: '—', country: 'United States', country_code: 'US', lat: 40.7128, lng: -74.006, status: 'degraded', metrics: { cpu_pct: 78, ram_pct: 71, disk_pct: 55 }, users_connected: null },
-  { id: 'mt5-4', role: 'mt5', label: 'Highness Investment', ip: '—', country: 'Singapore', country_code: 'SG', lat: 1.3521, lng: 103.8198, status: 'online', metrics: { cpu_pct: 22, ram_pct: 40, disk_pct: 29 }, users_connected: null },
-];
-const FALLBACK_LPS: LiquidityProvider[] = [
-  { id: 'lp-te', name: 'TraderEvolution Sandbox', ip: '—', country: 'Cyprus', country_code: 'CY', lat: 34.7071, lng: 33.0226, status: 'active', rtt_ms: 42, last_activity_age_ms: 1500, session: 'TE-SB-01' },
-  { id: 'lp-pb', name: 'Prime Broker FIX', ip: '—', country: 'Switzerland', country_code: 'CH', lat: 47.3769, lng: 8.5417, status: 'connected', rtt_ms: 88, last_activity_age_ms: 12000, session: 'PB-02' },
-];
+// ── No preview data — the map shows only real feed data from the endpoint.
+const FALLBACK_NODES: ClusterNode[] = [];
+const FALLBACK_LPS: LiquidityProvider[] = [];
 
 // ── Small row + metric bar ──────────────────────────────────────────────────
 function Row({ label, value, mono, color }: { label: string; value: string; mono?: boolean; color?: string }) {
@@ -331,7 +324,7 @@ export function NetworkClusterPage() {
             <h1 style={{ fontSize: 22, fontWeight: 600, color: TEXT, margin: 0 }}>Network Cluster</h1>
             {!live && (
               <span style={{ fontSize: 11, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#e0a020', border: '1px solid #4a3a1a', backgroundColor: '#241f14', borderRadius: 5, padding: '2px 7px' }}>
-                Preview · awaiting live feed
+                No live feed
               </span>
             )}
           </div>
@@ -417,6 +410,15 @@ export function NetworkClusterPage() {
         <button onClick={() => setZoom(z => Math.max(z / 1.5, 1))} style={zoomBtn} title="Zoom out" aria-label="Zoom out">−</button>
         <button onClick={() => { setZoom(1); setCenter([10, 15]); }} style={zoomBtn} title="Reset view" aria-label="Reset view">⟳</button>
       </div>
+
+      {/* Empty state — no feed data */}
+      {displayNodes.length === 0 && displayLps.length === 0 && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          <div style={{ color: MUTED, fontSize: 13, backgroundColor: 'rgba(26,26,28,0.65)', padding: '8px 14px', borderRadius: 8, border: `1px solid ${LAND_LINE}` }}>
+            Waiting for cluster feed…
+          </div>
+        </div>
+      )}
     </div>
   );
 }
