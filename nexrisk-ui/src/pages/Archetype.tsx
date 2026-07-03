@@ -1426,8 +1426,8 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           <div className="flex items-center justify-between mb-3">
             <SectionLabel>Month-to-Date Usage</SectionLabel>
             <div className="flex items-center gap-3">
-              <span className={clsx('text-xs px-2 py-0.5 rounded font-mono', claude?.api_key_configured ? 'bg-green-950/40 text-green-500' : 'bg-red-950/30 text-red-500')}>
-                {claude?.api_key_configured ? 'API Key ✓' : 'API Key Not Set ✗'}
+              <span className={clsx('text-xs px-2 py-0.5 rounded font-mono', usage?.claude_api_key_configured ? 'bg-green-950/40 text-green-500' : 'bg-red-950/30 text-red-500')}>
+                {usage?.claude_api_key_configured ? 'API Key ✓' : 'API Key Not Set ✗'}
               </span>
             </div>
           </div>
@@ -1851,6 +1851,7 @@ function normalizeLLM(raw: any) {
   const rawCc = raw.costControls ?? raw.cost_controls ?? null;
   const cost_controls = rawCc ? {
     daily_cost_limit_usd:        rawCc.dailyCostLimitUsd        ?? rawCc.daily_cost_limit_usd        ?? 10,
+    monthly_cost_limit_usd:      rawCc.monthlyCostLimitUsd      ?? rawCc.monthly_cost_limit_usd      ?? null,
     max_auto_generates_per_hour: rawCc.maxAutoGeneratesPerHour  ?? rawCc.max_auto_generates_per_hour ?? 100,
   } : null;
 
@@ -1879,6 +1880,11 @@ function normalizeUsage(raw: any) {
     cache_misses:              raw.cacheMisses             ?? raw.cache_misses             ?? 0,
     cache_hit_rate_pct:        raw.cacheHitRatePct         ?? raw.cache_hit_rate_pct       ?? 0,
     claude_api_key_configured: raw.claudeApiKeyConfigured  ?? raw.claude_api_key_configured ?? false,
+    mtd_cost_usd:                raw.mtdCostUsd              ?? raw.mtd_cost_usd,
+    mtd_call_count:              raw.mtdCallCount            ?? raw.mtd_call_count,
+    monthly_limit_usd:           raw.monthlyLimitUsd         ?? raw.monthly_limit_usd,
+    monthly_limit_remaining_usd: raw.monthlyLimitRemainingUsd ?? raw.monthly_limit_remaining_usd,
+    mtd_usage_pct:               raw.mtdUsagePct             ?? raw.mtd_usage_pct,
   };
 }
 
