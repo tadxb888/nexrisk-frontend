@@ -13,11 +13,14 @@
 // `path`s are the stable contract (gates, guard, URLs, C++) and are NOT
 // renamed here — only the human-facing labels are.
 //
-// Groups follow a monitor / configure split:
-//   Summary    — at-a-glance firm view
-//   Trading    — live books + actions (where trading flow lives)
-//   Monitor    — things you watch but do not configure
-//   Configure  — things you tune; the system then runs on them
+// Groups follow the risk-desk domain split (display-only; the `module`
+// keys and `path`s below are unchanged by this regroup):
+//   Summary             — at-a-glance firm view
+//   Books               — B-Book, Coverage, Net Exposure
+//   Execution           — hedging, fills, pricing, routing, LP + symbol config
+//   Market Intelligence — trader behaviour, predictions, policy
+//   Reports             — audit logs + operational reports
+//   Settings            — system, users, MT5 servers
 // ============================================
 
 export interface SubItem {
@@ -45,39 +48,51 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    id: 'trading',
-    label: 'Trading',
+    id: 'books',
+    label: 'Books',
     items: [
-      { path: '/net-exposure',       label: 'Net Exposure',       module: 'net_exposure' },
-      { path: '/b-book',             label: 'B-Book',             module: 'bbook' },
-      { path: '/coverage-book',      label: 'Coverage',           module: 'coverage' },
-      { path: '/hedging-strategies', label: 'Hedging Strategies', module: 'hedge_strat' },
-      { path: '/execution-report',   label: 'Execution Report',   module: 'exec_report' },
+      { path: '/b-book',        label: 'B-Book',        module: 'bbook' },
+      { path: '/coverage-book', label: 'Coverage Book', module: 'coverage' },
+      { path: '/net-exposure',  label: 'Net Exposure',  module: 'net_exposure' },
     ],
   },
   {
-    id: 'monitor',
-    label: 'Monitor',
+    id: 'execution',
+    label: 'Execution',
     items: [
-      { path: '/flow',        label: 'Traders', module: 'focus' },
-      { path: '/predictions', label: 'Predictions',     module: 'predictions' },
-      { path: '/logs',        label: 'Logs',            module: 'logs' },
-      { path: '/reports',     label: 'Reports',         module: 'reports' },
-    ],
-  },
-  {
-    id: 'configure',
-    label: 'Configure',
-    items: [
-      { path: '/archetypes',          label: 'Behaviour Rules',     module: 'archetype' },
-      { path: '/risk-charter',        label: 'Risk Policy',         module: 'charter' },
+      { path: '/hedging-strategies',  label: 'Hedging Strategies',  module: 'hedge_strat' },
+      { path: '/execution-report',    label: 'Execution Report',    module: 'exec_report' },
       { path: '/price-rules',         label: 'Price Rules Engine',  module: 'price_rules' },
-      { path: '/symbol-mapping',      label: 'Symbol Mapping',      module: 'symbol_map' },
       { path: '/route-sanity',        label: 'Route Sanity',        module: 'route_sanity' },
       { path: '/liquidity-providers', label: 'Liquidity Providers', module: 'lp_admin' },
-      { path: '/mt5-servers',         label: 'MT5 Servers',         module: 'mt5_servers' },
-      { path: '/settings',            label: 'Settings',            module: 'settings' },
-      { path: '/users',               label: 'Users',               module: 'users' },
+      { path: '/symbol-mapping',      label: 'Symbol Mapping',      module: 'symbol_map' },
+    ],
+  },
+  {
+    id: 'intel',
+    label: 'Market Intelligence',
+    items: [
+      { path: '/flow',         label: 'Traders',            module: 'focus' },
+      { path: '/archetypes',   label: 'Behaviour Rules',    module: 'archetype' },
+      { path: '/predictions',  label: 'Market Predictions', module: 'predictions' },
+      { path: '/risk-charter', label: 'Risk Policy',        module: 'charter' },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'Reports',
+    items: [
+      { path: '/logs',    label: 'Audit Logs', module: 'logs' },
+      { path: '/reports', label: 'Reports',    module: 'reports' },
+    ],
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    items: [
+      { path: '/settings',    label: 'System Settings', module: 'settings' },
+      { path: '/users',       label: 'Users & Roles',   module: 'users' },
+      { path: '/mt5-servers', label: 'MT5 Servers',     module: 'mt5_servers' },
     ],
   },
 ];
