@@ -14,13 +14,14 @@
 // world topology at public/countries-110m.json (see GEO_URL).
 // ============================================================================
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import {
   ComposableMap,
   ZoomableGroup,
   Geographies,
   Geography,
   Marker,
+  Line,
   Sphere,
   Graticule,
 } from 'react-simple-maps';
@@ -106,6 +107,8 @@ if (typeof document !== 'undefined' && !document.getElementById('cluster-map-sty
       100% { transform: scale(2.6); opacity: 0;    }
     }
     .cluster-pulse { animation: cluster-pulse 2.4s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+    @keyframes cluster-flow { to { stroke-dashoffset: -14; } }
+    .cluster-pipe { stroke-dasharray: 3 5; animation: cluster-flow 1.1s linear infinite; }
   `;
   document.head.appendChild(el);
 }
@@ -130,8 +133,8 @@ function fmtAge(ms?: number): string {
 
 // ── PREVIEW fallbacks — replaced by the live endpoint's inventory ────────────
 const FALLBACK_NODES: ClusterNode[] = [
-  { id: 'fe-1', role: 'frontend', label: 'NexRisk Frontend', ip: '—', country: 'United Kingdom', country_code: 'GB', lat: 51.5074, lng: -0.1278, status: 'online', metrics: { cpu_pct: 34, ram_pct: 58, disk_pct: 41 }, users_connected: 7 },
-  { id: 'be-1', role: 'backend', label: 'NexRisk Backend', ip: '—', country: 'Germany', country_code: 'DE', lat: 50.1109, lng: 8.6821, status: 'online', metrics: { cpu_pct: 52, ram_pct: 64, disk_pct: 38 }, users_connected: null },
+  { id: 'fe-1', role: 'frontend', label: 'Taiga Frontend', ip: '—', country: 'United Kingdom', country_code: 'GB', lat: 51.5074, lng: -0.1278, status: 'online', metrics: { cpu_pct: 34, ram_pct: 58, disk_pct: 41 }, users_connected: 7 },
+  { id: 'be-1', role: 'backend', label: 'Taiga Backend', ip: '—', country: 'Germany', country_code: 'DE', lat: 50.1109, lng: 8.6821, status: 'online', metrics: { cpu_pct: 52, ram_pct: 64, disk_pct: 38 }, users_connected: null },
   { id: 'mt5-2', role: 'mt5_master', label: 'Master MT5 · Ross Weiler', ip: '—', country: 'United States', country_code: 'US', lat: 40.7128, lng: -74.006, status: 'degraded', metrics: { cpu_pct: 78, ram_pct: 71, disk_pct: 55 }, users_connected: null },
   { id: 'mt5-4', role: 'mt5', label: 'Highness Investment', ip: '—', country: 'Singapore', country_code: 'SG', lat: 1.3521, lng: 103.8198, status: 'online', metrics: { cpu_pct: 22, ram_pct: 40, disk_pct: 29 }, users_connected: null },
 ];
@@ -173,6 +176,8 @@ export function NetworkClusterPage() {
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [live, setLive] = useState(false);
   const [selected, setSelected] = useState<Selection>(null);
+  const [zoom, setZoom] = useState(1);
+  const [center, setCenter] = useState<[number, number]>([10, 15]);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,6 +206,16 @@ export function NetworkClusterPage() {
   const selNode = selected?.kind === 'node' ? displayNodes.find(n => n.id === selected.id) ?? null : null;
   const selLp = selected?.kind === 'lp' ? displayLps.find(l => l.id === selected.id) ?? null : null;
 
+  const backendNode = displayNodes.find(n => n.role === 'backend');
+  const masterNode = displayNodes.find(n => n.role === 'mt5_master');
+  const LINK_MT5 = '#e0a020'; // Backend ↔ MT5 Master
+  const LINK_LP  = '#4ecdc4'; // Backend ↔ online LPs
+  const zoomBtn: CSSProperties = {
+    width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: BG_CARD, border: `1px solid ${LAND_LINE}`, borderRadius: 7,
+    color: TEXT, fontSize: 16, lineHeight: 1, cursor: 'pointer',
+  };
+
   const pinLabel = (label: string, y: number, active: boolean) => (
     <text
       textAnchor="middle" y={y}
@@ -216,7 +231,13 @@ export function NetworkClusterPage() {
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%', backgroundColor: BG_PAGE, overflow: 'hidden' }}>
       <ComposableMap projection="geoEqualEarth" projectionConfig={{ scale: 175 }} style={{ width: '100%', height: '100%' }}>
-        <ZoomableGroup zoom={1} center={[10, 15]} minZoom={1} maxZoom={6}>
+        <ZoomableGroup
+          zoom={zoom}
+          center={center}
+          minZoom={1}
+          maxZoom={8}
+          onMoveEnd={(pos: { zoom: number; coordinates: [number, number] }) => { setZoom(pos.zoom); setCenter(pos.coordinates); }}
+        >
           <Sphere id="sphere" stroke="#000000" strokeWidth={0} fill={OCEAN} />
           <Graticule stroke={GRATICULE} strokeWidth={0.35} />
           <Geographies geography={GEO_URL}>
@@ -237,6 +258,32 @@ export function NetworkClusterPage() {
               ))
             }
           </Geographies>
+
+          {/* Links (rendered under the pins) */}
+          {backendNode && masterNode && (
+            <Line
+              from={[backendNode.lng, backendNode.lat]}
+              to={[masterNode.lng, masterNode.lat]}
+              stroke={LINK_MT5}
+              strokeWidth={1.1}
+              strokeLinecap="round"
+              className="cluster-pipe"
+            />
+          )}
+          {backendNode &&
+            displayLps
+              .filter(l => l.status !== 'offline')
+              .map(lp => (
+                <Line
+                  key={`link-${lp.id}`}
+                  from={[backendNode.lng, backendNode.lat]}
+                  to={[lp.lng, lp.lat]}
+                  stroke={LINK_LP}
+                  strokeWidth={1.1}
+                  strokeLinecap="round"
+                  className="cluster-pipe"
+                />
+              ))}
 
           {/* Nodes — circles */}
           {displayNodes.map(n => {
@@ -310,6 +357,9 @@ export function NetworkClusterPage() {
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#66e07a' }} /> Healthy</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#e0a020' }} /> Degraded / idle</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff6b6b' }} /> Offline</span>
+        <span style={{ width: 1, height: 12, backgroundColor: LAND_LINE }} />
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 16, borderTop: `2px solid ${LINK_MT5}` }} /> MT5 link</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 16, borderTop: `2px solid ${LINK_LP}` }} /> LP link</span>
       </div>
 
       {/* Detail card — node */}
@@ -361,6 +411,12 @@ export function NetworkClusterPage() {
           {selLp.session && <Row label="Session" value={selLp.session} mono />}
         </div>
       )}
+      {/* Zoom controls */}
+      <div style={{ position: 'absolute', right: 22, bottom: 52, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <button onClick={() => setZoom(z => Math.min(z * 1.5, 8))} style={zoomBtn} title="Zoom in" aria-label="Zoom in">+</button>
+        <button onClick={() => setZoom(z => Math.max(z / 1.5, 1))} style={zoomBtn} title="Zoom out" aria-label="Zoom out">−</button>
+        <button onClick={() => { setZoom(1); setCenter([10, 15]); }} style={zoomBtn} title="Reset view" aria-label="Reset view">⟳</button>
+      </div>
     </div>
   );
 }
