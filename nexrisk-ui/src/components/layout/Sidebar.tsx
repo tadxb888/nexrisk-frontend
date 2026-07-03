@@ -255,22 +255,28 @@ export function Sidebar() {
     >
       {/* Menu header + collapse/expand toggle. */}
       {collapsed ? (
-        <div className="flex flex-col items-center gap-2" style={{ padding: '9px 0', borderBottom: `1px solid ${BORDER}` }}>
-          <button
-            onClick={toggleCollapsed}
-            title="Expand menu"
-            aria-label="Expand menu"
-            style={{ color: COLOR_OWNER, display: 'flex', alignItems: 'center', padding: 2 }}
-          >
-            <SidebarToggleIcon size={18} />
-          </button>
-          <span
-            onClick={toggleCollapsed}
-            style={{ writingMode: 'vertical-rl', fontSize: 15, letterSpacing: '0.14em', textTransform: 'uppercase', color: COLOR_OWNER, fontWeight: 500, cursor: 'pointer' }}
-          >
-            Menu
-          </span>
-        </div>
+        <>
+          <div className="flex justify-center" style={{ padding: '9px 0', borderBottom: `1px solid ${BORDER}` }}>
+            <button
+              onClick={toggleCollapsed}
+              title="Expand menu"
+              aria-label="Expand menu"
+              style={{ color: COLOR_OWNER, display: 'flex', alignItems: 'center', padding: 2 }}
+            >
+              <SidebarToggleIcon size={18} />
+            </button>
+          </div>
+          {/* Vertical MENU label, centred in the remaining rail height, reading
+              bottom-to-top to match the DOM Trader tab. */}
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span
+              onClick={toggleCollapsed}
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 13, letterSpacing: '0.16em', textTransform: 'uppercase', color: COLOR_OWNER, fontWeight: 500, cursor: 'pointer' }}
+            >
+              Menu
+            </span>
+          </div>
+        </>
       ) : (
         <div className="flex items-center gap-2" style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}` }}>
           <button
@@ -281,7 +287,7 @@ export function Sidebar() {
           >
             <SidebarToggleIcon size={18} />
           </button>
-          <span style={{ fontSize: 15, letterSpacing: '0.10em', textTransform: 'uppercase', color: COLOR_OWNER, fontWeight: 500 }}>
+          <span style={{ fontSize: 13, letterSpacing: '0.10em', textTransform: 'uppercase', color: COLOR_OWNER, fontWeight: 500 }}>
             Menu
           </span>
         </div>
