@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { nexriskApi } from '../services/nexrisk-api.js';
 import type { HealthStatus } from '../types/index.js';
 
@@ -9,10 +8,10 @@ const startTime = Date.now();
 
 // BFF build version, read once from package.json (two levels above this file in
 // both src/routes and dist/routes). Falls back to 'unknown' if unresolved.
+// __dirname is used directly since the BFF compiles to CommonJS.
 const BFF_VERSION = (() => {
   try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    return JSON.parse(readFileSync(join(here, '../../package.json'), 'utf-8')).version as string;
+    return JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf-8')).version as string;
   } catch {
     return 'unknown';
   }
