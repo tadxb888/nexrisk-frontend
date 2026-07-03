@@ -203,7 +203,7 @@ export function TopBar() {
                 to={item.path}
                 className="group flex items-center gap-1 shrink-0 rounded transition-colors"
                 style={{
-                  height: 26, padding: '0 8px', fontSize: 12,
+                  height: 28, padding: '0 8px', fontSize: 14,
                   color: isActive ? '#49b3b3' : '#cfcfcf',
                   backgroundColor: isActive ? '#2c2b2f' : 'transparent',
                 }}
