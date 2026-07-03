@@ -1,22 +1,25 @@
 // ============================================
-// Sidebar — Primary Navigation (persistent left rail)
+// Sidebar — Primary Navigation (persistent, collapsible left rail)
 //
-// Replaces the two-row TopBar switcher. Domains are always visible as a
-// vertical rail; the active domain expands its children inline (accordion,
-// one open at a time). Favourites sit at the top; Help sits at the bottom.
+// Domains are always visible as a vertical rail; the active domain expands
+// its children inline (accordion, one open at a time). A "Menu" header with a
+// collapse toggle sits at the top; collapsing shrinks the rail to a thin strip
+// to reclaim real estate (state persisted in localStorage).
 //
-// Gating is identical to the old TopBar: a leaf is shown only when the user
-// holds >= VIEW on its `module` (hasPermission). NAV_SECTIONS remains the
-// single source of truth — this component adds no modules or paths to it.
+// Favourites are NOT shown here — pinned items render in the top bar's
+// favourites strip (TopBar). Pinning from a leaf still works and syncs via the
+// shared 'taiga:pinned-items' key + 'taiga:pins-changed' event.
 //
-// PROVISIONED (placeholder, wired later — see PROVISIONED_* / HELP_ITEMS):
-//   • Network Cluster (/infra, module 'infra_monitor') — rendered ungated for
-//     now so it's visible before the C++ module grant exists. Once the backend
-//     grants 'infra_monitor', gate it like any other leaf (see renderLeaf call
-//     under the 'settings' section).
-//   • Help → Operational Manual (/help/manual, route not built yet) + frontend
-//     / backend version strings (copy-to-clipboard; values are placeholders
-//     until wired to the real build/health info).
+// Gating is identical to the old TopBar: a leaf shows only when the user holds
+// >= VIEW on its `module` (hasPermission). NAV_SECTIONS remains the single
+// source of truth — this component adds no modules or paths to it.
+//
+// PROVISIONED (placeholder, wired later):
+//   • Network Cluster (/infra, 'infra_monitor') — rendered ungated for now so
+//     it's visible before the C++ module grant exists. To gate later, wrap the
+//     renderLeaf(NETWORK_CLUSTER) call in `can(NETWORK_CLUSTER.module) && ...`.
+//   • Help → Operational Manual (/help/manual, route not built) + frontend /
+//     backend version strings (copy-to-clipboard; placeholder values).
 //
 // Colour convention mirrors the old TopBar:
 //   #f5802c (orange) — the section that owns the current page ("you-are-here")
@@ -37,15 +40,18 @@ const RAIL_BG            = '#1b1a1d';
 const HOVER_BG           = '#232327';
 const BORDER             = '#2f2f33';
 
+const RAIL_W_OPEN     = 240;
+const RAIL_W_COLLAPSED = 46;
+const COLLAPSE_KEY    = 'taiga:rail-collapsed';
+
 // ── Provisioned placeholders (wired later) ───────────────────
-// Not part of NAV_SECTIONS (the gated contract). Rendered by this rail only.
 const NETWORK_CLUSTER: SubItem = { path: '/infra', label: 'Network Cluster', module: 'infra_monitor' };
 
 const HELP_ID = '__help__';
 const FRONTEND_VERSION = '—'; // TODO wire to real build version
 const BACKEND_VERSION  = '—'; // TODO wire from /health or build info
 
-// ── Pin persistence (shares the existing key with legacy TopBar) ─────────────
+// ── Pin persistence (shares the existing key with the top bar) ───────────────
 const PIN_KEY = 'taiga:pinned-items';
 
 function loadPins(): string[] {
@@ -59,16 +65,7 @@ function savePins(pins: string[]) {
   localStorage.setItem(PIN_KEY, JSON.stringify(pins));
 }
 
-// ── Path helpers ─────────────────────────────────────────────
-function findItem(path: string): SubItem | undefined {
-  for (const s of NAV_SECTIONS) {
-    const found = s.items.find(i => i.path === path);
-    if (found) return found;
-  }
-  return undefined;
-}
-
-/** Which section owns a given route (exact, then prefix). */
+// ── Path helper ──────────────────────────────────────────────
 function sectionForPath(pathname: string): NavSection | undefined {
   for (const s of NAV_SECTIONS) {
     if (s.items.some(i => i.path === pathname)) return s;
@@ -103,6 +100,18 @@ const CopyIcon = () => (
   </svg>
 );
 
+// Sidebar toggle glyph (from sidebar.svg) — panel with a rail divider.
+const SidebarToggleIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+    <g clipRule="evenodd" fillRule="evenodd">
+      <path d="m4.5 3.75c-.41421 0-.75.33579-.75.75v15c0 .4142.33579.75.75.75h15c.4142 0 .75-.3358.75-.75v-15c0-.41421-.3358-.75-.75-.75zm-2.25.75c0-1.24264 1.00736-2.25 2.25-2.25h15c1.2426 0 2.25 1.00736 2.25 2.25v15c0 1.2426-1.0074 2.25-2.25 2.25h-15c-1.24264 0-2.25-1.0074-2.25-2.25z" />
+      <path d="m8 2.25c.41421 0 .75.33579.75.75v18c0 .4142-.33579.75-.75.75s-.75-.3358-.75-.75v-18c0-.41421.33579-.75.75-.75z" />
+      <path d="m5.75 21c0-.4142.33579-.75.75-.75h3c.41421 0 .75.3358.75.75s-.33579.75-.75.75h-3c-.41421 0-.75-.3358-.75-.75z" />
+      <path d="m5.75 3c0-.41421.33579-.75.75-.75h3c.41421 0 .75.33579.75.75s-.33579.75-.75.75h-3c-.41421 0-.75-.33579-.75-.75z" />
+    </g>
+  </svg>
+);
+
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
@@ -113,8 +122,19 @@ export function Sidebar() {
 
   const [pins, setPins] = useState<string[]>(loadPins);
   const [copied, setCopied] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
+  });
 
-  // Keep pins in sync if another surface (e.g. legacy TopBar) changes them.
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  // Keep pins in sync if the top bar changes them.
   useEffect(() => {
     const sync = () => setPins(loadPins());
     window.addEventListener('taiga:pins-changed', sync);
@@ -130,15 +150,8 @@ export function Sidebar() {
     });
   }, []);
 
-  // Sections the user can see (>= 1 visible child).
   const accessibleGroups = NAV_SECTIONS.filter(s => s.items.some(i => can(i.module)));
 
-  // Favourites, permission-filtered so a perm loss hides the pin.
-  const visibleFavourites: SubItem[] = pins
-    .map(findItem)
-    .filter((i): i is SubItem => !!i && can(i.module));
-
-  // Which accordion section is open. Follows the page's owning section.
   const owner = sectionForPath(location.pathname);
   const [openId, setOpenId] = useState<string>(() => owner?.id ?? accessibleGroups[0]?.id ?? '');
 
@@ -231,50 +244,77 @@ export function Sidebar() {
     <nav
       aria-label="Primary"
       className="shrink-0 flex flex-col overflow-y-auto"
-      style={{ width: 240, height: '100%', backgroundColor: RAIL_BG, borderRight: `1px solid ${BORDER}`, userSelect: 'none' }}
+      style={{
+        width: collapsed ? RAIL_W_COLLAPSED : RAIL_W_OPEN,
+        height: '100%',
+        backgroundColor: RAIL_BG,
+        borderRight: `1px solid ${BORDER}`,
+        userSelect: 'none',
+        transition: 'width 0.15s ease',
+      }}
     >
-      {/* Favourites — always-open block at the top (when non-empty). */}
-      {visibleFavourites.length > 0 && (
-        <div style={{ borderBottom: `1px solid ${BORDER}`, paddingBottom: 4 }}>
-          <div style={{ padding: '9px 12px 4px', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8a8a8a' }}>
-            Favourites
-          </div>
-          {visibleFavourites.map(item => renderLeaf(item))}
+      {/* Menu header + collapse/expand toggle. */}
+      {collapsed ? (
+        <div className="flex justify-center" style={{ padding: '9px 0', borderBottom: `1px solid ${BORDER}` }}>
+          <button
+            onClick={toggleCollapsed}
+            title="Expand menu"
+            aria-label="Expand menu"
+            style={{ color: '#cfcfcf', display: 'flex', alignItems: 'center', padding: 2 }}
+          >
+            <SidebarToggleIcon size={17} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2" style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}` }}>
+          <button
+            onClick={toggleCollapsed}
+            title="Collapse menu"
+            aria-label="Collapse menu"
+            style={{ color: '#cfcfcf', display: 'flex', alignItems: 'center', padding: 2 }}
+          >
+            <SidebarToggleIcon size={17} />
+          </button>
+          <span style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8a8a8a', fontWeight: 500 }}>
+            Menu
+          </span>
         </div>
       )}
 
-      {/* Structural domains — permission-filtered accordion. */}
-      {accessibleGroups.map(section => {
-        const isOwner = owner?.id === section.id;
-        const open = openId === section.id;
-        const children = section.items.filter(i => can(i.module));
-        return (
-          <div key={section.id} style={{ borderBottom: `1px solid ${BORDER}` }}>
-            {renderSectionHeader(section.id, section.label, isOwner)}
-            {open && (
-              <div style={{ paddingBottom: 4 }}>
-                {children.map(item => renderLeaf(item))}
-                {/* PROVISIONED: Network Cluster lives under Settings, rendered
-                    ungated until the C++ 'infra_monitor' module grant exists.
-                    To gate later: wrap in `can(NETWORK_CLUSTER.module) && ...`. */}
-                {section.id === 'settings' && renderLeaf(NETWORK_CLUSTER)}
+      {/* Nav — hidden while collapsed. */}
+      {!collapsed && (
+        <>
+          {accessibleGroups.map(section => {
+            const isOwner = owner?.id === section.id;
+            const open = openId === section.id;
+            const children = section.items.filter(i => can(i.module));
+            return (
+              <div key={section.id} style={{ borderBottom: `1px solid ${BORDER}` }}>
+                {renderSectionHeader(section.id, section.label, isOwner)}
+                {open && (
+                  <div style={{ paddingBottom: 4 }}>
+                    {children.map(item => renderLeaf(item))}
+                    {/* PROVISIONED: Network Cluster under Settings, ungated for now. */}
+                    {section.id === 'settings' && renderLeaf(NETWORK_CLUSTER)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* PROVISIONED: Help — always visible (ungated chrome). */}
+          <div style={{ borderBottom: `1px solid ${BORDER}`, marginTop: 'auto' }}>
+            {renderSectionHeader(HELP_ID, 'Help', false)}
+            {openId === HELP_ID && (
+              <div style={{ paddingBottom: 6 }}>
+                {renderLeaf({ path: '/help/manual', label: 'Operational Manual', module: '__help__' }, { showPin: false })}
+                {renderVersionRow('Frontend version', FRONTEND_VERSION)}
+                {renderVersionRow('Backend version', BACKEND_VERSION)}
               </div>
             )}
           </div>
-        );
-      })}
-
-      {/* PROVISIONED: Help — always visible (ungated chrome). */}
-      <div style={{ borderBottom: `1px solid ${BORDER}`, marginTop: 'auto' }}>
-        {renderSectionHeader(HELP_ID, 'Help', false)}
-        {openId === HELP_ID && (
-          <div style={{ paddingBottom: 6 }}>
-            {renderLeaf({ path: '/help/manual', label: 'Operational Manual', module: '__help__' }, { showPin: false })}
-            {renderVersionRow('Frontend version', FRONTEND_VERSION)}
-            {renderVersionRow('Backend version', BACKEND_VERSION)}
-          </div>
-        )}
-      </div>
+        </>
+      )}
     </nav>
   );
 }

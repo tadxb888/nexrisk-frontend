@@ -12,8 +12,8 @@
 // keep working after the rail split.
 // ============================================
 
-import { useState, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '@/stores/AuthContext';
 import { type SubItem, type NavSection, NAV_SECTIONS, moduleForPath } from '@/config/navPermissions';
 import { PortfolioCard } from '@/components/portfolio/PortfolioCard';
@@ -108,13 +108,29 @@ function accountInitials(user: { email: string; first_name?: string; last_name?:
   return user.email[0]?.toUpperCase() ?? 'U';
 }
 
+// Find a SubItem by path across all sections.
+function findItem(path: string): SubItem | undefined {
+  for (const s of NAV_SECTIONS) {
+    const found = s.items.find(i => i.path === path);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+// ── Pin icon ─────────────────────────────────────────────────
+const PinIcon = ({ filled }: { filled: boolean }) => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
+    <path d="M9.068,16.347l4.9,4.9.707-.707a7.977,7.977,0,0,0,2.075-7.619l-.246-1,2.086-2.086.217.217a3.085,3.085,0,0,0,3.938.4,3,3,0,0,0,.38-4.565L18.2.954a3.085,3.085,0,0,0-3.938-.4,3,3,0,0,0-.38,4.565l.293.293L12.085,7.5,11.1,7.258A7.985,7.985,0,0,0,3.464,9.33l-.707.707,4.9,4.895L.293,22.293l1.414,1.414Z" />
+  </svg>
+);
+
 // ══════════════════════════════════════════════════════════════
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
 
 export function TopBar() {
   const location = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
 
   // One-time default favourites seed (consumed by the left rail, Sidebar.tsx).
   useEffect(() => { seedDefaultsIfNeeded(); }, []);
@@ -126,6 +142,25 @@ export function TopBar() {
   // Whether the AlertsBar notification slot is filled — drives the /portfolio
   // compact-mode swap of PortfolioCard. Toggled by AlertsBarNotifications.
   const [notificationActive, setNotificationActive] = useState(false);
+
+  // Favourites (pinned pages) — shared with the rail via the pin key + event.
+  const [pins, setPins] = useState<string[]>(loadPins);
+  useEffect(() => {
+    const sync = () => setPins(loadPins());
+    window.addEventListener('taiga:pins-changed', sync);
+    return () => window.removeEventListener('taiga:pins-changed', sync);
+  }, []);
+  const togglePin = useCallback((path: string) => {
+    setPins(prev => {
+      const next = prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path];
+      savePins(next);
+      window.dispatchEvent(new Event('taiga:pins-changed'));
+      return next;
+    });
+  }, []);
+  const visibleFavourites: SubItem[] = pins
+    .map(findItem)
+    .filter((i): i is SubItem => !!i && hasPermission(i.module, 'VIEW'));
 
   // Clock
   useEffect(() => {
@@ -157,6 +192,37 @@ export function TopBar() {
         <div className="flex items-center shrink-0" style={{ marginRight: 12 }}>
           <img src="/taiga-mark.svg" alt="taiga" style={{ height: 28, objectFit: 'contain' }} draggable={false} />
         </div>
+
+        {/* Favourites — pinned pages (synced with the rail's pin toggles). */}
+        <nav className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto" aria-label="Favourites">
+          {visibleFavourites.map(item => {
+            const isActive = location.pathname === item.path;
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className="group flex items-center gap-1 shrink-0 rounded transition-colors"
+                style={{
+                  height: 26, padding: '0 8px', fontSize: 12,
+                  color: isActive ? '#49b3b3' : '#cfcfcf',
+                  backgroundColor: isActive ? '#2c2b2f' : 'transparent',
+                }}
+                onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#fff'; }}
+                onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = '#cfcfcf'; }}
+              >
+                <span className="truncate" style={{ maxWidth: 150 }}>{item.label}</span>
+                <button
+                  onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(item.path); }}
+                  className="hidden group-hover:inline-flex items-center"
+                  style={{ color: '#49b3b3', padding: 0, lineHeight: 1 }}
+                  title="Unpin from favourites"
+                >
+                  <PinIcon filled />
+                </button>
+              </NavLink>
+            );
+          })}
+        </nav>
 
         {/* Right — clock + account dropdown */}
         <div className="ml-auto flex items-center gap-3 shrink-0">
