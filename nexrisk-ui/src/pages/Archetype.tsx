@@ -1330,7 +1330,7 @@ function ClusteringTab() {
 // ─────────────────────────────────────────────
 
 const RISK_LEVELS = ['VERY_LOW', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
-const RISK_CLR = { VERY_LOW: '#71717a', LOW: '#4a6fa5', MEDIUM: '#8a6d0a', HIGH: '#b85c1a', CRITICAL: '#c0392b' };
+const RISK_CLR = { VERY_LOW: '#a1a1aa', LOW: '#6a9bd8', MEDIUM: '#e0a020', HIGH: '#ec7a3c', CRITICAL: '#ff6b6b' };
 
 type LLMDrawer = null | 'providers' | 'claude' | 'ollama' | 'api_key' | 'routing' | 'cost_controls' | 'caching';
 
@@ -1527,11 +1527,11 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
             </tr>
           </thead>
           <tbody>
-            {RISK_LEVELS.map(lv => {
+            {RISK_LEVELS.map((lv, idx) => {
               const r = cfg?.routing?.[lv];
               return (
-                <tr key={lv} className="border-b border-[#2a2a2c] last:border-0">
-                  <td className="py-2 font-mono" style={{ color: RISK_CLR[lv] }}>{lv}</td>
+                <tr key={lv} style={{ backgroundColor: idx % 2 === 1 ? 'rgba(255,255,255,0.035)' : 'transparent' }}>
+                  <td className="py-2 font-mono" style={{ color: RISK_CLR[lv], fontSize: 14 }}>{lv}</td>
                   {[r?.use_llm, r?.auto_generate, r?.on_demand_available].map((on, i) => (
                     <td key={i} className="py-2 text-center">
                       <span className={on ? 'text-green-500' : 'text-zinc-700'}>{on ? '●' : '○'}</span>
@@ -1558,7 +1558,6 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
               <KV label="Max Auto-Gen / Hour"       value={String(cc.max_auto_generates_per_hour)} />
             </>
           )}
-          <p className="text-xs text-white/40 mt-2">On-demand generation always available even when daily limit is reached. Auto-gen pauses.</p>
         </Card>
 
         <Card>
