@@ -202,6 +202,14 @@ export function NetworkClusterPage() {
   const [selected, setSelected] = useState<Selection>(null);
   const [zoom, setZoom] = useState(1);
   const [center, setCenter] = useState<[number, number]>([10, 15]);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const toggleHidden = (id: string) =>
+    setHidden(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     let cancelled = false;
@@ -286,7 +294,7 @@ export function NetworkClusterPage() {
           </Geographies>
 
           {/* Links (rendered under the pins) */}
-          {backendNode && masterNode && hasGeo(backendNode) && hasGeo(masterNode) && (
+          {backendNode && masterNode && hasGeo(backendNode) && hasGeo(masterNode) && !hidden.has(backendNode.id) && !hidden.has(masterNode.id) && (
             <Line
               from={[(backendNode.lng as number) + off(backendNode.id).dLng, (backendNode.lat as number) + off(backendNode.id).dLat]}
               to={[(masterNode.lng as number) + off(masterNode.id).dLng, (masterNode.lat as number) + off(masterNode.id).dLat]}
@@ -296,9 +304,9 @@ export function NetworkClusterPage() {
               className="cluster-pipe"
             />
           )}
-          {backendNode && hasGeo(backendNode) &&
+          {backendNode && hasGeo(backendNode) && !hidden.has(backendNode.id) &&
             displayLps
-              .filter(l => l.status !== 'offline' && hasGeo(l))
+              .filter(l => l.status !== 'offline' && hasGeo(l) && !hidden.has(l.id))
               .map(lp => (
                 <Line
                   key={`link-${lp.id}`}
@@ -312,7 +320,7 @@ export function NetworkClusterPage() {
               ))}
 
           {/* Nodes — circles */}
-          {displayNodes.filter(hasGeo).map(n => {
+          {displayNodes.filter(n => hasGeo(n) && !hidden.has(n.id)).map(n => {
             const color = (NODE_STATUS[n.status] ?? NODE_STATUS.offline).color;
             const isSel = selected?.kind === 'node' && selected.id === n.id;
             const o = off(n.id);
@@ -323,16 +331,18 @@ export function NetworkClusterPage() {
                 onClick={() => setSelected({ kind: 'node', id: n.id })}
                 style={{ default: { cursor: 'pointer' }, hover: { cursor: 'pointer' }, pressed: { cursor: 'pointer' } }}
               >
-                <circle r={5} fill={color} className="cluster-pulse" />
-                <circle r={isSel ? 6 : 4.5} fill={color} stroke={BG_PAGE} strokeWidth={1.3} />
-                <circle r={1.6} fill="#ffffff" opacity={0.9} />
-                {pinLabel(n.label, -11, isSel)}
+                <g transform={`scale(${1 / zoom})`}>
+                  <circle r={5} fill={color} className="cluster-pulse" />
+                  <circle r={isSel ? 6 : 4.5} fill={color} stroke={BG_PAGE} strokeWidth={1.3} />
+                  <circle r={1.6} fill="#ffffff" opacity={0.9} />
+                  {isSel && pinLabel(n.label, -11, true)}
+                </g>
               </Marker>
             );
           })}
 
           {/* Liquidity providers — diamonds */}
-          {displayLps.filter(hasGeo).map(lp => {
+          {displayLps.filter(lp => hasGeo(lp) && !hidden.has(lp.id)).map(lp => {
             const color = (LP_STATUS[lp.status] ?? LP_STATUS.offline).color;
             const isSel = selected?.kind === 'lp' && selected.id === lp.id;
             const o = off(lp.id);
@@ -343,9 +353,11 @@ export function NetworkClusterPage() {
                 onClick={() => setSelected({ kind: 'lp', id: lp.id })}
                 style={{ default: { cursor: 'pointer' }, hover: { cursor: 'pointer' }, pressed: { cursor: 'pointer' } }}
               >
-                {lp.status === 'active' && <path d="M0,-6 L6,0 L0,6 L-6,0 Z" fill={color} className="cluster-pulse" />}
-                <path d={`M0,${isSel ? -6.5 : -5.5} L${isSel ? 6.5 : 5.5},0 L0,${isSel ? 6.5 : 5.5} L${isSel ? -6.5 : -5.5},0 Z`} fill={color} stroke={BG_PAGE} strokeWidth={1.3} />
-                {pinLabel(lp.name, -11, isSel)}
+                <g transform={`scale(${1 / zoom})`}>
+                  {lp.status === 'active' && <path d="M0,-6 L6,0 L0,6 L-6,0 Z" fill={color} className="cluster-pulse" />}
+                  <path d={`M0,${isSel ? -6.5 : -5.5} L${isSel ? 6.5 : 5.5},0 L0,${isSel ? 6.5 : 5.5} L${isSel ? -6.5 : -5.5},0 Z`} fill={color} stroke={BG_PAGE} strokeWidth={1.3} />
+                  {isSel && pinLabel(lp.name, -11, true)}
+                </g>
               </Marker>
             );
           })}
@@ -371,6 +383,32 @@ export function NetworkClusterPage() {
             <div style={{ fontFamily: MONO, marginTop: 2 }}>{new Date(generatedAt).toLocaleTimeString('en-GB', { hour12: false })}</div>
           )}
         </div>
+      </div>
+
+      {/* Node list — click a row to hide/show it on the map */}
+      <div style={{ position: 'absolute', top: 92, left: 22, width: 210, maxHeight: '55%', overflowY: 'auto', backgroundColor: 'rgba(26,26,28,0.72)', border: `1px solid ${LAND_LINE}`, borderRadius: 8, padding: '6px 0' }}>
+        <div style={{ padding: '2px 12px 6px', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8a8a8a' }}>Nodes</div>
+        {[
+          ...displayNodes.map(n => ({ id: n.id, label: n.label, color: (NODE_STATUS[n.status] ?? NODE_STATUS.offline).color, geo: hasGeo(n) })),
+          ...displayLps.map(l => ({ id: l.id, label: l.name, color: (LP_STATUS[l.status] ?? LP_STATUS.offline).color, geo: hasGeo(l) })),
+        ].map(r => {
+          const isHidden = hidden.has(r.id);
+          return (
+            <button
+              key={r.id}
+              onClick={() => toggleHidden(r.id)}
+              className="w-full flex items-center gap-2 transition-colors"
+              style={{ padding: '5px 12px', fontSize: 12, color: isHidden ? '#6a6a70' : '#e2e2e6', textAlign: 'left' }}
+              onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.04)'; }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+              title={isHidden ? 'Show on map' : 'Hide from map'}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: r.color, opacity: isHidden ? 0.35 : 1, flexShrink: 0 }} />
+              <span className="truncate" style={{ textDecoration: isHidden ? 'line-through' : 'none' }}>{r.label}</span>
+              {!r.geo && <span style={{ marginLeft: 'auto', fontSize: 10, color: '#7a7a80', flexShrink: 0 }}>no geo</span>}
+            </button>
+          );
+        })}
       </div>
 
       {/* Legend */}
