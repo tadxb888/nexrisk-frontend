@@ -28,6 +28,7 @@ import { authRoutes } from './routes/auth.js';
 import { usersRoutes } from './routes/users.js';
 import { auditLogRoutes } from './routes/audit-log.js';
 import { reportsRoutes } from './routes/reports.js';
+import { clusterRoutes } from './routes/cluster.js';
 import { chartsRoutes } from './routes/charts.js';
 import { alertsBarRoutes } from './routes/alerts-bar.js';
 import { alertsBarNotificationsRoutes } from './routes/alerts-bar-notifications.js';
@@ -171,6 +172,7 @@ async function buildServer() {
       await api.register(calendarRoutes);
       await api.register(auditLogRoutes);
       await api.register(reportsRoutes);
+      await api.register(clusterRoutes);
       await api.register(chartsRoutes);
       await api.register(alertsBarRoutes);
       await api.register(alertsBarNotificationsRoutes);
