@@ -134,6 +134,34 @@ function fmtAge(ms?: number): string {
 const hasGeo = (p: { lat?: number | null; lng?: number | null }): boolean =>
   Number.isFinite(p.lat as number) && Number.isFinite(p.lng as number);
 
+// GeoIP resolves IPs to country centroids, so multiple nodes in one country
+// land on the exact same point and stack invisibly. Fan coincident points out
+// in a small ring so every pin is separately visible and clickable.
+type GeoPt = { id: string; lat: number | null; lng: number | null };
+function computeOffsets(pts: GeoPt[]): Map<string, { dLat: number; dLng: number }> {
+  const groups = new Map<string, string[]>();
+  for (const p of pts) {
+    if (!Number.isFinite(p.lat as number) || !Number.isFinite(p.lng as number)) continue;
+    const k = `${(p.lat as number).toFixed(1)},${(p.lng as number).toFixed(1)}`;
+    const arr = groups.get(k);
+    if (arr) arr.push(p.id);
+    else groups.set(k, [p.id]);
+  }
+  const off = new Map<string, { dLat: number; dLng: number }>();
+  const R = 1.8; // degrees — ring radius for coincident pins
+  for (const ids of groups.values()) {
+    if (ids.length <= 1) {
+      off.set(ids[0], { dLat: 0, dLng: 0 });
+      continue;
+    }
+    ids.forEach((id, i) => {
+      const a = (2 * Math.PI * i) / ids.length;
+      off.set(id, { dLat: R * Math.sin(a), dLng: R * Math.cos(a) });
+    });
+  }
+  return off;
+}
+
 // ── PREVIEW fallbacks — replaced by the live endpoint's inventory ────────────
 // ── No preview data — the map shows only real feed data from the endpoint.
 const FALLBACK_NODES: ClusterNode[] = [];
@@ -204,6 +232,8 @@ export function NetworkClusterPage() {
 
   const backendNode = displayNodes.find(n => n.role === 'backend');
   const masterNode = displayNodes.find(n => n.role === 'mt5_master');
+  const offsets = computeOffsets([...displayNodes, ...displayLps]);
+  const off = (id: string) => offsets.get(id) ?? { dLat: 0, dLng: 0 };
   const LINK_MT5 = '#e0a020'; // Backend ↔ MT5 Master
   const LINK_LP  = '#4ecdc4'; // Backend ↔ online LPs
   const zoomBtn: CSSProperties = {
@@ -258,8 +288,8 @@ export function NetworkClusterPage() {
           {/* Links (rendered under the pins) */}
           {backendNode && masterNode && hasGeo(backendNode) && hasGeo(masterNode) && (
             <Line
-              from={[backendNode.lng, backendNode.lat]}
-              to={[masterNode.lng, masterNode.lat]}
+              from={[(backendNode.lng as number) + off(backendNode.id).dLng, (backendNode.lat as number) + off(backendNode.id).dLat]}
+              to={[(masterNode.lng as number) + off(masterNode.id).dLng, (masterNode.lat as number) + off(masterNode.id).dLat]}
               stroke={LINK_MT5}
               strokeWidth={1.1}
               strokeLinecap="round"
@@ -272,8 +302,8 @@ export function NetworkClusterPage() {
               .map(lp => (
                 <Line
                   key={`link-${lp.id}`}
-                  from={[backendNode.lng, backendNode.lat]}
-                  to={[lp.lng, lp.lat]}
+                  from={[(backendNode.lng as number) + off(backendNode.id).dLng, (backendNode.lat as number) + off(backendNode.id).dLat]}
+                  to={[(lp.lng as number) + off(lp.id).dLng, (lp.lat as number) + off(lp.id).dLat]}
                   stroke={LINK_LP}
                   strokeWidth={1.1}
                   strokeLinecap="round"
@@ -285,10 +315,11 @@ export function NetworkClusterPage() {
           {displayNodes.filter(hasGeo).map(n => {
             const color = (NODE_STATUS[n.status] ?? NODE_STATUS.offline).color;
             const isSel = selected?.kind === 'node' && selected.id === n.id;
+            const o = off(n.id);
             return (
               <Marker
                 key={n.id}
-                coordinates={[n.lng, n.lat]}
+                coordinates={[(n.lng as number) + o.dLng, (n.lat as number) + o.dLat]}
                 onClick={() => setSelected({ kind: 'node', id: n.id })}
                 style={{ default: { cursor: 'pointer' }, hover: { cursor: 'pointer' }, pressed: { cursor: 'pointer' } }}
               >
@@ -304,10 +335,11 @@ export function NetworkClusterPage() {
           {displayLps.filter(hasGeo).map(lp => {
             const color = (LP_STATUS[lp.status] ?? LP_STATUS.offline).color;
             const isSel = selected?.kind === 'lp' && selected.id === lp.id;
+            const o = off(lp.id);
             return (
               <Marker
                 key={lp.id}
-                coordinates={[lp.lng, lp.lat]}
+                coordinates={[(lp.lng as number) + o.dLng, (lp.lat as number) + o.dLat]}
                 onClick={() => setSelected({ kind: 'lp', id: lp.id })}
                 style={{ default: { cursor: 'pointer' }, hover: { cursor: 'pointer' }, pressed: { cursor: 'pointer' } }}
               >
