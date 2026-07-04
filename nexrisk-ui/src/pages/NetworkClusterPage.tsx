@@ -37,14 +37,15 @@ type LpStatus = 'active' | 'connected' | 'offline';
 interface ClusterNode {
   id: string;
   role: NodeRole;
+  node_type?: string;
   label: string;
-  ip: string;
-  country: string;
-  country_code: string;
-  lat: number;
-  lng: number;
+  ip: string | null;
+  country: string | null;
+  country_code: string | null;
+  lat: number | null;
+  lng: number | null;
   status: NodeStatus;
-  metrics: { cpu_pct: number | null; ram_pct: number | null; disk_pct: number | null };
+  metrics: { cpu_pct: number | null; ram_pct: number | null; disk_pct: number | null } | null;
   users_connected: number | null;
   as_of?: string;
   age_ms?: number;
@@ -53,11 +54,11 @@ interface ClusterNode {
 interface LiquidityProvider {
   id: string;
   name: string;
-  ip: string; // FIX gateway host
-  country: string;
-  country_code: string;
-  lat: number;
-  lng: number;
+  ip: string | null; // FIX gateway host
+  country: string | null;
+  country_code: string | null;
+  lat: number | null;
+  lng: number | null;
   status: LpStatus;
   rtt_ms: number | null;
   last_activity_age_ms?: number;
@@ -130,6 +131,8 @@ function fmtAge(ms?: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
   return `${Math.round(ms / 60_000)}m ago`;
 }
+const hasGeo = (p: { lat?: number | null; lng?: number | null }): boolean =>
+  Number.isFinite(p.lat as number) && Number.isFinite(p.lng as number);
 
 // ── PREVIEW fallbacks — replaced by the live endpoint's inventory ────────────
 // ── No preview data — the map shows only real feed data from the endpoint.
@@ -253,7 +256,7 @@ export function NetworkClusterPage() {
           </Geographies>
 
           {/* Links (rendered under the pins) */}
-          {backendNode && masterNode && (
+          {backendNode && masterNode && hasGeo(backendNode) && hasGeo(masterNode) && (
             <Line
               from={[backendNode.lng, backendNode.lat]}
               to={[masterNode.lng, masterNode.lat]}
@@ -263,9 +266,9 @@ export function NetworkClusterPage() {
               className="cluster-pipe"
             />
           )}
-          {backendNode &&
+          {backendNode && hasGeo(backendNode) &&
             displayLps
-              .filter(l => l.status !== 'offline')
+              .filter(l => l.status !== 'offline' && hasGeo(l))
               .map(lp => (
                 <Line
                   key={`link-${lp.id}`}
@@ -279,8 +282,8 @@ export function NetworkClusterPage() {
               ))}
 
           {/* Nodes — circles */}
-          {displayNodes.map(n => {
-            const color = NODE_STATUS[n.status].color;
+          {displayNodes.filter(hasGeo).map(n => {
+            const color = (NODE_STATUS[n.status] ?? NODE_STATUS.offline).color;
             const isSel = selected?.kind === 'node' && selected.id === n.id;
             return (
               <Marker
@@ -298,8 +301,8 @@ export function NetworkClusterPage() {
           })}
 
           {/* Liquidity providers — diamonds */}
-          {displayLps.map(lp => {
-            const color = LP_STATUS[lp.status].color;
+          {displayLps.filter(hasGeo).map(lp => {
+            const color = (LP_STATUS[lp.status] ?? LP_STATUS.offline).color;
             const isSel = selected?.kind === 'lp' && selected.id === lp.id;
             return (
               <Marker
@@ -361,7 +364,9 @@ export function NetworkClusterPage() {
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 600, color: TEXT }}>{selNode.label}</div>
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{ROLE_LABEL[selNode.role]}</div>
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>
+                {ROLE_LABEL[selNode.role] ?? selNode.role}{selNode.node_type ? ` · ${selNode.node_type}` : ''}
+              </div>
             </div>
             <button onClick={() => setSelected(null)} style={{ color: MUTED, fontSize: 16, lineHeight: 1, padding: 2 }} title="Close">✕</button>
           </div>
@@ -371,14 +376,20 @@ export function NetworkClusterPage() {
             {selNode.age_ms != null && <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto', fontFamily: MONO }}>{fmtAge(selNode.age_ms)}</span>}
           </div>
           <div style={{ height: 1, backgroundColor: LAND_LINE, margin: '12px 0' }} />
-          <Row label="Country" value={`${flagEmoji(selNode.country_code)} ${selNode.country}`} />
-          <Row label="IP address" value={selNode.ip} mono />
-          <MetricBar label="CPU" value={selNode.metrics.cpu_pct} />
-          <MetricBar label="RAM" value={selNode.metrics.ram_pct} />
-          <MetricBar label="Disk" value={selNode.metrics.disk_pct} />
-          <div style={{ marginTop: 12 }}>
-            <Row label="Users" value={selNode.users_connected == null ? '—' : String(selNode.users_connected)} mono color={selNode.users_connected == null ? MUTED : TEAL} />
-          </div>
+          <Row label="Country" value={`${flagEmoji(selNode.country_code ?? undefined)} ${selNode.country ?? '—'}`} />
+          <Row label="IP address" value={selNode.ip ?? '—'} mono />
+          {selNode.metrics ? (
+            <>
+              <MetricBar label="CPU" value={selNode.metrics.cpu_pct} />
+              <MetricBar label="RAM" value={selNode.metrics.ram_pct} />
+              <MetricBar label="Disk" value={selNode.metrics.disk_pct} />
+              <div style={{ marginTop: 12 }}>
+                <Row label="Users" value={selNode.users_connected == null ? '—' : String(selNode.users_connected)} mono color={selNode.users_connected == null ? MUTED : TEAL} />
+              </div>
+            </>
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>External node — host metrics not monitored.</div>
+          )}
         </div>
       )}
 
@@ -398,8 +409,8 @@ export function NetworkClusterPage() {
             {selLp.last_activity_age_ms != null && <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto', fontFamily: MONO }}>{fmtAge(selLp.last_activity_age_ms)}</span>}
           </div>
           <div style={{ height: 1, backgroundColor: LAND_LINE, margin: '12px 0' }} />
-          <Row label="Country" value={`${flagEmoji(selLp.country_code)} ${selLp.country}`} />
-          <Row label="FIX host" value={selLp.ip} mono />
+          <Row label="Country" value={`${flagEmoji(selLp.country_code ?? undefined)} ${selLp.country ?? '—'}`} />
+          <Row label="FIX host" value={selLp.ip ?? '—'} mono />
           <Row label="RTT" value={selLp.rtt_ms == null ? '—' : `${selLp.rtt_ms} ms`} mono color={selLp.rtt_ms == null ? MUTED : TEXT} />
           {selLp.session && <Row label="Session" value={selLp.session} mono />}
         </div>
