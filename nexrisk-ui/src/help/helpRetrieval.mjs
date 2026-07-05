@@ -2,18 +2,12 @@
 // help/helpRetrieval.mjs
 // Server-side retrieval + grounding gate for the Help assistant.
 //
-// The assistant may only answer from REVIEWED corpus articles. This module
-// scores the corpus against a question (biased toward the page the user is on),
-// and decides whether there's enough grounding to answer at all. If not, the
-// caller must refuse and route the user to Contact Technical Support — the model
-// is never asked to free-generate.
-//
-// Pure, dependency-free, and framework-agnostic so the Fastify server can import
-// it directly. In the BFF (CommonJS) use `__dirname`; here we resolve from
-// import.meta.url.
+// Reads ONE committed file, help-bundle.json (manifest + article bodies),
+// located next to this module. No content/ scan, no manifest.json dependency,
+// no cwd dependency — so it works wherever the code is deployed.
 // ============================================================
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const HERE = new URL('.', import.meta.url).pathname;
@@ -41,20 +35,23 @@ function tokenize(s) {
     .split(/[\s]+/).filter((t) => t.length >= 2 && !STOP.has(t)))];
 }
 
+let BUNDLE = null;
+function loadBundle() {
+  if (!BUNDLE) BUNDLE = JSON.parse(readFileSync(join(HERE, 'help-bundle.json'), 'utf8'));
+  return BUNDLE;
+}
+
 let CORPUS = null;
 function loadCorpus() {
   if (CORPUS) return CORPUS;
-  const manifest = JSON.parse(readFileSync(join(HERE, 'manifest.json'), 'utf8'));
-  const reviewed = new Set(manifest.corpus);
-  CORPUS = manifest.articles.filter((a) => reviewed.has(a.id)).map((a) => {
-    const file = join(HERE, 'content', a.domain, a.id + '.md');
-    const raw = existsSync(file) ? readFileSync(file, 'utf8') : '';
-    const body = raw.replace(/^---[\s\S]*?---\n/, '');
-    const anchors = [...body.matchAll(/\{#([a-z0-9-]+)\}/g)].map((m) => m[1]);
+  const bundle = loadBundle();
+  const reviewed = new Set(bundle.corpus);
+  CORPUS = bundle.articles.filter((a) => reviewed.has(a.id)).map((a) => {
+    const body = a.body || '';
     return {
       id: a.id, title: a.title, type: a.type, domain: a.domain,
       module: a.module, route: a.route, tags: a.tags || [], related: a.related || [],
-      body, anchors,
+      body, anchors: a.anchors || [],
       hay: (a.title + ' ' + (a.tags || []).join(' ') + ' ' + body).toLowerCase(),
       titleTokens: new Set(tokenize(a.title + ' ' + (a.tags || []).join(' '))),
     };
@@ -94,7 +91,6 @@ export function retrieve(question, route) {
   const top = scored[0];
   if (!top || top.s < MIN_SCORE) return { grounded: false, reason: 'no-match', articles: [], context: '' };
 
-  // pull top-k above half the leader's score; pad with related for coherence
   const picked = scored.filter((x) => x.s >= Math.max(MIN_SCORE, top.s * 0.4)).slice(0, TOP_K);
   const articles = picked.map(({ a, s }) => ({ id: a.id, title: a.title, route: a.route, score: Math.round(s), anchors: a.anchors }));
   const context = picked.map(({ a }) =>
@@ -105,11 +101,11 @@ export function retrieve(question, route) {
 
 /** Browse support: reviewed articles' frontmatter for the Help page index. */
 export function getManifest() {
-  const manifest = JSON.parse(readFileSync(join(HERE, 'manifest.json'), 'utf8'));
-  const reviewed = new Set(manifest.corpus);
+  const bundle = loadBundle();
+  const reviewed = new Set(bundle.corpus);
   return {
-    version: manifest.version,
-    articles: manifest.articles.filter((a) => reviewed.has(a.id)).map((a) => ({
+    version: bundle.version,
+    articles: bundle.articles.filter((a) => reviewed.has(a.id)).map((a) => ({
       id: a.id, title: a.title, type: a.type, domain: a.domain,
       module: a.module, route: a.route, tags: a.tags || [], related: a.related || [],
     })),
