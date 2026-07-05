@@ -13,6 +13,7 @@ import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { CockpitHelpPage } from './help/CockpitHelpPage';
+import HelpPage from './help/ui/HelpPage';
 
 import { Layout } from '@/components/layout';
 import {
@@ -129,6 +130,9 @@ function App() {
               {/* ─── Cockpit─────────────────────── */}
               <Route path="/cockpit"      element={<CockpitPage />} />
               <Route path="/cockpit/help" element={<CockpitHelpPage />} />
+
+              {/* ─── Help ─────────────────────────── */}
+              <Route path="/help/manual"  element={<HelpPage />} />
 
 
               {/* ─── Legacy routes (redirects) ────────── */}
