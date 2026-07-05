@@ -38,3 +38,6 @@ build/
 *.log
 
 .env*
+
+nexrisk-ui/src/help/manifest.json
+nexrisk-ui/src/help/coverage.json
