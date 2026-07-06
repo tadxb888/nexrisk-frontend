@@ -15,8 +15,16 @@ export default function HelpPage() {
   const [active, setActive] = useState<HelpArticle | null>(null);
   const [input, setInput] = useState('');
   const [inputH, setInputH] = useState(120);
+  const [openDomains, setOpenDomains] = useState<Set<string>>(new Set(DOMAIN_ORDER));
   const { messages, loading, ask } = useHelpAsk(undefined); // no page context on the manual itself
   const threadRef = useRef<HTMLDivElement>(null);
+
+  const toggleDomain = (d: string) =>
+    setOpenDomains((prev) => {
+      const next = new Set(prev);
+      next.has(d) ? next.delete(d) : next.add(d);
+      return next;
+    });
 
   useEffect(() => { helpClient.getManifest().then((m) => setManifest(m.articles)).catch(() => {}); }, []);
   useEffect(() => { threadRef.current?.scrollTo(0, threadRef.current.scrollHeight); }, [messages, loading]);
@@ -54,31 +62,69 @@ export default function HelpPage() {
   const send = () => { if (input.trim() && !loading) { ask(input); setInput(''); } };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '224px 1fr', height: '100%', background: T.pageBg, color: T.text, fontFamily: T.ui }}>
-      {/* corpus tree */}
-      <aside style={{ borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <div style={{ padding: 12, borderBottom: `1px solid ${T.borderSoft}` }}>
-          <div style={{ fontSize: 12, color: T.textMute, letterSpacing: 0.4, textTransform: 'uppercase', marginBottom: 8 }}>Operational Manual</div>
+    <div style={{ display: 'grid', gridTemplateColumns: '307px 1fr', height: '100%', background: T.pageBg, color: T.text, fontFamily: T.ui }}>
+      {/* corpus tree — matches the app Sidebar tokens */}
+      <aside style={{ background: T.railBg, borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ padding: '12px 12px 10px', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 13, letterSpacing: '0.10em', textTransform: 'uppercase', color: T.owner, fontWeight: 500, marginBottom: 10 }}>
+            Operational Manual
+          </div>
           <input
-            value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter articles"
-            style={{ width: '100%', boxSizing: 'border-box', background: T.field, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 12, padding: '6px 8px', outline: 'none' }}
+            value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter articles…"
+            style={{ width: '100%', boxSizing: 'border-box', background: T.hoverBg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 15, padding: '8px 10px', outline: 'none' }}
           />
         </div>
-        <div style={{ overflowY: 'auto', padding: '6px 0', flex: 1 }}>
-          {DOMAIN_ORDER.filter((d) => grouped[d]?.length).map((d) => (
-            <div key={d} style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 11, color: T.textMute, textTransform: 'uppercase', letterSpacing: 0.4, padding: '6px 12px 2px' }}>{DOMAIN_LABEL[d] || d}</div>
-              {grouped[d].map((a) => (
-                <button key={a.id} onClick={() => openArticle(a.id)} title={a.title}
-                  style={{ display: 'block', width: '100%', textAlign: 'left', background: active?.id === a.id ? T.field : 'transparent',
-                    border: 'none', borderLeft: `2px solid ${active?.id === a.id ? T.accent : 'transparent'}`,
-                    color: active?.id === a.id ? T.text : T.textDim, fontSize: 12.5, padding: '5px 12px', cursor: 'pointer' }}>
-                  {a.title}
+        <nav style={{ overflowY: 'auto', padding: '4px 0 12px', flex: 1 }}>
+          {DOMAIN_ORDER.filter((d) => grouped[d]?.length).map((d) => {
+            const open = openDomains.has(d) || !!filter;   // filtering forces groups open
+            return (
+              <div key={d} style={{ borderBottom: `1px solid ${T.border}` }}>
+                <button
+                  onClick={() => toggleDomain(d)}
+                  className="w-full flex items-center gap-2 transition-colors"
+                  style={{ padding: '9px 12px', fontSize: 16, fontWeight: 600, color: open ? T.text : '#cfcfcf', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  <span style={{ display: 'inline-block', width: 12, color: T.textDim, fontSize: 10, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s' }}>▶</span>
+                  <span style={{ flex: 1 }}>{DOMAIN_LABEL[d] || d}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMute }}>{grouped[d].length}</span>
                 </button>
-              ))}
-            </div>
-          ))}
-        </div>
+                {open && (
+                  <div style={{ paddingBottom: 6, marginLeft: 18, borderLeft: `1px solid ${T.border}` }}>
+                    {grouped[d].map((a) => {
+                      const isActive = active?.id === a.id;
+                      const navLabel = a.title.split('—')[0].trim() || a.title;
+                      return (
+                        <button
+                          key={a.id}
+                          onClick={() => openArticle(a.id)}
+                          title={a.title}
+                          onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
+                          onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = T.textLeaf; }}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                            background: isActive ? T.hoverBg : 'transparent',
+                            border: 'none',
+                            borderLeft: `2px solid ${isActive ? T.accent : 'transparent'}`,
+                            marginLeft: -1,
+                            color: isActive ? T.accent : T.textLeaf,
+                            fontSize: 15, lineHeight: 1.4,
+                            padding: '7px 12px 7px 12px', cursor: 'pointer',
+                          }}
+                        >
+                          <svg width="13" height="14" viewBox="0 0 13 14" fill="none" style={{ flexShrink: 0, opacity: isActive ? 1 : 0.75 }}>
+                            <path d="M2 1.5h5L11 5v7.5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" stroke={isActive ? T.accent : T.textDim} strokeWidth="1" fill="none"/>
+                            <path d="M7 1.5V5h4" stroke={isActive ? T.accent : T.textDim} strokeWidth="1" fill="none"/>
+                          </svg>
+                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
       </aside>
 
       {/* main */}
@@ -88,7 +134,6 @@ export default function HelpPage() {
             <article>
               <button onClick={() => setActive(null)} style={{ background: 'transparent', border: 'none', color: T.accent, fontSize: 12, cursor: 'pointer', padding: 0, marginBottom: 10 }}>← Back to chat</button>
               <h2 style={{ fontSize: 18, color: T.text, margin: '0 0 4px' }}>{active.title}</h2>
-              <div style={{ fontSize: 11, color: T.textMute, fontFamily: T.mono, marginBottom: 12 }}>{active.id}</div>
               <div>{active.body.split('\n').map((l, n) => {
                 const anc = /\{#([a-z0-9-]+)\}/.exec(l);
                 return <div key={n} id={anc ? `help-${anc[1]}` : undefined}><Markdown text={l} onCite={openArticle} /></div>;

@@ -9,6 +9,8 @@ import { T } from './helpTheme';
 
 type Props = { text: string; onCite?: (id: string, anchor?: string) => void };
 
+const CITE = /\[\[([a-z0-9-]+)(?:#([a-z0-9-]+))?\]\]/g;
+
 // Inline: split on **bold**, `code`, and [[cite]] while preserving order.
 function inline(text: string, onCite?: Props['onCite'], keyBase = 'i'): React.ReactNode[] {
   const out: React.ReactNode[] = [];
@@ -60,7 +62,7 @@ export default function Markdown({ text, onCite }: Props) {
     if (h) {
       const level = h[1].length;
       const txt = h[2].replace(/\s*\{#[a-z0-9-]+\}\s*$/, '');
-      const size = level === 2 ? 15 : level === 3 ? 13 : 12;
+      const size = level === 2 ? 19 : level === 3 ? 16 : 14;
       blocks.push(
         <div key={key++} style={{ color: T.text, fontWeight: 600, fontSize: size, margin: '14px 0 6px' }}>
           {inline(txt, onCite, `h${key}`)}
@@ -74,7 +76,7 @@ export default function Markdown({ text, onCite }: Props) {
       const buf: string[] = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, '')); i++; }
       blocks.push(
-        <div key={key++} style={{ borderLeft: `2px solid ${T.accentDim}`, padding: '4px 0 4px 10px', margin: '8px 0', color: T.textDim, fontSize: 13 }}>
+        <div key={key++} style={{ borderLeft: `2px solid ${T.accentDim}`, padding: '4px 0 4px 10px', margin: '8px 0', color: T.textDim, fontSize: 13.5 }}>
           {inline(buf.join(' '), onCite, `q${key}`)}
         </div>,
       );
@@ -86,7 +88,7 @@ export default function Markdown({ text, onCite }: Props) {
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*]\s+/, '')); i++; }
       blocks.push(
-        <ul key={key++} style={{ margin: '6px 0', paddingLeft: 18, color: T.text, fontSize: 13 }}>
+        <ul key={key++} style={{ margin: '8px 0', paddingLeft: 22, color: T.textBody, fontSize: 16 }}>
           {items.map((it, n) => (
             <li key={n} style={{ margin: '3px 0', lineHeight: 1.55 }}>{inline(it, onCite, `l${key}_${n}`)}</li>
           ))}
@@ -99,7 +101,7 @@ export default function Markdown({ text, onCite }: Props) {
     const buf: string[] = [];
     while (i < lines.length && lines[i].trim() && !/^(#{2,4}\s|>\s?|\s*[-*]\s)/.test(lines[i])) { buf.push(lines[i]); i++; }
     blocks.push(
-      <p key={key++} style={{ margin: '6px 0', color: T.text, fontSize: 13, lineHeight: 1.6 }}>
+      <p key={key++} style={{ margin: '8px 0', color: T.textBody, fontSize: 16, lineHeight: 1.7 }}>
         {inline(buf.join(' '), onCite, `p${key}`)}
       </p>,
     );
