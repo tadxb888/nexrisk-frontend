@@ -2,12 +2,18 @@
 // help/helpRetrieval.mjs
 // Server-side retrieval + grounding gate for the Help assistant.
 //
-// Reads ONE committed file, help-bundle.json (manifest + article bodies),
-// located next to this module. No content/ scan, no manifest.json dependency,
-// no cwd dependency — so it works wherever the code is deployed.
+// The assistant may only answer from REVIEWED corpus articles. This module
+// scores the corpus against a question (biased toward the page the user is on),
+// and decides whether there's enough grounding to answer at all. If not, the
+// caller must refuse and route the user to Contact Technical Support — the model
+// is never asked to free-generate.
+//
+// Pure, dependency-free, and framework-agnostic so the Fastify server can import
+// it directly. In the BFF (CommonJS) use `__dirname`; here we resolve from
+// import.meta.url.
 // ============================================================
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const HERE = new URL('.', import.meta.url).pathname;
@@ -91,6 +97,7 @@ export function retrieve(question, route) {
   const top = scored[0];
   if (!top || top.s < MIN_SCORE) return { grounded: false, reason: 'no-match', articles: [], context: '' };
 
+  // pull top-k above half the leader's score; pad with related for coherence
   const picked = scored.filter((x) => x.s >= Math.max(MIN_SCORE, top.s * 0.4)).slice(0, TOP_K);
   const articles = picked.map(({ a, s }) => ({ id: a.id, title: a.title, route: a.route, score: Math.round(s), anchors: a.anchors }));
   const context = picked.map(({ a }) =>
@@ -108,6 +115,7 @@ export function getManifest() {
     articles: bundle.articles.filter((a) => reviewed.has(a.id)).map((a) => ({
       id: a.id, title: a.title, type: a.type, domain: a.domain,
       module: a.module, route: a.route, tags: a.tags || [], related: a.related || [],
+      chapters: a.chapters || [],
     })),
   };
 }

@@ -13,11 +13,30 @@ export default function HelpPage() {
   const [manifest, setManifest] = useState<HelpArticleMeta[]>([]);
   const [filter, setFilter] = useState('');
   const [active, setActive] = useState<HelpArticle | null>(null);
+  const [activeChapter, setActiveChapter] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [inputH, setInputH] = useState(120);
   const [openDomains, setOpenDomains] = useState<Set<string>>(new Set(DOMAIN_ORDER));
+  const [expandedLeaves, setExpandedLeaves] = useState<Set<string>>(new Set());
   const { messages, loading, ask } = useHelpAsk(undefined); // no page context on the manual itself
   const threadRef = useRef<HTMLDivElement>(null);
+
+  const toggleLeaf = (id: string) =>
+    setExpandedLeaves((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  // open an article and scroll to a specific chapter once it has rendered
+  const openArticleAt = useCallback(async (id: string, chapterId: string) => {
+    try {
+      const a = await helpClient.getArticle(id);
+      setActive(a);
+      setActiveChapter(chapterId);
+      setTimeout(() => document.getElementById(chapterId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    } catch { /* ignore */ }
+  }, []);
 
   const toggleDomain = (d: string) =>
     setOpenDomains((prev) => {
@@ -33,8 +52,10 @@ export default function HelpPage() {
     try {
       const a = await helpClient.getArticle(id);
       setActive(a);
+      setActiveChapter(null);
       requestAnimationFrame(() => {
         if (anchor) document.getElementById(`help-${anchor}`)?.scrollIntoView({ block: 'start' });
+        else threadRef.current?.scrollTo(0, 0);
       });
     } catch { /* ignore */ }
   }, []);
@@ -114,30 +135,67 @@ export default function HelpPage() {
                     {grouped[d].map((a) => {
                       const isActive = active?.id === a.id;
                       const navLabel = a.title.split('—')[0].trim() || a.title;
+                      const chapters = a.chapters || [];
+                      const hasChapters = chapters.length >= 3;   // only long, manual-backed pages expand
+                      const leafOpen = expandedLeaves.has(a.id);
                       return (
-                        <button
-                          key={a.id}
-                          onClick={() => openArticle(a.id)}
-                          title={a.title}
-                          onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
-                          onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = T.textLeaf; }}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
-                            background: isActive ? T.hoverBg : 'transparent',
-                            border: 'none',
-                            borderLeft: `2px solid ${isActive ? T.accent : 'transparent'}`,
-                            marginLeft: -1,
-                            color: isActive ? T.accent : T.textLeaf,
-                            fontSize: 15, lineHeight: 1.4,
-                            padding: '7px 12px 7px 12px', cursor: 'pointer',
-                          }}
-                        >
-                          <svg width="13" height="14" viewBox="0 0 13 14" fill="none" style={{ flexShrink: 0, opacity: isActive ? 1 : 0.75 }}>
-                            <path d="M2 1.5h5L11 5v7.5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" stroke={isActive ? T.accent : T.textDim} strokeWidth="1" fill="none"/>
-                            <path d="M7 1.5V5h4" stroke={isActive ? T.accent : T.textDim} strokeWidth="1" fill="none"/>
-                          </svg>
-                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel}</span>
-                        </button>
+                        <div key={a.id}>
+                          <div style={{ display: 'flex', alignItems: 'center', marginLeft: -1, borderLeft: `2px solid ${isActive ? T.accent : 'transparent'}`, background: isActive ? T.hoverBg : 'transparent' }}>
+                            {hasChapters ? (
+                              <button
+                                onClick={() => toggleLeaf(a.id)}
+                                title={leafOpen ? 'Collapse chapters' : 'Expand chapters'}
+                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.textDim, fontSize: 9, width: 16, padding: '7px 0 7px 6px', flexShrink: 0, display: 'flex', alignItems: 'center' }}
+                              >
+                                <span style={{ display: 'inline-block', transform: leafOpen ? 'rotate(90deg)' : 'none', transition: 'transform .12s' }}>▶</span>
+                              </button>
+                            ) : <span style={{ width: 16, flexShrink: 0 }} />}
+                            <button
+                              onClick={() => openArticle(a.id)}
+                              title={a.title}
+                              onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
+                              onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = T.textLeaf; }}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, textAlign: 'left',
+                                background: 'transparent', border: 'none',
+                                color: isActive ? T.accent : T.textLeaf,
+                                fontSize: 15, lineHeight: 1.4, padding: '7px 12px 7px 4px', cursor: 'pointer',
+                              }}
+                            >
+                              <svg width="13" height="14" viewBox="0 0 13 14" fill="none" style={{ flexShrink: 0, opacity: isActive ? 1 : 0.75 }}>
+                                <path d="M2 1.5h5L11 5v7.5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" stroke={isActive ? T.accent : T.textDim} strokeWidth="1" fill="none"/>
+                                <path d="M7 1.5V5h4" stroke={isActive ? T.accent : T.textDim} strokeWidth="1" fill="none"/>
+                              </svg>
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{navLabel}</span>
+                            </button>
+                          </div>
+                          {hasChapters && leafOpen && (
+                            <div style={{ marginLeft: 16, borderLeft: `1px solid ${T.border}` }}>
+                              {chapters.map((c) => {
+                                const chActive = isActive && activeChapter === c.id;
+                                return (
+                                  <button
+                                    key={c.id}
+                                    onClick={() => openArticleAt(a.id, c.id)}
+                                    title={c.title}
+                                    onMouseEnter={(e) => { if (!chActive) (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
+                                    onMouseLeave={(e) => { if (!chActive) (e.currentTarget as HTMLButtonElement).style.color = T.textDim; }}
+                                    style={{
+                                      display: 'block', width: '100%', textAlign: 'left', marginLeft: -1,
+                                      background: chActive ? T.hoverBg : 'transparent',
+                                      border: 'none', borderLeft: `2px solid ${chActive ? T.accent : 'transparent'}`,
+                                      color: chActive ? T.accent : T.textDim,
+                                      fontSize: 13.5, lineHeight: 1.35, padding: '5px 10px 5px 18px', cursor: 'pointer',
+                                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                    }}
+                                  >
+                                    {c.title.replace(/^\d+\.\s*/, '')}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -153,7 +211,19 @@ export default function HelpPage() {
         <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '18px 22px', minHeight: 0 }}>
           {active ? (
             <article>
-              <button onClick={() => setActive(null)} style={{ background: 'transparent', border: 'none', color: T.accent, fontSize: 12, cursor: 'pointer', padding: 0, marginBottom: 10 }}>← Back to chat</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.textDim, marginBottom: 10 }}>
+                <button onClick={() => { setActive(null); setActiveChapter(null); }} style={{ background: 'transparent', border: 'none', color: T.accent, fontSize: 12, cursor: 'pointer', padding: 0 }}>← Back to chat</button>
+                <span style={{ color: T.textMute }}>·</span>
+                <span>{DOMAIN_LABEL[active.domain] || active.domain}</span>
+                <span style={{ color: T.textMute }}>›</span>
+                <button
+                  onClick={() => { setActiveChapter(null); threadRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  title="Back to the top of this page"
+                  style={{ background: 'transparent', border: 'none', color: activeChapter ? T.accent : T.textDim, fontSize: 12, cursor: activeChapter ? 'pointer' : 'default', padding: 0 }}
+                >
+                  {active.title.split('—')[0].trim()}
+                </button>
+              </div>
               <h2 style={{ fontSize: 20, color: T.text, margin: '0 0 12px' }}>{active.title}</h2>
               {(() => {
                 const slug = (t: string) => t.toLowerCase().replace(/\{#[a-z0-9-]+\}/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
