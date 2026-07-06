@@ -16,6 +16,9 @@ const STATUS_TINT: Record<string, string> = {
   red: '#ff5c5c', grey: '#9a9a9a', gray: '#9a9a9a', orange: '#f5802c',
 };
 
+const slug = (t: string) =>
+  t.toLowerCase().replace(/\{#[a-z0-9-]+\}/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
 function inline(text: string, onCite?: Props['onCite'], keyBase = 'i'): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const rx = /(\*\*[^*]+\*\*|`[^`]+`|\[\[[a-z0-9-]+(?:#[a-z0-9-]+)?\]\])/g;
@@ -49,7 +52,7 @@ function cellContent(txt: string, onCite: Props['onCite'], kb: string): React.Re
   return inline(txt, onCite, kb);
 }
 
-export default function Markdown({ text, onCite }: Props) {
+function MarkdownImpl({ text, onCite }: Props) {
   const lines = text.replace(/\r/g, '').split('\n');
   const blocks: React.ReactNode[] = [];
   let i = 0, key = 0;
@@ -99,22 +102,24 @@ export default function Markdown({ text, onCite }: Props) {
     const h = /^(#{2,4})\s+(.*)$/.exec(line);
     if (h) {
       const level = h[1].length;
+      const anchorM = /\{#([a-z0-9-]+)\}/.exec(h[2]);
       const txt = h[2].replace(/\s*\{#[a-z0-9-]+\}\s*$/, '');
+      const hid = `help-${anchorM ? anchorM[1] : slug(txt)}`;
       if (level === 2) {
         blocks.push(
-          <div key={key++} style={{ color: T.text, fontWeight: 700, fontSize: 19, margin: '26px 0 10px', paddingBottom: 7, borderBottom: `1px solid ${T.border}` }}>
+          <div key={key++} id={hid} style={{ color: T.text, fontWeight: 700, fontSize: 19, margin: '26px 0 10px', paddingBottom: 7, borderBottom: `1px solid ${T.border}`, scrollMarginTop: 12 }}>
             {inline(txt, onCite, `h${key}`)}
           </div>,
         );
       } else if (level === 3) {
         blocks.push(
-          <div key={key++} style={{ color: T.text, fontWeight: 600, fontSize: 16, margin: '18px 0 6px' }}>
+          <div key={key++} id={hid} style={{ color: T.text, fontWeight: 600, fontSize: 16, margin: '18px 0 6px', scrollMarginTop: 12 }}>
             {inline(txt, onCite, `h${key}`)}
           </div>,
         );
       } else {
         blocks.push(
-          <div key={key++} style={{ color: T.accent, fontWeight: 600, fontSize: 14, letterSpacing: 0.2, margin: '14px 0 4px' }}>
+          <div key={key++} id={hid} style={{ color: T.accent, fontWeight: 600, fontSize: 14, letterSpacing: 0.2, margin: '14px 0 4px', scrollMarginTop: 12 }}>
             {inline(txt, onCite, `h${key}`)}
           </div>,
         );
@@ -160,3 +165,5 @@ export default function Markdown({ text, onCite }: Props) {
 
   return <div>{blocks}</div>;
 }
+
+export default React.memo(MarkdownImpl);

@@ -3,7 +3,7 @@
 // Right: a conversation area (grounded, cited answers) or a selected article,
 // a draggable divider, the ask box, and the AI disclaimer.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { T, DOMAIN_LABEL, DOMAIN_ORDER } from './helpTheme';
 import { helpClient, HelpArticle, HelpArticleMeta } from './helpClient';
 import { useHelpAsk } from './useHelpAsk';
@@ -29,7 +29,7 @@ export default function HelpPage() {
   useEffect(() => { helpClient.getManifest().then((m) => setManifest(m.articles)).catch(() => {}); }, []);
   useEffect(() => { threadRef.current?.scrollTo(0, threadRef.current.scrollHeight); }, [messages, loading]);
 
-  const openArticle = async (id: string, anchor?: string) => {
+  const openArticle = useCallback(async (id: string, anchor?: string) => {
     try {
       const a = await helpClient.getArticle(id);
       setActive(a);
@@ -37,7 +37,7 @@ export default function HelpPage() {
         if (anchor) document.getElementById(`help-${anchor}`)?.scrollIntoView({ block: 'start' });
       });
     } catch { /* ignore */ }
-  };
+  }, []);
 
   const grouped = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -154,11 +154,33 @@ export default function HelpPage() {
           {active ? (
             <article>
               <button onClick={() => setActive(null)} style={{ background: 'transparent', border: 'none', color: T.accent, fontSize: 12, cursor: 'pointer', padding: 0, marginBottom: 10 }}>← Back to chat</button>
-              <h2 style={{ fontSize: 18, color: T.text, margin: '0 0 4px' }}>{active.title}</h2>
-              <div>{active.body.split('\n').map((l, n) => {
-                const anc = /\{#([a-z0-9-]+)\}/.exec(l);
-                return <div key={n} id={anc ? `help-${anc[1]}` : undefined}><Markdown text={l} onCite={openArticle} /></div>;
-              })}</div>
+              <h2 style={{ fontSize: 20, color: T.text, margin: '0 0 12px' }}>{active.title}</h2>
+              {(() => {
+                const slug = (t: string) => t.toLowerCase().replace(/\{#[a-z0-9-]+\}/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                const chapters = active.body.split('\n').filter((l) => /^##\s/.test(l)).map((l) => {
+                  const t = l.replace(/^##\s+/, '').replace(/\s*\{#[a-z0-9-]+\}\s*$/, '');
+                  return { t, id: `help-${slug(t)}` };
+                });
+                if (chapters.length < 3) return null;   // TOC only for long, chaptered articles
+                return (
+                  <nav style={{ background: T.railBg, border: `1px solid ${T.border}`, borderRadius: 8, padding: '12px 14px', margin: '0 0 20px' }}>
+                    <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: T.owner, fontWeight: 600, marginBottom: 8 }}>Contents</div>
+                    <ol style={{ margin: 0, paddingLeft: 18, color: T.textBody, fontSize: 14, lineHeight: 1.9 }}>
+                      {chapters.map((c) => (
+                        <li key={c.id}>
+                          <button
+                            onClick={() => document.getElementById(c.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                            style={{ background: 'transparent', border: 'none', color: T.accent, cursor: 'pointer', padding: 0, fontSize: 14, textAlign: 'left' }}
+                          >
+                            {c.t.replace(/^\d+\.\s*/, '')}
+                          </button>
+                        </li>
+                      ))}
+                    </ol>
+                  </nav>
+                );
+              })()}
+              <Markdown text={active.body} onCite={openArticle} />
             </article>
           ) : messages.length === 0 ? (
             <div style={{ color: T.textMute, fontSize: 13, maxWidth: 520, marginTop: 40 }}>
