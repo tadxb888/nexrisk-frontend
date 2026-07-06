@@ -1,6 +1,6 @@
 ---
 id: task-coverage-dom
-title: "Coverage Book & DOM Trader — manual hedging"
+title: "Coverage Book — DOM trading & manual hedging"
 type: task
 domain: books
 module: coverage

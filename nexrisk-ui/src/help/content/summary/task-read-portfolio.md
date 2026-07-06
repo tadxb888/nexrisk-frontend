@@ -1,6 +1,6 @@
 ---
 id: task-read-portfolio
-title: "Reading the Portfolio table"
+title: "Portfolio — reading the table"
 type: task
 domain: summary
 module: portfolio

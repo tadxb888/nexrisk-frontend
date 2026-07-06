@@ -44,6 +44,27 @@ export default function HelpPage() {
     const list = f ? manifest.filter((a) => (a.title + ' ' + a.tags.join(' ')).toLowerCase().includes(f)) : manifest;
     const byDomain: Record<string, HelpArticleMeta[]> = {};
     for (const a of list) (byDomain[a.domain] ||= []).push(a);
+
+    // When browsing (no filter), show one row per page: many pages carry a deep
+    // task guide plus older reference fragments that collapse to the same page
+    // name. Prefer the task guide, else the non-fragment reference. Fragments stay
+    // in the corpus (the assistant can still cite them) — they're just not listed
+    // twice in the tree. When filtering, show every match so search hides nothing.
+    if (!f) {
+      const FRAG = /-(controls|states|fields|analytics|form|labels|panels|columns|filters|config|nodes|results|rules)$/;
+      const shortLabel = (t: string) => t.split('—')[0].trim() || t;
+      for (const d of Object.keys(byDomain)) {
+        // 1) hide explicit page-fragments (reference stubs superseded by the page
+        //    guide); they remain in the corpus for the assistant to cite.
+        const kept = byDomain[d].filter((a) => !(a.type === 'reference' && FRAG.test(a.id)));
+        // 2) collapse anything still sharing a page name to one primary row.
+        const groups: Record<string, HelpArticleMeta[]> = {};
+        for (const a of kept) (groups[shortLabel(a.title)] ||= []).push(a);
+        byDomain[d] = Object.values(groups).map((g) =>
+          g.find((a) => a.type === 'task') || g.find((a) => a.type === 'reference') || g[0],
+        );
+      }
+    }
     return byDomain;
   }, [manifest, filter]);
 

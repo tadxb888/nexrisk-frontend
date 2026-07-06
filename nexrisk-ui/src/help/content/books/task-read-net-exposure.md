@@ -1,6 +1,6 @@
 ---
 id: task-read-net-exposure
-title: "Reading the Net Exposure page"
+title: "Net Exposure — reading the page"
 type: task
 domain: books
 module: net_exposure

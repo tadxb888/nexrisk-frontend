@@ -1,6 +1,6 @@
 ---
 id: task-read-bbook
-title: "Reading the B-Book page"
+title: "B-Book — reading the page"
 type: task
 domain: books
 module: bbook

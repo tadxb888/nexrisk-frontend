@@ -1,6 +1,6 @@
 ---
 id: task-configure-clustering
-title: "Configure clustering to spot traders forming a cluster"
+title: "Clustering — configuring detection"
 type: task
 domain: intel
 module: archetype
