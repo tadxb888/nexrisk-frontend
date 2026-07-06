@@ -25,13 +25,13 @@ async function j<Ttype>(res: Response): Promise<Ttype> {
 
 export const helpClient = {
   getManifest: (): Promise<HelpManifest> =>
-    fetch('/api/help/manifest', { credentials: 'include' }).then(j),
+    fetch('/api/v1/help/manifest', { credentials: 'include' }).then(j),
 
   getArticle: (id: string): Promise<HelpArticle> =>
-    fetch(`/api/help/article/${encodeURIComponent(id)}`, { credentials: 'include' }).then(j),
+    fetch(`/api/v1/help/article/${encodeURIComponent(id)}`, { credentials: 'include' }).then(j),
 
   ask: (question: string, route?: string): Promise<HelpAnswer> =>
-    fetch('/api/help/ask', {
+    fetch('/api/v1/help/ask', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
