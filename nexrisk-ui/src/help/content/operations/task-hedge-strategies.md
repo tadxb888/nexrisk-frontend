@@ -2,10 +2,11 @@
 id: task-hedge-strategies
 title: "Hedging Strategies — how a strategy works and how to build one"
 type: task
-domain: execution
+domain: operations
 module: hedge_strat
 minLevel: VIEW
 route: /hedging-strategies
+order: 7
 source:
   - "Hedging Strategies — Operating Guide for Risk Managers & Dealers, v1.0 (screen-by-screen manual: header, strategy list, settings sections 1-5, intelligence panel, quick reference)"
 related: [ref-lp-admin-states, task-route-sanity, task-lp-management, ref-route-sanity-fields, task-execution-report]

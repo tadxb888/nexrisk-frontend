@@ -2,10 +2,11 @@
 id: task-symbol-mapping
 title: "Symbol Mapping — operating guide"
 type: task
-domain: execution
+domain: operations
 module: symbol_map
 minLevel: VIEW
 route: /symbol-mapping
+order: 11
 source:
   - "Symbol_Mapping_Guide.docx — operating guide (ingested verbatim)"
 related: []

@@ -2,10 +2,11 @@
 id: ref-network-cluster
 title: "Network Cluster — operating guide"
 type: reference
-domain: summary
+domain: operations
 module: cockpit
 minLevel: VIEW
 route: /infra
+order: 4
 source:
   - "Network_Cluster_Guide.docx — operating guide (ingested verbatim)"
 related: []

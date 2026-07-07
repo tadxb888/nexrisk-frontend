@@ -2,10 +2,11 @@
 id: task-execution-report
 title: "Execution Report — operating guide"
 type: task
-domain: execution
+domain: operations
 module: exec_report
 minLevel: VIEW
 route: /execution-report
+order: 9
 source:
   - "Execution_Report_Guide.docx — operating guide (screen-by-screen manual, ingested verbatim)"
 related: []

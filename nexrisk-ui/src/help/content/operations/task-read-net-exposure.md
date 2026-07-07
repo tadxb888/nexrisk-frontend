@@ -2,10 +2,11 @@
 id: task-read-net-exposure
 title: "Net Exposure — operating guide"
 type: task
-domain: books
+domain: operations
 module: net_exposure
 minLevel: VIEW
 route: /net-exposure
+order: 5
 source:
   - "Net_Exposure_Guide.docx — operating guide (screen-by-screen manual, ingested verbatim)"
 related: []

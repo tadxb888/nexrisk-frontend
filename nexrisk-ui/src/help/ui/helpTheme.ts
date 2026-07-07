@@ -33,12 +33,9 @@ export const T = {
 } as const;
 
 export const DOMAIN_LABEL: Record<string, string> = {
-  summary: 'Summary',
-  books: 'Books',
-  execution: 'Execution',
-  intel: 'Market Intelligence',
-  reports: 'Reports',
   settings: 'Settings',
+  intel: 'Market Intelligence',
+  operations: 'Operations',
 };
 
-export const DOMAIN_ORDER = ['summary', 'books', 'execution', 'intel', 'reports', 'settings'];
+export const DOMAIN_ORDER = ['settings', 'intel', 'operations'];

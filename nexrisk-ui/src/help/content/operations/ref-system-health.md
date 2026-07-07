@@ -2,10 +2,11 @@
 id: ref-system-health
 title: "System health bar — operating guide"
 type: reference
-domain: summary
+domain: operations
 module: cockpit
 minLevel: VIEW
 route: /
+order: 3
 source:
   - "System_Health_Bar_Guide.docx — operating guide (ingested verbatim)"
 related: []

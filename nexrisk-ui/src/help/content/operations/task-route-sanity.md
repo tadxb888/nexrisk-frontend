@@ -2,10 +2,11 @@
 id: task-route-sanity
 title: "Route Sanity — operating guide"
 type: task
-domain: execution
+domain: operations
 module: route_sanity
 minLevel: VIEW
 route: /route-sanity
+order: 12
 source:
   - "Route_Sanity_Guide.docx — operating guide (ingested verbatim)"
 related: []

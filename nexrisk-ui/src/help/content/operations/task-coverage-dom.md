@@ -2,10 +2,11 @@
 id: task-coverage-dom
 title: "Coverage Book — operating guide"
 type: task
-domain: books
+domain: operations
 module: coverage
 minLevel: VIEW
 route: /coverage-book
+order: 6
 source:
   - "Coverage_Book_Guide.docx — operating guide (screen-by-screen manual, ingested verbatim)"
 related: []

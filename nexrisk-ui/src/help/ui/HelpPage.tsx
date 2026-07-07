@@ -8,6 +8,7 @@ import { T, DOMAIN_LABEL, DOMAIN_ORDER } from './helpTheme';
 import { helpClient, HelpArticle, HelpArticleMeta } from './helpClient';
 import { useHelpAsk } from './useHelpAsk';
 import Markdown from './Markdown';
+import { HELP_GRAPHIC } from './helpGraphic';
 
 export default function HelpPage() {
   const [manifest, setManifest] = useState<HelpArticleMeta[]>([]);
@@ -16,7 +17,7 @@ export default function HelpPage() {
   const [activeChapter, setActiveChapter] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [inputH, setInputH] = useState(120);
-  const [openDomains, setOpenDomains] = useState<Set<string>>(new Set(DOMAIN_ORDER));
+  const [openDomains, setOpenDomains] = useState<Set<string>>(new Set()); // collapsed by default
   const [expandedLeaves, setExpandedLeaves] = useState<Set<string>>(new Set());
   const { messages, loading, ask } = useHelpAsk(undefined); // no page context on the manual itself
   const threadRef = useRef<HTMLDivElement>(null);
@@ -115,7 +116,7 @@ export default function HelpPage() {
       <aside style={{ background: T.railBg, borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={{ padding: '12px 12px 10px', borderBottom: `1px solid ${T.border}` }}>
           <div style={{ fontSize: 13, letterSpacing: '0.10em', textTransform: 'uppercase', color: T.owner, fontWeight: 500, marginBottom: 10 }}>
-            Operational Manual
+            Content
           </div>
           <input
             value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter articles…"
@@ -259,9 +260,12 @@ export default function HelpPage() {
               <Markdown text={active.body} onCite={openArticle} />
             </article>
           ) : messages.length === 0 ? (
-            <div style={{ color: T.textMute, fontSize: 13, maxWidth: 520, marginTop: 40 }}>
-              Ask about any Taiga feature — how to configure it, what a field means, or where a setting lives.
-              Answers are drawn only from the Operational Manual and cite their sources. Browse the manual on the left.
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', paddingTop: 24 }}>
+              <div style={{ width: '100%', maxWidth: 560, opacity: 0.96 }} dangerouslySetInnerHTML={{ __html: HELP_GRAPHIC }} />
+              <div style={{ color: T.textDim, fontSize: 14, maxWidth: 560, marginTop: 8, lineHeight: 1.6 }}>
+                Ask about any Taiga feature — how to configure it, what a field means, or where a setting lives.
+                Answers are drawn only from the Content library and cite their sources. Browse the sections on the left.
+              </div>
             </div>
           ) : (
             messages.map((m, n) => (

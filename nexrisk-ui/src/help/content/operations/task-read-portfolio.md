@@ -2,10 +2,11 @@
 id: task-read-portfolio
 title: "Portfolio — operating guide"
 type: task
-domain: summary
+domain: operations
 module: portfolio
 minLevel: VIEW
 route: /portfolio
+order: 2
 source:
   - "Portfolio_Guide.docx — operating guide (ingested verbatim)"
 related: []

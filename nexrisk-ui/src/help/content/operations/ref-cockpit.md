@@ -2,10 +2,11 @@
 id: ref-cockpit
 title: "Cockpit — operating guide"
 type: reference
-domain: summary
+domain: operations
 module: cockpit
 minLevel: VIEW
 route: /
+order: 1
 source:
   - "Cockpit_Executive_Guide.docx — operating guide (ingested verbatim)"
 related: []

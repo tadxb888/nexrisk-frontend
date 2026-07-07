@@ -2,10 +2,11 @@
 id: task-lp-management
 title: "Liquidity Providers — operating guide"
 type: task
-domain: execution
+domain: operations
 module: lp_admin
 minLevel: VIEW
 route: /liquidity-providers
+order: 10
 source:
   - "Liquidity_Providers_Guide.docx — operating guide (ingested verbatim)"
 related: []

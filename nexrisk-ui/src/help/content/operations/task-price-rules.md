@@ -2,10 +2,11 @@
 id: task-price-rules
 title: "Price Rules Engine — operating guide"
 type: task
-domain: execution
+domain: operations
 module: price_rules
 minLevel: VIEW
 route: /price-rules
+order: 8
 source:
   - "Price_Rules_Engine_Guide.docx — operating guide (screen-by-screen manual, ingested verbatim)"
 related: []
