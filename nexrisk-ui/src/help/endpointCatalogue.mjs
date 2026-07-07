@@ -15,6 +15,8 @@ export const ENDPOINTS = [
     purpose: "Profit & loss across A/B/C books for a period: net P&L, floating, realized, volumes, revenue. Use for 'how much are we making', profitability, today's/this month's P&L.", group: 'portfolio' },
   { id: 'portfolio_pnl_history', path: '/api/v1/portfolio/pnl-history', params: { from: 'YYYY-MM-DD?', to: 'YYYY-MM-DD?' },
     purpose: 'Daily cumulative realized P&L series (MTD/YTD). Use for P&L trend/history over dates.', group: 'portfolio' },
+  { id: 'book_positions', path: '/api/v1/mt5/nodes/:node_id/books/:book/positions', params: { node_id: 'MT5 node id (e.g. 2, the Master)', book: 'B|A|C' },
+    purpose: "Open positions with per-position P&L for one book on one MT5 node: each has symbol, profit, volume_lots, price_open, price_current, action. Use for 'which symbol is making/losing money', per-symbol P&L, biggest winners/losers, exposure by symbol. Sum profit grouped by symbol to get per-symbol totals. Master node is typically id 2, book B is the internalised book.", group: 'portfolio' },
 
   // ── Charts / aggregates ─────────────────────────────────────────
   { id: 'chart_most_traded', path: '/api/v1/charts/most-traded-symbols', params: { from: '?', to: '?', limit: '?' },

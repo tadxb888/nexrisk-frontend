@@ -160,6 +160,21 @@ export async function answerQuestion(question, ctx) {
       if (r && r.ok && r.data != null) {
         let data = redact(r.data);
         const e = BY_ID[call.id];
+        if (e && e.id === 'book_positions' && data && Array.isArray(data.positions)) {
+          const by = {};
+          for (const p of data.positions) {
+            const sym = p.symbol || 'UNKNOWN';
+            by[sym] = by[sym] || { symbol: sym, profit: 0, volume_lots: 0, positions: 0 };
+            by[sym].profit += Number(p.profit) || 0;
+            by[sym].volume_lots += Number(p.volume_lots) || 0;
+            by[sym].positions += 1;
+          }
+          const per_symbol = Object.values(by).map((x) => ({ ...x, profit: Math.round(x.profit * 100) / 100 }))
+            .sort((a, b) => b.profit - a.profit);
+          data = { book: data.book_name, node_id: data.node_id, per_symbol,
+            winners: per_symbol.filter((x) => x.profit > 0), losers: per_symbol.filter((x) => x.profit < 0),
+            total_profit: Math.round(per_symbol.reduce((s2, x) => s2 + x.profit, 0) * 100) / 100 };
+        }
         if (e && e.compute === 'hedge_pct' && data && Array.isArray(data.symbols)) {
           data = { symbols: data.symbols.map((s) => {
             const b = Number(s.b_book_volume) || 0, h = Number(s.hedge_volume) || 0;
