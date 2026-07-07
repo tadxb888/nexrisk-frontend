@@ -1,186 +1,194 @@
 ---
 id: ref-log-viewer
-title: "Log viewer"
+title: "Log Viewer — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
-route: /settings/logs
+route: /settings/log-viewer
+order: 6
 source:
-  - "nexrisk-ui/src/pages/settings/help/06-log-viewer.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, log-viewer, operator-manual]
+  - "Settings_06_Log_Viewer.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,log-viewer,logs,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
+
+The Log viewer is a read-only window onto Taiga’s service logs. It lets
+you follow the newest log as it is written, search within a chosen file,
+and download whole files for offline analysis. It also has one
+privileged action — temporarily raising a service’s log detail for
+debugging. Four log sources are indexed: the core service, the price
+gateway, the FIX bridge, and a separate stream of FIX messages.
 
-## At a glance
+You reach it at **Settings › Log viewer**.
 
-The Log viewer is a read-only window onto Taiga's service logs, with the ability to tail the newest file, search within a specific file, and download full files for offline analysis. It also has a privileged "set log level" action for operators who need to temporarily increase verbosity for debugging. Four services are indexed: `nexrisk_service`, `nexrisk_gateway`, `fixbridge_service`, and a separate `fix_messages` log stream.
+|                                                                                                                                                                                                                                                                   |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **This page reads; it does not save settings.** Unlike the other Settings pages, this is a viewer, not a form. It reads log files straight from disk and does not write any configuration. Its one write action — changing a log level — is covered in Section 5. |
 
-Settings page path: **Settings → Log viewer**
-Route: `/settings/logs`
+## 2. Layout
 
-## What this page controls
+The page is full-width, not the usual split layout, because reading logs
+wants room. From the top down: a row of tabs for the four log sources; a
+controls row with a Tail / Search toggle and its inputs, plus a "Set log
+level" button on the right; and the main area, split between the log
+viewer on the left and a file list on the right. A footer under the
+viewer notes which file is shown, its line count, and whether the output
+was capped.
 
-Unlike the other Settings sub-pages, this one is not a form-and-save — it's a viewer. It reads log files from disk and lets you interact with them. The one write action it supports is changing a service's runtime log level, which requires elevated permissions.
+## 3. The Two Modes
 
-This page doesn't write any config files. Log content is read directly from each service's log directory.
+### 3.1 Tail — follow the newest log live
 
-## Who can access it
+Tail mode shows the most recent lines of the newest file for the
+selected source and keeps them updating. You choose how many trailing
+lines to fetch (50 up to 1000), and whether it auto-refreshes.
 
-The page itself is visible to users with one of:
+- **Auto-refresh** re-fetches every three seconds when on. The cadence
+  is deliberately not faster — constant reads on a busy server add up.
+  If the tail seems to lag real time, that is usually server-side
+  buffering, not the page.
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+- **Auto-scroll behaves considerately.** If you are near the bottom when
+  new lines arrive, the viewer follows them. If you have scrolled up to
+  read something, your place is kept — new lines arrive above without
+  yanking you away.
 
-The **Set log level** action inside the page requires additional permission: `settings >= EDIT`. Users without that permission can view and search logs but cannot change levels.
+### 3.2 Search — find text in one file
 
-Additionally, the `fix_messages` stream is marked `level_configurable: false` by the backend — its level can't be changed from the UI regardless of your permissions.
+Search mode looks for a piece of text within a single chosen file. You
+pick the file (the file list shows modification times, so you can find
+the one from the right period), type what to look for, set a maximum
+number of matches to return (50 up to 500), and run it. Matching lines
+are shown in the order they appear; a "truncated" marker appears if the
+file held more matches than your limit. Two things to know:
 
-## Before you change anything
+- **Plain text, not pattern-based** — it matches the exact characters
+  you type, so it is straightforward but not a regular-expression
+  search.
 
-- **Tail auto-refresh polls every 3 seconds.** File I/O on a busy server adds up. The 3-second cadence is deliberately not faster. If the tail seems to lag behind real time, that's usually a matter of server-side buffering, not UI lag.
-- **Search is whole-file, substring-only.** It's plain substring matching (not regex), scanning the file you select. Large files take longer to search.
-- **Downloads stream directly from disk.** Clicking "download" on a file triggers a browser download of the raw log content. Large files download as large files — there's no pre-processing or filtering on the way out.
-- **Changing log level affects the *running* service.** This is a live configuration change on the running process, not a config-file edit. The service needs to support dynamic log-level changes (all four services do). On restart, the service re-reads its config file, which may revert the level — if you want the change to persist across restarts, update the relevant settings page too (e.g. FIX bridge's Log level field).
+- **case-sensitive and single-file** — spelling and capitalisation must
+  match, and each search covers one file in one source; to search across
+  sources, search each in turn.
 
-## Page layout
+### 3.3 The file list
 
-The page doesn't use the 40/60 split that form pages do. Instead:
+In either mode, the right sidebar lists every file in the selected
+source’s log directory, each showing its name, size, and how recently it
+was modified (hover for the exact time), plus a download link that
+streams the raw file to your browser — no filtering or compression on
+the way out, so a large file downloads as a large file. The sidebar
+footer shows the source’s log directory.
 
-- **Top:** service tabs for the four services.
-- **Controls row:** mode toggle (Tail / Search) plus mode-specific inputs, and a "Set log level" button at the right (admin-only, for level-configurable services).
-- **Main area:** a split between the log viewer (~70%, left) and the file list sidebar (~30%, right).
-- **Viewer footer:** indicates which file is being shown, line count, and a "truncated" indicator if output was capped.
+## 4. Downloading a File
 
-## Modes
+Click the download link beside any file to save it locally. Downloads
+stream straight from disk, unmodified, which is the right tool when you
+want to search a log for several patterns at once offline, or hand it to
+someone else. If a download fails, the usual causes are an expired
+session (log back in) or the file having rotated away between loading
+the list and clicking (switch source tabs and back to refresh the list).
 
-### Tail mode (default)
+## 5. Changing a Service’s Log Level
 
-Shows the most recent lines of the newest file for the selected service, auto-refreshing. Controls:
+This is the page’s one write action. For the three services whose level
+can be changed — the core service, the gateway, and the FIX bridge — the
+"Set log level" button opens a short menu of the five levels (trace,
+debug, info, warn, error). Choosing one asks you to confirm, then
+applies it.
 
-- **Lines** dropdown — how many trailing lines to fetch. Choices: 50, 100, 250, 500, 1000.
-- **Auto-refresh 3s** toggle — when on, the tail re-fetches every 3 seconds. When off, you see a static snapshot.
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **This is a live change to the running service — and it does not persist.** Raising the level takes effect immediately on the running service, without a restart. But it is not written to the service’s configuration file, so the next time that service restarts it reverts to whatever its settings page specifies. If you need the change to survive restarts, also set the log level on that service’s own settings page (for example, the FIX bridge page) and save. |
 
-Auto-scroll behaviour: if you're near the bottom of the viewer when new lines arrive, the viewer scrolls to show them. If you've scrolled up to read older lines, your position is preserved — new lines stream in above the viewport, but the viewer won't yank you away from what you're reading.
+Two limits worth knowing: this action needs edit permission on Settings
+(viewing and searching do not), and the separate FIX-messages stream
+cannot have its level changed from here at all.
 
-### Search mode
+|                                                                                                                                                                                                                                                                                                 |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **The confirmation wording mentions "restart".** Because a lasting change needs the settings-page edit too, the confirmation may say "restart to apply". Do not be thrown by it — the live level change itself usually takes effect instantly; the "restart" note is about making it permanent. |
 
-Runs a substring search within a single file. Controls:
+## 6. Common Tasks
 
-- **File** dropdown — picks which file to search. Populated from the file list; defaults to the newest.
-- **Substring to find** input — whatever you're looking for. Enter key submits.
-- **Limit** dropdown — max matches to return. Choices: 50, 100, 250, 500.
-- **Search** button — fires the request.
+### 6.1 Watch a service live
 
-The viewer shows matched lines in order they appear in the file. A `"truncated"` badge appears if the file had more matches than your limit.
+Pick the source tab, leave the mode on Tail with auto-refresh on, and
+watch the lines stream in.
 
-### File list sidebar
+### 6.2 Find an error in an older file
 
-Regardless of mode, the right sidebar shows every file in the selected service's log directory. For each file:
+Pick the source tab, switch to Search, choose the file from the list
+(using its modification time to find the right period), type the error
+text, and run. Raise the match limit if a "truncated" marker suggests
+your target is further in than the returned matches.
 
-- Filename (monospaced)
-- Size (human-readable: B, KB, MB, GB)
-- Modified time (relative, e.g. "2 min ago"; hover for full ISO timestamp)
-- A **download** link that streams the raw file to your browser
+### 6.3 Turn on debug logging for a service temporarily
 
-The sidebar footer shows the service's `log_dir` (absolute path, from the backend).
+1.  Select the service tab, use "Set log level", choose Debug, and
+    confirm.
 
-## Setting log level
+2.  Reproduce the issue and read it in the tail or via search.
 
-For services flagged `level_configurable: true` (which is `nexrisk`, `gateway`, and `fixbridge` — not `fix_messages`), admins with `settings >= EDIT` can click **Set log level ▾** at the right of the controls row. This opens a dropdown with the five levels:
+3.  Set the level back to Info the same way when done. To make a level
+    change permanent, also set it on that service’s settings page and
+    save (Section 5).
 
-- `trace`, `debug`, `info`, `warn`, `error`
+## 7. What the Page Deliberately Does Not Do
 
-Clicking a level shows a confirmation row at the bottom of the dropdown ("Set to `debug`? Cancel / Confirm"). Clicking **Confirm** fires the request.
+The viewer is complete for its purpose; a few boundaries are
+intentional:
 
-On success:
+- **Plain-text search only** — no pattern (regular-expression) matching.
 
-- A green banner appears below the controls: `Log level set to debug. Restart nexrisk_service to apply.`
-- The banner's wording depends on whether the change requires restart. In practice, log level changes apply to the running service *and* require a restart to persist across process restarts. Don't be surprised if the message says "restart" — the actual level change often happens instantly anyway.
+- **One source at a time** — no search across services in a single
+  query; search each source in turn.
 
-On failure, a red banner shows the error.
+- **No deep links to a line** — to share an exact spot in a big log,
+  download the file.
 
-## Common tasks
+- **No "load more" in tail** — to see more lines, raise the line count
+  and the tail re-fetches. A "truncated" flag simply means there was
+  more than you asked for.
 
-### Watch a service's log live
+## 8. Troubleshooting
 
-1. Click the service tab at the top (`NexRisk`, `Price feed gateway`, `FIX bridge`, `FIX messages`).
-2. Leave mode on **Tail**.
-3. Leave auto-refresh on. Watch lines stream in.
+### 8.1 The tail stopped updating
 
-### Find a specific error in an old file
+Check the auto-refresh toggle — it may have been switched off. If it is
+on and still not moving, the service may genuinely be idle (nothing to
+log), or the file may have rotated; switch to Search, look at the file
+list, and pick a newer file if one has appeared.
 
-1. Click the service tab.
-2. Switch to **Search** mode.
-3. Pick the file from the **File** dropdown (sidebar shows modification times so you can identify when something happened).
-4. Type the error substring into the input.
-5. Press Enter or click **Search**.
+### 8.2 I cannot download a file
 
-### Download a file for offline analysis
+Usually an expired session (log back in) or the file rotating away
+between loading the list and clicking (refresh the list by switching
+source tabs and back).
 
-1. Click the service tab.
-2. In the sidebar, click the **download** link next to the file you want.
-3. The browser prompts to save. The file is streamed raw — no compression, no filtering.
+### 8.3 My search returns nothing
 
-### Turn on debug logging for the FIX bridge temporarily
+Check spelling and capitalisation (the search is case-sensitive),
+confirm you are searching the right file (the default is the newest —
+your target may be in an older one), and raise the match limit if a
+truncated result may be hiding it.
 
-1. Tab to **FIX bridge**.
-2. Click **Set log level ▾** at top-right.
-3. Click **debug**, then **Confirm**.
-4. Reproduce your issue. Watch the tail or search for relevant lines.
-5. When done, set level back to **info** using the same flow.
+### 8.4 The "Set log level" button is missing
 
-Remember: the level change may or may not persist depending on the service implementation. To make it persistent across restarts, also change the `log_level` field on the FIX bridge settings page (or equivalent for other services).
+Either you do not have edit permission on Settings, or the selected
+source does not support live level changes — the FIX-messages stream
+cannot be changed from here. Try a different source tab.
 
-### Diagnose "why is this service slow?" using logs
+### 8.5 I set the level but detail did not change (or reverted)
 
-1. Tab to the suspect service.
-2. Switch to **Search** mode.
-3. Search for `warn`, `error`, or specific error substrings.
-4. Cross-reference timestamps with when the slowness occurred.
-5. Download the file if you need to grep for multiple patterns offline.
+The live change may have applied only briefly, or the service re-read
+its configuration file at a restart and reverted. To make it stick, set
+the level on that service’s own settings page, save, and restart the
+service (Section 5).
 
-## What's not implemented yet
-
-The page is feature-complete for v1. A few things worth noting:
-
-- **Search is substring only, not regex.** Regex support is not currently on the roadmap.
-- **No multi-service search.** Each search targets one file in one service. To search across services, search each in turn.
-- **No line-range deep-linking.** You can't link someone to "line 12345 of yesterday's log" — download the file instead.
-- **No "load more" pagination in tail mode.** If you want more lines, change the **Lines** dropdown and the tail re-fetches with the new count. The `truncated: true` flag from the backend means "there was more than you asked for" — the UI's hint to use the Lines dropdown.
-
-## After you interact
-
-Nothing is "saved" in the traditional sense — log viewing is a read operation. The only persistent action is setting a log level, which either updates the running service immediately, or requires a restart to take effect, depending on the service. The banner beneath the controls row tells you which, per operation.
-
-## Troubleshooting
-
-### "The tail stopped updating"
-
-Check the **auto-refresh** toggle — it might have been clicked off accidentally. If it's on and the tail still isn't moving, the service may genuinely not be logging anything (it's idle), or the log file might have rotated. Switch to Search mode, look at the file list, and pick a newer file if one appeared.
-
-### "I can't download a file"
-
-The download link is a direct `<a href>` — it streams the file via the BFF. Common failures:
-
-- Your session has expired. Log back in and try again.
-- The file has been rotated away between when you loaded the list and when you clicked. Refresh the page (switch service tabs and back) to re-fetch the list.
-
-### "My search returns nothing"
-
-- Check spelling and case. Search is case-sensitive.
-- Check the file: the default is the newest file; your target might be in an older one.
-- Check the limit: if set to 50 and the match is further into the file than 50 other matches, the `truncated` flag will show but your target may not appear. Raise the limit.
-
-### "Set log level button is missing"
-
-Either you don't have `settings >= EDIT` permission, or the current service doesn't support dynamic level changes (that's `fix_messages` — its log level is not configurable from the UI). Try a different tab.
-
-### "Set log level succeeded but verbosity didn't change"
-
-Most likely the service processes log level at startup from its config file, and the dynamic change applied only momentarily. Check the service's settings sub-page and change the `log_level` field there (for FIX bridge, or the equivalent for other services), save, and restart the service.
+*End of guide — Settings › Log viewer. One of nine Settings operator
+guides.*

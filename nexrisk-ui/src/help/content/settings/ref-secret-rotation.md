@@ -1,239 +1,223 @@
 ---
 id: ref-secret-rotation
-title: "Secret rotation"
+title: "Secret Rotation — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
-route: /settings/rotation
+route: /settings/secret-rotation
+order: 7
 source:
-  - "nexrisk-ui/src/pages/settings/help/07-secret-rotation.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, secret-rotation, operator-manual]
+  - "Settings_07_Secret_Rotation.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,secret-rotation,credentials,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
 
-## At a glance
+This is where you rotate Taiga’s cryptographic secrets — the keys and
+shared values that keep the platform’s parts authenticated to each
+other, keep user sessions signed, and keep sensitive data encrypted at
+rest. There are three secrets, each with its own process and its own set
+of consequences.
 
-This is the page where you rotate Taiga's cryptographic credentials — the keys and shared secrets that keep different processes authenticated to each other, keep user sessions signed, and keep sensitive data encrypted at rest. Three rotatable secrets, each with its own workflow and set of consequences. **Only root users can see this page.**
+You reach it at **Settings › Secret rotation**. This is the platform’s
+most consequential page: rotating any of these secrets has wide,
+immediate effects — it can end every user session, break the internal
+handshake between components, or re-encrypt stored data. Treat it with
+corresponding care.
 
-Settings page path: **Settings → Secret rotation**
-Route: `/settings/rotation`
+|                                                                                                                                                                                                                                                                                                                                                             |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Every rotation is a one-way step, and the new secret is shown exactly once.** The page generates fresh cryptographic material and displays it a single time. Nothing is stored anywhere you can retrieve it again — once you close the reveal, the plaintext is gone for good. If you do not save it in that moment, your only option is to rotate again. |
 
-## What this page controls
+## 2. The Three Secrets
 
-This page does not write a config file. It calls four endpoints under `/auth/rotate/*` that generate fresh cryptographic material and return it **exactly once**. No rotated secret is persisted anywhere you can retrieve it again — after the modal closes, the plaintext is gone.
+Each secret has its own card on the page. In brief:
 
-The three secrets:
+| **Secret**             | **What it protects**                                                                                                           | **What must restart**         |
+|------------------------|--------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
+| Internal secret        | The handshake between the web layer (BFF) and the core service — every internal request carries it, and both sides must match. | The BFF and the core service. |
+| Session-signing secret | The signature on user login sessions (access and refresh tokens).                                                              | The core service.             |
+| Encryption key         | At-rest encryption of stored LP credentials and users’ one-time-code secrets.                                                  | The core service.             |
 
-1. **Internal secret** — `NEXRISK_INTERNAL_SECRET`. Shared secret used by the BFF to authenticate with the C++ backend on every request.
-2. **JWT secret** — `NEXRISK_JWT_SECRET`. Signing key for user access and refresh tokens.
-3. **Encryption key** — `NEXRISK_ENCRYPTION_KEY`. At-rest encryption key for LP credentials and user TOTP secrets.
+Each has its own process and its own consequences. The internal and
+session-signing secrets are quick rotations; the encryption key is the
+heaviest, because it re-encrypts stored data as part of the rotation
+(Section 5.3).
 
-## Who can access it
+## 3. Before You Rotate — the Checklist
 
-**`root` role only.** Other roles — including `administrator` and `sysadmin` — do not see the Secret rotation tile on the Settings hub at all; the tile is filtered out before the grid renders. If a non-root user somehow navigates to `/settings/rotation` directly, the route redirects them back to the hub.
+Work through this before pressing any Rotate button. The page shows the
+same checklist alongside the cards.
 
-This is deliberate. Rotating these secrets has blast-radius-wide consequences (session invalidation, BFF→backend handshake break, re-encryption of stored credentials). Only operators with root-level operational responsibility should do it.
+- A password manager or secure vault is open and ready to receive the
+  new value.
 
-## Before you change anything
+- You have access to the host and can update the service environment
+  where the secret lives.
 
-Go through this checklist before clicking any **Rotate** button. Each rotation is a one-way operation — there is no "copy it from elsewhere later" option.
+- The restart has been coordinated with anyone on the desk — some
+  rotations end active sessions.
 
-- [ ] A password manager or encrypted vault is open and ready to receive the new secret.
-- [ ] You have SSH access to the host and can edit the service environment files.
-- [ ] The service restart has been coordinated with anyone on the desk — rotating the JWT secret mid-session forces users to re-authenticate.
-- [ ] The previous secret is archived (in case a roll-back is needed within the same service lifecycle, before restart).
+- The previous secret is archived, in case you need to roll back within
+  the same service lifecycle (before the restart).
 
-The page itself shows this checklist in the right-hand column.
+## 4. The Rotation Process
 
-## The three rotations
+Pressing a Rotate button opens a guided window that moves through up to
+four steps. The design is deliberately full of friction — this is one
+place where being slowed down is the point.
 
-Each rotation has its own card on the page. Each card has an **Env var** badge (the name of the environment variable you'll need to update), a **Restart** badge (what needs to restart after you save the new secret), and — for the encryption key only — a **501 stub** badge indicating the endpoint isn't fully implemented yet.
+### 4.1 Pre-check (encryption key only)
 
-### 1. Internal secret
+For the encryption key, the window first runs a safety pre-check that
+reports how many records would be re-encrypted (stored LP credentials
+and one-time-code enrolments) and a rough time estimate, plus whether it
+is safe to proceed. If it reports it is not safe, the button stays
+disabled and the blockers are listed. The other two secrets skip
+straight to the next step.
 
-- **Env var:** `NEXRISK_INTERNAL_SECRET`
-- **Restart:** `nexrisk_service` + `bff`
-- **Confirmation phrase:** `ROTATE`
-- **Value format:** 96-hex-character string
-- **Available:** Yes, endpoint is live.
+### 4.2 Confirm
 
-**What it's for:** every API call from the BFF to the C++ backend carries an `X-Internal-Secret` header. Both sides compare the header to their env var. If they don't match, the call is rejected with 401.
+This step shows the consequences of the rotation in a warning box — read
+it — and requires you to type an exact confirmation phrase before the
+Rotate button will enable. The phrase is case-sensitive and spaces
+matter; the input turns teal when it matches. You can still cancel or
+close at this point.
 
-**Consequences of rotating:**
+### 4.3 Rotating
 
-- A fresh 96-hex-character value is generated and shown once.
-- The new value must be written to `NEXRISK_INTERNAL_SECRET` in **BOTH** the BFF environment **AND** the `nexrisk_service` environment.
-- Restart the **BFF first**, then `nexrisk_service`. Order matters.
-- If the BFF restarts with the old value, every BFF→backend call will fail with 401 until `nexrisk_service` also catches up.
+The rotation is now in progress. The window warns you not to close it,
+and the escape key is disabled. Do not navigate away.
 
-### 2. JWT secret
+### 4.4 Reveal — the one and only sighting
 
-- **Env var:** `NEXRISK_JWT_SECRET`
-- **Restart:** `nexrisk_service`
-- **Confirmation phrase:** `ROTATE`
-- **Value format:** 128-hex-character string
-- **Available:** Yes, endpoint is live.
+The new secret is shown in a large, copy-friendly block. This is the
+only time you will ever see it.
 
-**What it's for:** the HMAC signing key for user session tokens. Access tokens and refresh tokens both carry signatures derived from this key.
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Copy it now — before you press Done.** The reveal carries a large warning that the value will not be shown again, a copy button, and the platform’s own instructions for where to put it (including any ordering rules). The escape key is disabled here on purpose; the only way out is the Done button. Once you press Done, the plaintext is gone — not returned by anything, not written to any log, not cached anywhere. Paste it into your vault and the relevant service environment first, then press Done. |
 
-**Consequences of rotating:**
+## 5. Each Secret in Detail
 
-- A fresh 128-hex-character value is generated and shown once.
-- The new value must be written to `NEXRISK_JWT_SECRET` in the `nexrisk_service` environment only.
-- On service restart, **all outstanding access tokens become invalid immediately**. Every user sees their next API call fail with 401.
-- Refresh tokens remain valid (they are not signed with the rotated key). Browsers will automatically use them to get fresh access tokens, so most users won't notice unless they're mid-request.
-- Users actively making requests at the moment of restart will see a brief error and then recover on retry.
+### 5.1 Internal secret
 
-### 3. Encryption key
+Every internal request from the web layer (the BFF) to the core service
+carries this shared value, and both sides compare it; if they do not
+match, the request is rejected. Rotating it generates a fresh value that
+you must place in **both** environments — the BFF’s and the core
+service’s.
 
-- **Env var:** `NEXRISK_ENCRYPTION_KEY`
-- **Restart:** `nexrisk_service`
-- **Confirmation phrase:** `ROTATE ENCRYPTION KEY` (longer and stricter — this is the destructive one)
-- **Available:** Not yet — the POST endpoint returns 501. Only the preflight probe is live.
+|                                                                                                                                                                                                                                                                                                                                   |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Order matters: update both environments, then restart the BFF first, then the core service.** If the BFF comes back on the new value while the core is still on the old one, every request between them is rejected until the core catches up. Update both first to minimise that window, and bring the BFF up before the core. |
 
-**What it's for:** at-rest encryption of LP credentials and user TOTP secrets. Every encrypted row in the database is decrypted on read with this key and encrypted on write with the same key.
+### 5.2 Session-signing secret
 
-**Consequences of rotating (once implemented):**
+This is the signing key for user login sessions. Rotating it and
+restarting the core service invalidates every outstanding access token
+immediately — so every logged-in user’s next request fails once. The
+good news: refresh tokens are not signed with this key and remain valid,
+so browsers automatically obtain fresh access tokens and most users
+recover within seconds without noticing. Anyone mid-request at the exact
+moment of restart sees a brief error and then recovers on retry. Rotate
+this when you suspect a session compromise; place the new value in the
+core service’s environment and restart the core service.
 
-- A fresh encryption key is generated and shown once.
-- Every LP credential record and every TOTP-enrolled user is **re-encrypted in place** during the call — an O(n) migration, not a config change.
-- Settings writes and new-user enrolments are blocked for the duration of the migration.
-- Estimated duration depends on how many encrypted rows exist. The preflight tells you the count and a rough ETA.
+### 5.3 Encryption key
 
-**Why it's gated behind a stricter phrase:** this is the rotation that touches the most rows and has the longest window of operational impact. A stricter phrase is a deliberate speed bump.
+This key encrypts sensitive data at rest — stored LP credentials and
+users’ one-time-code secrets. Rotating it is the **heaviest** of the
+three: every affected record is re-encrypted in place during the
+operation, which takes time proportional to how many there are, and
+while it runs, settings changes and new one-time-code enrolments are
+blocked. Because of that impact it uses a longer, stricter confirmation
+phrase as a deliberate speed bump.
 
-## The rotation modal
+Run it in a low-activity window: start the rotation, let the safety
+pre-check confirm it is safe to proceed, allow the re-encryption to
+finish, then save the new key to the core service’s environment and
+restart the core service.
 
-Clicking **Rotate <secret name>…** on any card opens a modal. The modal goes through up to four phases:
+## 6. Common Tasks
 
-### Phase 1: Preflight (encryption key only)
+### 6.1 Rotate the internal secret (the most common)
 
-For the encryption-key rotation, the modal first fetches `/auth/rotate/encryption-key/preflight`. This returns counts of encrypted rows and an ETA. Three fields shown:
+1.  Work the checklist. On the Internal secret card, start the rotation
+    and read the consequences.
 
-- **LP accounts** — count of encrypted LP credential records.
-- **TOTP users** — count of users with TOTP enrolment (encrypted TOTP secrets).
-- **Est. duration** — seconds the re-encryption is expected to take.
+2.  Type the confirmation phrase, and rotate.
 
-Plus an `ok_to_proceed` signal. If the backend returns `false`, the rotation button is disabled with any blockers listed inline.
+3.  At the reveal: copy the value into your vault **and** into both
+    environments (the BFF and the core service), then press Done.
 
-(For internal and JWT rotations, the modal skips straight to phase 2.)
+4.  On the host, restart the **BFF first**, then the core service.
 
-### Phase 2: Confirm
+5.  Verify by opening Taiga in a browser; if it works, you are done. If
+    not, the value differs somewhere — correct it and restart the
+    affected service.
 
-Shows:
+### 6.2 Rotate the session-signing secret
 
-- **Consequences** — a bulleted warning box listing what will happen. Read this.
-- **501 stub notice** (encryption only) — a blue banner saying the destructive endpoint isn't wired yet.
-- **Preflight counts** (encryption only) — the numbers from phase 1.
-- **Typed confirmation input** — you must type the exact confirmation phrase (case-sensitive, spaces matter) to enable the Rotate button.
+6.  Coordinate with the desk — everyone will see a brief blip. Work the
+    checklist.
 
-The input border turns teal when the phrase matches. Until it matches, the **Rotate now** button is disabled.
+7.  Rotate, type the phrase, confirm; at the reveal copy the value into
+    your vault and the core service environment, then Done.
 
-Pressing **Esc** closes the modal in this phase. You can also cancel.
+8.  Restart the core service. Users recover automatically within seconds
+    as their browsers refresh their sessions.
 
-### Phase 3: Rotating
+## 7. What This Page Deliberately Does Not Track
 
-The rotation request is in flight. The modal shows "Rotating <secret>…" with a warning not to close the window. Esc is disabled in this phase. Don't navigate away.
+By design, the page keeps no queryable record of when each secret was
+last rotated — such a log would itself be a sensitive, secret-adjacent
+artefact. This is a security property of the page, not a limitation:
+rotation values are shown once and stored nowhere retrievable.
 
-### Phase 4: Reveal
+## 8. Troubleshooting
 
-The new secret is displayed in a large monospace block. This is the **only** time you will ever see the plaintext.
+### 8.1 I lost the secret before saving it
 
-The reveal panel has:
+Rotate again. The value from the previous rotation is already the live
+one, but since you did not capture it, a fresh rotation gives you a new
+value you can save properly. The only cost is the extra step (and, for
+session-signing, a second brief blip for users).
 
-- **A large amber warning** reading "This value will not be shown again."
-- **The secret itself** in a copy-friendly block. Triple-click to select. Or click **Copy to clipboard**.
-- **The backend's hard-copy message** (a blue info panel) — e.g. the internal secret's message spells out the "update BFF env before restarting nexrisk" ordering rule.
-- **Restart + side-effects block** — which services must restart, plus (for JWT) the note that all access tokens will be invalidated.
+### 8.2 I pressed Done before copying
 
-**Esc is intentionally disabled in this phase.** The only way out is the **Done** button in the footer. This is a deliberate friction to prevent accidentally dismissing the plaintext before you've saved it.
+Same remedy — rotate again and capture it this time.
 
-Once **Done** is clicked, the modal closes and the plaintext is gone forever. No endpoint returns it, no log contains it (it's never logged), the BFF doesn't cache it.
+### 8.3 After the restart, everything is rejected
 
-## Common tasks
+For the internal secret: the BFF environment and the core environment
+hold different values — check both and make them identical. For the
+session-signing secret: users should recover as their sessions refresh;
+if every request stays rejected, the new value was not actually loaded —
+confirm the environment was updated and the core service was restarted
+cleanly.
 
-### Rotate the internal secret (most common)
+### 8.4 The Rotate button will not enable
 
-1. Verify the checklist at the top of this document.
-2. On the Internal secret card, click **Rotate internal secret…**.
-3. Read the consequences box.
-4. Type `ROTATE` in the confirmation input.
-5. Click **Rotate now**.
-6. When the new secret appears: click **Copy to clipboard**, then immediately paste it into your password manager AND into the two environment files (BFF and `nexrisk_service`).
-7. Click **Done** — only after you've saved both copies.
-8. SSH to the host. Restart the **BFF first**, then restart `nexrisk_service`.
-9. Verify: open Taiga in a browser. If it works, you're good. If it doesn't, the env var is wrong somewhere — fix it, then restart the affected service.
+You have not typed the confirmation phrase exactly — it is
+case-sensitive and spaces matter. For the encryption key, the phrase is
+longer (three words with single spaces).
 
-### Rotate the JWT secret (when session compromise is suspected)
+### 8.5 The pre-check says it is not safe to proceed
 
-1. Coordinate with the desk. Everyone currently using Taiga will briefly see an error.
-2. Verify the checklist.
-3. On the JWT secret card, click **Rotate JWT secret…**.
-4. Type `ROTATE`, confirm.
-5. Copy the new secret into your password manager and into the `nexrisk_service` env file.
-6. Click **Done**.
-7. Restart `nexrisk_service`.
-8. Users may see a brief error on their next request. Their browsers will automatically refresh their access tokens using the (still-valid) refresh tokens. Normal service resumes within seconds.
+The blockers are listed beneath the pre-check counts — usually something
+transient, such as a settings change already in progress. Clear it and
+reopen the window.
 
-### Rotate the encryption key (not yet possible)
+### 8.6 The rotation errored partway
 
-Preflight works. The destructive POST returns 501 today. When the backend lands:
+The window moves to an error step showing the message; nothing was
+changed — the platform neither generated nor committed a new value. Go
+back to retry, or close to abort.
 
-1. Check preflight counts first (the modal does this automatically).
-2. Confirm `ok_to_proceed: true` and no blockers.
-3. Pick a low-activity window — settings writes and TOTP enrolments are blocked during migration.
-4. Type `ROTATE ENCRYPTION KEY` (stricter phrase).
-5. Confirm. Wait for the migration.
-6. Save the new key, update env var, restart `nexrisk_service`.
-
-## What's not implemented yet
-
-### Encryption key rotation POST endpoint
-
-Preflight is live. The destructive rotate endpoint is 501. The modal detects this and shows a blue informational banner in the Confirm phase, but still lets you see consequences and preflight counts. The Rotate button is disabled when `available: false`.
-
-### Last rotation timestamps
-
-The right-hand **Last rotation** panel shows `—` for all three secrets with "no GET endpoint" notes. There is no endpoint that reports "when was X last rotated" — rotations are deliberately not tracked in a queryable way (a log of rotation timestamps would itself be a secret-adjacent audit artefact). When audit-log integration lands, rotation events will appear there but the *values* will not.
-
-### Audit-log integration
-
-Same pattern as every other sub-page. Will land as a separate ticket.
-
-## After you save
-
-- The yellow restart banner appears site-wide — but the real work is the environment-variable update, not the banner clearance.
-- The plaintext is gone. If you didn't save it, you'll need to rotate again to get a new one. The old one is already invalid (the backend accepted the new one, so the old one no longer works).
-- **Expect a service outage during the restart.** Plan accordingly.
-
-## Troubleshooting
-
-### "I lost the secret before I saved it anywhere"
-
-Rotate again. The secret from the previous rotation is already invalid (the backend has moved on). A fresh rotation gives you a fresh value. No harm done except the extra step.
-
-### "I hit Done before copying"
-
-Same as above — rotate again.
-
-### "After restart, everything is 401"
-
-For the internal secret: the BFF env and the `nexrisk_service` env don't match. Check both env files; they must contain the same string.
-
-For the JWT secret: users will recover on refresh-token usage. If they don't — i.e. every single request stays 401 — the new JWT secret isn't actually loaded. Check the env file and confirm `nexrisk_service` was restarted cleanly.
-
-### "The Rotate button won't enable"
-
-Check you typed the confirmation phrase exactly. Case-sensitive. Spaces matter. For encryption key, the phrase is three words with single spaces between them: `ROTATE ENCRYPTION KEY`.
-
-### "Preflight says ok_to_proceed: false"
-
-Blockers are listed below the preflight counts. Address them (typically they're administrative — e.g. "an ongoing settings write is active; wait") and reload the modal.
-
-### "The rotation returned an error mid-flight"
-
-The modal moves to a **Rotate error** phase showing the error message. Nothing was changed — the backend either didn't generate or didn't commit. Click **Back** to retry, or **Close** to abort.
+*End of guide — Settings › Secret rotation. One of nine Settings
+operator guides.*

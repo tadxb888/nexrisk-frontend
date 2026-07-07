@@ -1,329 +1,316 @@
 ---
 id: ref-alerting
-title: "Alerting"
+title: "Alerting — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
-route: /settings/alerts
+route: /settings/alerting
+order: 9
 source:
-  - "nexrisk-ui/src/pages/settings/help/09-alerting.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, alerting, operator-manual]
+  - "Settings_09_Alerting.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,alerting,notifications,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
 
-## At a glance
+The Alerting page controls how Taiga surfaces important events to
+people: which severity counts as notable, how often alerts may fire for
+a given trader, and through which delivery channels they go out. Two
+channels are supported — Telegram, and webhooks (alerts delivered to
+another system’s address). The page is a single scrolling column of
+three cards: the core alert policy, Telegram, and webhooks. Each card
+saves on its own.
 
-The Alerting page controls how Taiga surfaces important events to humans — which severity level counts as notable, how frequently per trader, and through which delivery channels. Two delivery channels are supported: **Telegram** and **HTTP webhooks**. Both have independent on/off switches and full CRUD for their respective destinations.
+You reach it at **Settings › Alerting**.
 
-The page is organised into three stacked cards on a single scrolling page:
+## 2. What This Page Controls
 
-1. **Alerts — core policy** — global switches and rate caps.
-2. **Telegram** — bot token, chat list, live probes.
-3. **Webhooks** — per-channel switch and endpoint list with test probe.
+This page manages three sections of the platform’s main configuration —
+the core alert policy, the Telegram settings, and the webhook settings.
+They share one file, but the three cards each have their own save and
+revert, so you commit one card at a time.
 
-Settings page path: **Settings → Alerting**
-Route: `/settings/alerts`
+|                                                                                                                                                                                                                                                          |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Which service to restart: the NexRisk service (the core).** Alerting runs inside the core platform service, so changes apply after the core service is restarted. In a full platform restart, bring the price and LP feeds up first and the core last. |
 
-## What this page controls
+## 3. How Alerting Decides What to Send
 
-This page reads and writes three subsections of `config/nexrisk_config.json`: `alerts`, `telegram`, `webhooks`. All three live in the same file, but the three cards save independently — each with its own save/revert.
+An event only becomes a delivered notification after passing through
+several gates, in order. Understanding the chain makes both
+configuration and troubleshooting straightforward:
 
-All changes on this page require a restart of the **`nexrisk_service`** to take effect.
+1.  **Master switch.** If alerting is switched off overall, nothing goes
+    out through any channel — full stop.
 
-## Who can access it
+2.  **Severity threshold.** An event below the minimum severity is
+    dropped and never reaches a channel.
 
-Visible to users with one of:
+3.  **Rate limits.** Repeats of the same alert for the same trader are
+    held back by a cooldown, and there is a hard hourly cap per trader —
+    anything over it is dropped, not queued.
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+4.  **Channel switch.** Each channel (Telegram, webhooks) has its own
+    on/off switch, and it too must be on.
 
-## Before you change anything
+5.  **Per-destination levels.** Finally, each chat or endpoint receives
+    only the severities you selected for it.
 
-- **The master switch and channel switches are layered.** If the master `alerts.enabled` is off, no alerts go out through any channel, regardless of per-channel switches. If `telegram.enabled` is off, no alerts reach Telegram chats regardless of their individual configuration.
-- **Test probes actually run.** Clicking **Test** on a Telegram chat posts a real message to that chat. Clicking **Test** on a webhook endpoint fires a real HTTP request. Don't test against production chats or endpoints you don't want to disturb.
-- **CRUD actions fire immediately.** Adding, editing, or deleting a chat or webhook endpoint sends its request on button click — not on a batched save. This means the server state can change one action at a time, which simplifies reasoning ("what did I change?") but means you can't draft five additions and save them atomically.
-- **The bot token is a secret.** Same write-preserve pattern as every other secret on the Settings surface.
+So a missing notification is almost always one of these gates being
+closed — the troubleshooting in Section 12 simply walks the chain.
 
-## Card 1: Alerts — core policy
+## 4. Before You Change Anything
 
-Four settings. No secrets.
+- **The switches are layered.** The master switch overrides everything;
+  a channel switch overrides that channel. If either is off, no
+  configuration below it matters.
 
-### `enabled` (toggle)
+- **Changes to a destination apply immediately, not on a batched save.**
+  Adding, editing, or deleting a chat or endpoint takes effect the
+  moment you click — one action at a time. This keeps "what did I
+  change?" simple, but you cannot stage five additions and commit them
+  together.
 
-Master switch. When off, **no** alerts leave Taiga through any channel. All other settings are preserved.
+- **The test buttons act for real.** A Telegram test posts a real
+  message to the chat; a webhook test fires a real request to the
+  endpoint. Do not test against production destinations you would rather
+  not disturb.
 
-### `min_severity`
+- **The Telegram bot token is a credential.** It follows the same
+  write-preserve handling as every other secret — blank keeps the
+  current value, and never type three asterisks.
 
-Dropdown with four levels: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. Alerts below this threshold are dropped inside `nexrisk_service` — they never reach a delivery channel.
+## 5. The Severity Levels
 
-Typical value: `HIGH` for production (reduces noise). `LOW` during testing or early deployment (see everything).
+Four severity levels run through the whole page — in the threshold
+dropdown, the per-destination pickers, and the row badges:
 
-### `cooldown_seconds`
+| **Level** | **Meaning**                      |
+|-----------|----------------------------------|
+| Low       | Informational (green).           |
+| Medium    | Worth noting, not urgent (grey). |
+| High      | Needs attention (amber).         |
+| Critical  | Immediate action required (red). |
 
-Minimum number of seconds between two alerts of the same kind for the same trader. Prevents a single event from generating a blast of duplicate notifications.
+## 6. Card 1 — Core Alert Policy
 
-Typical value: `300` (5 minutes).
+Four settings that apply across every channel. No secrets here.
 
-### `max_per_trader_per_hour`
+### 6.1 Alerting enabled
 
-Hard cap on alerts per trader per hour. Anything beyond this is dropped on the floor (not delayed, not queued — **dropped**).
+The master switch. When off, no alerts leave Taiga through any channel,
+whatever the rest of the page says. Everything else is preserved.
 
-Typical value: `12` (roughly one every 5 minutes on average, with some bursting allowed).
+### 6.2 Minimum severity
 
-### Save behaviour
+The lowest severity that is allowed through. Anything below it is
+dropped inside the platform and never reaches a channel. A typical
+production value is High (to cut noise); Low is useful during testing or
+early rollout, when you want to see everything.
 
-Each card has its own Save / Revert. Click **Save changes** on this card to commit just the Alerts core fields. Restart banner appears; restart `nexrisk_service` to activate.
+### 6.3 Cooldown
 
-## Card 2: Telegram
+The minimum time between two alerts of the same kind for the same
+trader, in seconds — so a single event cannot produce a burst of
+duplicate notifications. A typical value is 300 (five minutes).
 
-Three sub-blocks: core config, chat list, and per-chat probes.
+### 6.4 Maximum per trader per hour
 
-### Core config
+A hard cap on how many alerts a single trader can generate in an hour.
+Anything beyond it is dropped — not delayed, not queued. A typical value
+is 12 (about one every five minutes on average, with some bursting
+allowed).
 
-#### `enabled` (toggle)
+## 7. Card 2 — Telegram
 
-Per-channel switch for Telegram delivery. Alerts still need the master `alerts.enabled` switch to be on as well.
+Telegram delivery has a channel switch and a credential, then a list of
+chats that receive alerts.
 
-#### `bot_token` (secret field)
+### 7.1 Channel switch and bot token
 
-Telegram bot API token. Obtained from [@BotFather](https://t.me/BotFather) on Telegram when you create the bot.
+The **Telegram enabled** switch turns this channel on (the master switch
+must be on as well). The **bot token** is the credential for the
+Telegram bot that posts the messages — you obtain it from Telegram’s
+BotFather when you create the bot. It follows the usual secret handling:
+it loads empty, the server never shows it back, blank-on-save keeps the
+current value, and you never type three asterisks. A Validate button
+beside it checks the token with Telegram and shows the bot’s name.
 
-Same write-preserve pattern as every other secret: input always starts empty with placeholder *"Leave blank to keep current value"*. Stored encrypted. Blank-on-save leaves the existing value unchanged.
+### 7.2 The chat list
 
-Next to the input is a **Validate** button that calls the live probe endpoint. When the endpoint lands, Validate asks Telegram "is this token valid?" and shows the bot's username and numeric id on success. Today the endpoint is 501; Validate shows a blue "not implemented yet" banner.
+Each chat that receives alerts is a row showing a label (a human name
+such as "Ops Room"), the Telegram chat identifier, and which severities
+that chat receives. To add one, open the inline form and provide a
+label, the chat identifier, and at least one severity. Each chat also
+has Edit, Delete (with a confirm step), and Test buttons. All of these
+apply immediately when clicked.
 
-After editing core fields, click **Save core** to commit. Restart `nexrisk_service` to activate.
+- **The chat identifier** is the numeric id Telegram assigns the chat.
+  Private chats are positive; groups are negative; supergroups and
+  channels start with "-100" then digits. Getting the sign wrong is the
+  most common mistake.
 
-### Chat list
+- **If you do not know the identifier,** a resolver lets you paste the
+  chat’s handle or link and fills the identifier in for you.
 
-A list of Telegram chats that receive alerts. For each chat:
+- **There is no separate per-chat on/off switch** on Telegram — the
+  severity selection is the effective enabler. To silence a chat without
+  deleting it, edit it and clear all its severities; re-add them to
+  restore it.
 
-- **Label** — human-readable name, e.g. *"Ops Room"*.
-- **Telegram chat ID** — the numeric id Telegram assigns to the chat (e.g. `-1001234567890` for a supergroup). Can be negative.
-- **Alert levels** — which severities this chat receives. Any subset of LOW / MEDIUM / HIGH / CRITICAL.
-- **Internal id** — `chat_<12hex>`, shown in small grey text. Used for CRUD operations; not a Telegram-side concept.
+## 8. Card 3 — Webhooks
 
-Click **+ Add chat** to open the add form inline. Edit / Delete / Test buttons appear on each row.
+A webhook delivers each alert to another system’s address — an on-call
+tool, a chat app, or your own service. The card has a channel switch and
+a list of endpoints.
 
-#### Add chat form
+### 8.1 Channel switch
 
-Three main fields: Label, Chat ID, Alert levels.
+The Webhooks enabled switch turns the channel on (again, the master
+switch must also be on).
 
-Plus an optional **handle resolver** — if you don't know the numeric chat id, paste a handle or link (e.g. `@myroom`, `https://t.me/myroom`) and click **Resolve**. The live probe converts the handle to a numeric id and auto-fills the Chat ID (and Label, if empty). Today the endpoint is 501; Resolve shows a blue "not implemented yet" banner.
+### 8.2 The endpoint list
 
-The form validates:
+Each endpoint is a row showing its address, the severities it receives,
+its own on/off switch, and whether an authorization value is configured.
+To add one, provide:
 
-- Label non-empty
-- Chat ID non-empty
-- At least one alert level selected
+- **Address** — the full secure (or, rarely, unsecured) address the
+  alert is sent to. The page checks the address form.
 
-Click **Add chat** to commit. The CRUD fires immediately — there's no draft state.
+- **Authorization value (optional)** — sent with each alert so the
+  receiving system can accept it (for example, a bearer token or basic
+  credential your system expects).
 
-#### Edit chat
+- **Enabled** — an endpoint saved as disabled still exists but is
+  skipped when alerts are dispatched.
 
-Click **Edit** on a row. Same form as Add, pre-populated with the current values. Changes fire on **Save chat**.
+- **Severities** — at least one; typically just High and Critical for an
+  on-call destination.
 
-#### Delete chat
+Edit, Delete and Test work as they do for Telegram. The Test button
+fires a real request to the address and reports whether it succeeded,
+the response the endpoint returned, and how long it took.
 
-Click **Delete**. Shows *"Confirm? No / Yes, delete"* in place. Yes fires the delete; No cancels. Delete fires immediately.
+## 9. Common Tasks
 
-#### Test chat
+### 9.1 Set up a new Telegram integration
 
-Click **Test**. This calls the live probe to send an actual message to the chat — something like *"NexRisk test message — 2026-04-23T06:15:32Z"*. Recipients see it as a normal bot message.
+6.  Create a bot via Telegram’s BotFather and save its token; add the
+    bot to the chat(s) that should receive alerts (in supergroups it
+    typically needs to be an admin).
 
-Today the endpoint is 501; Test shows the blue stub banner. Once implemented, success shows *"Message sent · id 12345"* in green.
+7.  On this page, turn the Telegram channel on, paste the token, and
+    save the core Telegram settings; restart the core service.
 
-## Card 3: Webhooks
+8.  Add a chat: provide its identifier (or use the resolver), pick the
+    severities to route there, and add it.
 
-Two sub-blocks: core config, endpoint list with test probes.
+9.  Once the test button is switched on, use it to confirm a message
+    arrives; until then, generate a real low-severity alert to verify.
 
-### Core config
+### 9.2 Send High/Critical alerts to an on-call system
 
-Only one field today:
+10. In your on-call tool, create an incoming webhook address and note
+    any authorization it requires.
 
-#### `enabled` (toggle)
+11. On this page, turn the Webhooks channel on, save core, and restart.
 
-Per-channel switch for webhook delivery. Alerts still need `alerts.enabled` to be on as well.
+12. Add an endpoint with that address, the authorization value if
+    needed, High and Critical selected, and Enabled on.
 
-Click **Save core** to commit. Restart `nexrisk_service` to activate.
+### 9.3 Rotate the Telegram bot token
 
-### Endpoint list
+Obtain a new token (create a new bot, or revoke and reissue via
+BotFather), paste it into the token field, save core, and restart. Your
+chats do not need re-configuring — they are keyed to the chat
+identifier, which does not change with the bot.
 
-A list of HTTP endpoints that receive alert POSTs. For each endpoint:
+### 9.4 Pause all alerting quickly
 
-- **URL** — the full `https://` (or `http://`) URL the alert is POSTed to.
-- **Alert levels** — which severities this endpoint receives. Any subset.
-- **Enabled / disabled** — per-endpoint switch. Disabled endpoints are skipped on dispatch.
-- **Auth header presence** — indicated in small grey text if an `Authorization` header is configured.
-- **Internal id** — `wh_<12hex>`. Used for CRUD.
+Turn off the master switch on the core policy card, save, and restart —
+this halts every alert regardless of channel configuration. Turn it back
+on when ready.
 
-Click **+ Add endpoint** to open the add form inline.
+## 10. Saving and Restarting
 
-#### Add endpoint form
+- Each card saves independently — saving the Telegram core, for
+  instance, does not require touching the others, and adding a chat or
+  endpoint does not require saving that card’s core first.
 
-Four fields:
+- Any change here is a change to the platform configuration, so **treat
+  every save as needing a restart of the core service**. The yellow
+  restart banner appears and clears itself shortly after the restart.
 
-- **URL** — must start with `http://` or `https://`. Form validates the prefix client-side.
-- **Authorization header (optional)** — sent as the literal HTTP `Authorization` header value on each alert POST. Examples: `Bearer abc123`, `Basic dXNlcjpwYXNz`.
-- **Enabled** — toggle. When off on save, endpoint exists but is skipped on dispatch.
-- **Alert levels** — at least one required.
+## 11. Live Actions and Side Panels
 
-Click **Add endpoint**. CRUD fires immediately.
+Four live actions help you verify a setup:
 
-#### Edit / Delete endpoint
+- **Validate** (Telegram) — confirms a bot token is valid and shows the
+  bot’s name.
 
-Same patterns as Telegram chats. Edit opens an inline form; Delete shows a confirm step.
+- **Resolve** (Telegram) — turns a chat handle into its numeric
+  identifier.
 
-#### Test endpoint
+- **Test** (Telegram) — sends a real message to a chat.
 
-Click **Test**. This fires a real HTTP request to the endpoint's URL (with the configured Authorization header if present), carrying a test payload. The probe shows:
+- **Test** (webhook) — fires a real request to an endpoint and reports
+  the result.
 
-- **OK / Failed** — whether the HTTP request completed.
-- **HTTP status code** — e.g. `200`, `404`, `500`.
-- **Duration ms** — how long the request took.
-- **Message** — any text the endpoint returned (trimmed).
+The Recent changes panel lists the last few edits to these settings, and
+the Service panel shows the service’s status, uptime, last start,
+process, configuration and log details.
 
-Today the endpoint is 501; Test shows the blue stub banner. Once implemented, the test fires live and reports back.
+## 12. Troubleshooting
 
-## Alert levels — severity palette
+### 12.1 Nothing is arriving in Telegram
 
-Used throughout this page (in dropdowns, multi-select pickers, row badges):
+Walk the chain (Section 3): is the master switch on; is the Telegram
+channel on; is the bot token valid; does the target chat have an entry
+with at least one severity selected; has the core service been restarted
+since the last core change; and have you actually generated an alert
+that meets the minimum severity and is not being suppressed by the
+cooldown or the hourly cap? If all six are fine, check the core service
+logs via the Log viewer — delivery failures (wrong token, bot not in the
+chat) are logged there.
 
-- `LOW` — green badge. Informational.
-- `MEDIUM` — neutral grey badge. Worth noting but not urgent.
-- `HIGH` — amber badge. Needs attention.
-- `CRITICAL` — red badge. Immediate action required.
+### 12.2 A test did not arrive
 
-A multi-select picker shows all four as toggle pills. Click each to toggle. Selected pills are filled teal with dark text; unselected are transparent with white text.
+If a Telegram test does not appear in the chat, confirm the bot is a
+member of that chat and the token is valid (use Validate). If a webhook
+test reports a failure, check the endpoint address and the authorization
+value. You can also generate a real, low-severity alert to confirm
+end-to-end delivery.
 
-## Common tasks
+### 12.3 I saved a new bot token and now nothing works
 
-### Set up a brand-new Telegram integration
+Either the token is wrong (a paste typo or hidden whitespace) or you
+accidentally saved three asterisks. Re-enter the correct token, save,
+and restart.
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram. Save the token.
-2. Add the bot to the chat(s) you want alerts to go to. In supergroups, the bot must be an admin or the chat must have its privacy mode settings configured correctly.
-3. On this page, scroll to Telegram.
-4. Turn on the Telegram **enabled** toggle.
-5. Paste the token into **Bot token**.
-6. Click **Validate** (when wired). Confirm the bot username matches what you expect.
-7. Click **Save core**. Restart `nexrisk_service`.
-8. Back on this page, click **+ Add chat**.
-9. Either paste the numeric chat ID, or use the **Resolve** helper with the chat's @handle.
-10. Pick which alert levels route here.
-11. Click **Add chat**.
-12. Click **Test** on the new row to confirm a test message arrives in the chat.
+### 12.4 The chat identifier is not right
 
-### Add a second Telegram chat for lower-severity alerts
+Check the sign: private chats are positive, groups negative, and
+supergroups/channels start with "-100". The sign is the usual culprit;
+the resolver gets it right for you from a handle.
 
-1. Ensure Telegram is already enabled and bot token is configured.
-2. Click **+ Add chat**.
-3. Fill in a label like *"Dev Room"*.
-4. Enter or resolve the chat ID.
-5. Select only `LOW` and `MEDIUM` (leaving `HIGH` and `CRITICAL` for the main Ops Room).
-6. Click **Add chat**, then **Test**.
+### 12.5 The webhook is reached but my system does not react
 
-### Rotate the Telegram bot token
+Once the test is live, check its result: a success response means your
+system accepted the request, anything else means it rejected it. Confirm
+the authorization value is what your system expects, and that your
+system can parse the message format Taiga sends (that format is
+documented outside this page).
 
-1. Create a new bot (or revoke the current token via @BotFather and request a new one).
-2. Paste the new token into **Bot token**.
-3. Click **Save core**. Restart `nexrisk_service`.
+### 12.6 I added several destinations but not all appear
 
-No need to re-configure chats — they are keyed by chat_id, which doesn't change when you change the bot.
+Each add is independent and can fail on its own — look for a red error
+on the row at the time. Refresh the page to re-fetch the current list
+from the server; what you see is whatever the server actually holds.
 
-### Set up a webhook to your on-call system
-
-1. In your on-call system (PagerDuty, OpsGenie, your own Slack app, etc.), create an incoming webhook URL.
-2. Note any required `Authorization` header format.
-3. On this page, scroll to Webhooks.
-4. Turn on the Webhooks **enabled** toggle if it isn't already. Save core, restart.
-5. Click **+ Add endpoint**.
-6. Paste the URL. Add the `Authorization` header value if needed.
-7. Select alert levels — typically just `HIGH` and `CRITICAL` for on-call.
-8. Leave **Enabled** on.
-9. Click **Add endpoint**.
-10. Click **Test** on the row to fire a real test request. Check your on-call system received it.
-
-### Disable a chat without deleting it
-
-Click **Edit**, uncheck all alert levels, save. The chat record persists but receives nothing. Or, to restore it later, re-tick the levels.
-
-There is no per-chat enabled toggle on the Telegram side — the alert-levels multi-select is the effective enabler. Webhooks *do* have a dedicated per-endpoint enabled toggle.
-
-### Pause alerting temporarily
-
-Easiest: turn off `alerts.enabled` on the core policy card, save, restart. This halts all alerts regardless of channel config. Flip back on when ready.
-
-## What's not implemented yet
-
-### All four live probes return 501
-
-- `telegram.validate` — verifies a bot token
-- `telegram.resolve-chat` — resolves @handle to numeric chat id
-- `telegram.test` — sends a real Telegram message
-- `webhooks.test` — fires a real HTTP request to an endpoint
-
-Each one shows a blue "not implemented yet" banner when clicked. The rest of the CRUD (add / edit / delete chats and endpoints, core config saves) is fully live.
-
-When the backend wires these endpoints, no UI change is needed — the banners will automatically switch to success/failure presentation.
-
-### Recent changes
-
-Placeholder, awaiting audit-log integration.
-
-### Service status
-
-Standard pattern — Process / Status / Uptime / Last start shows `—` with "awaiting backend" pending a health endpoint.
-
-### Inferred bulk-PUT schemas
-
-The bulk-PUT body shapes for `/nexrisk/telegram` and `/nexrisk/webhooks` are not fully documented in the backend spec. The TypeScript types here cover the documented fields (enabled, bot_token, chats; enabled, endpoints) but fall through to `[key: string]: unknown` for anything else. Should the backend add fields to these subsections, they will round-trip safely but won't appear in the UI until the types and form are extended.
-
-## After you save
-
-Each card has its own save flow:
-
-- **Alerts core saved:** banner appears site-wide. Confirmation line below the card. Restart `nexrisk_service`.
-- **Telegram core saved:** same pattern. Chat CRUD does not need the core saved first — they're independent.
-- **Webhooks core saved:** same pattern. Endpoint CRUD does not need the core saved first.
-- **Chat CRUD succeeded:** no restart banner needed for individual chat adds/edits/deletes specifically — but in practice any change to `nexrisk_config.json` is a `restart:nexrisk` operation. The page doesn't distinguish; treat all saves as requiring a restart.
-
-## Troubleshooting
-
-### "I configured everything but nothing's arriving in Telegram"
-
-Work through the chain top to bottom:
-
-1. Is `alerts.enabled` (master switch) on?
-2. Is `telegram.enabled` (channel switch) on?
-3. Is the bot token valid? Click **Validate** when implemented, or rotate to a known-good token.
-4. Does the target chat have an entry on this page with at least one alert level selected?
-5. Has `nexrisk_service` been restarted since you last changed core config?
-6. Have you actually generated an alert that meets `min_severity` and isn't being suppressed by `cooldown_seconds` or `max_per_trader_per_hour`?
-
-If all six check out, look at `nexrisk_service` logs via the Log viewer page. Delivery failures (bot token wrong, bot not in chat, etc.) log on the server side.
-
-### "Test button is giving me a blue 'not implemented' banner"
-
-The live probe endpoint isn't wired yet. There's no way to test from the UI until the backend implements it. Until then, generate a real alert (low severity, cheap to trigger) and watch whether it arrives.
-
-### "I saved a new bot token and now nothing works"
-
-Either the token is wrong (typo on paste, whitespace, etc.) or you saved `"***"` by mistake. The masked placeholder is just display — if you typed `***` into the field and saved, you literally stored three asterisks. Re-paste the correct token and save again. Restart `nexrisk_service`.
-
-### "Chat ID isn't right"
-
-Telegram chat IDs for private chats are positive numbers. For groups, they are negative. For supergroups and channels, they start with `-100` followed by digits. Getting the sign wrong is the most common mistake. The **Resolve** helper (when live) takes a handle and does this correctly.
-
-### "Webhook is hitting but my system isn't triggering"
-
-Check the response in the Test output once live. HTTP status 200 means the endpoint accepted the request; anything else means your system rejected it. Check the Authorization header is what your system expects. Check the payload format matches what your system parses — the format is whatever `nexrisk_service` sends, which is documented elsewhere (outside this page).
-
-### "I added 5 chats but only 4 appear"
-
-Each add is independent and can fail independently. If one failed, look for a red error banner on that row during the add. Refresh the page to re-fetch the list from the backend — the list you see is whatever the backend currently has.
+*End of guide — Settings › Alerting. One of nine Settings operator
+guides.*

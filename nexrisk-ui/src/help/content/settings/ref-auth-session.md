@@ -1,156 +1,233 @@
 ---
 id: ref-auth-session
-title: "Auth & session"
+title: "Auth & Session — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
 route: /settings/auth
+order: 2
 source:
-  - "nexrisk-ui/src/pages/settings/help/02-auth-session.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, auth-session, operator-manual]
+  - "Settings_02_Auth_Session.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,auth,session,login,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
 
-## At a glance
+This page controls two things: how long a user stays logged in before
+the platform makes them sign in again, and what counts as an acceptable
+password. There are six settings, all numbers or short labels, and none
+of them is a secret. The values here shape the balance between security
+(frequent re-authentication) and convenience (staying logged in through
+a session).
 
-This page controls how Taiga issues and expires authentication tokens, and what rules it enforces on user passwords. Six fields in total, all of them numbers or short strings, no secrets. Changes here shape how long users stay logged in, how often they re-authenticate, and what counts as an acceptable password.
+You reach it at **Settings › Auth & session**.
 
-Settings page path: **Settings → Auth & session**
-Route: `/settings/auth`
+## 2. What This Page Controls
 
-## What this page controls
+This page manages the authentication section of the platform’s main
+configuration file (nexrisk_config.json). Every setting here is read by
+the core platform service **once, at startup**, and held in memory while
+it runs — which is the single most important operational fact about this
+page, and the source of most of its surprises (Section 4).
 
-This page reads and writes the `auth` sub-object inside `config/nexrisk_config.json`. It is one of several subsections that live in the main NexRisk config file.
+|                                                                                                                                                                                                                                                                                                                                                                                         |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Which service to restart: the NexRisk service (the core).** These settings live in the core platform service, so a change applies only after the core service is restarted. If you happen to be doing a full platform restart, bring the price and LP feed services up first and the core service last; for an auth-only change, restarting the core service is all that is required. |
 
-All changes on this page require a restart of the **`nexrisk_service`** to take effect. Token TTLs are read at service startup and held in memory — changing the values while the service is running has no effect until restart.
+## 3. How Login and Sessions Work
 
-## Who can access it
+To set the lifetimes sensibly, it helps to understand the two
+credentials a logged-in session actually uses. When a user signs in —
+username, password, and a one-time code from their authenticator app
+(TOTP) — the platform hands the browser two things:
 
-Visible to users with one of:
+| **Credential** | **What it is**                                                                                                                                                | **Lifetime**     |
+|----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------|
+| Access token   | The short-lived pass the browser presents on every request. It proves the user is logged in.                                                                  | Short (minutes). |
+| Refresh token  | A longer-lived credential the browser keeps quietly. When the access token expires, the browser uses the refresh token to obtain a new one — no login prompt. | Long (hours).    |
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+So a session runs like this: the access token expires often and is
+silently renewed using the refresh token, over and over, invisibly to
+the user. The user only has to log in again — typing password and
+one-time code — when the **refresh token** itself expires. That is why
+the refresh-token lifetime is effectively "how long a user stays logged
+in", and the access-token lifetime is really "how often the session
+renews behind the scenes".
 
-## Before you change anything
+|                                                                                                                                                                                                                                                     |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **The practical upshot.** Shortening the access-token lifetime is invisible to users (it just renews more often) as long as the refresh token is still valid. Shortening the refresh-token lifetime is what actually forces people to log in again. |
 
-- **Changing token TTLs does not invalidate existing tokens.** If an access token was issued with a 60-minute TTL, it remains valid for 60 minutes even if you shorten the configured TTL to 5 minutes. The new TTL applies only to tokens issued *after* the next restart.
-- **Password policy changes don't retroactively apply to stored passwords.** If you raise `password_min_length` from 8 to 12, existing 9-character passwords continue to work — the policy only enforces on new passwords (sign-up, password reset, password change).
-- **Shortening the access token TTL mid-session is transparent to users** as long as refresh tokens still work. Users get a new access token automatically when their old one expires. They only notice anything if the refresh token has also expired.
+**4. The Golden Rule: Changing a Lifetime Does Not End Existing
+Sessions**
 
-## Field reference
+A lifetime is stamped onto a token when the token is **issued**, and it
+keeps that stamp for its whole life. Changing a setting here does
+**not** reach back and re-stamp tokens that are already in circulation.
 
-### `totp_issuer`
+- If an access token was issued with a 60-minute life, it stays valid
+  for its full 60 minutes even if you shorten the setting to 5 minutes.
+  The new, shorter life applies only to tokens issued **after the next
+  restart**.
 
-The label that appears in users' TOTP authenticator apps (Google Authenticator, Authy, 1Password, etc.) when they scan the enrolment QR code. Example: `NexRisk` or `Taiga Production`.
+- The same applies to passwords: raising the minimum length does **not**
+  invalidate existing passwords. The new rule is enforced only when a
+  password is next created — at sign-up, reset, or change.
 
-Purely cosmetic, but worth getting right — users see this in their authenticator app alongside their account name. Keep it short, human-readable, and distinguishable from other TOTP-protected services they use.
+|                                                                                                                                                                                                                                                                                                                                                       |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **So "shorten the lifetime and everyone logs out now" is not how it works.** Existing sessions run out their original lifetimes; the new values take over gradually as old tokens expire and new ones are issued after the restart. If you need to end all sessions immediately, that is a separate administrative action, not a change on this page. |
 
-### `access_token_ttl_seconds`
+## 5. The Settings
 
-How long an **access token** remains valid, in seconds. Access tokens are what the browser sends on every API request; when one expires, the browser uses a refresh token to get a new access token without prompting the user to log in again.
+Six settings. The four lifetimes are entered in seconds; the form shows
+the human equivalent next to the field as you type (for example, 28800
+shows as "8 h").
 
-- Short TTL (5-15 minutes, 300-900 seconds): better security if a token is stolen — shorter window of misuse. Costs: more refresh traffic.
-- Long TTL (1 hour, 3600 seconds): fewer refreshes, but stolen tokens remain useful for longer.
+### 5.1 TOTP issuer
 
-Typical value: `900` (15 minutes).
+The label users see in their authenticator app (the app that generates
+their one-time codes) next to their account, set when they first enrol
+by scanning the code. For example, "NexRisk" or "Taiga Production". It
+is cosmetic, but worth getting right — keep it short, readable, and
+distinct from the other services a user protects with the same app, so
+they can tell them apart.
 
-### `refresh_token_ttl_seconds`
+### 5.2 Access token lifetime
 
-How long a **refresh token** remains valid, in seconds. Refresh tokens are the longer-lived credential the browser holds onto so the user doesn't have to log in every time an access token expires.
+How long the short-lived access pass stays valid before the browser
+silently renews it. This is a pure security-versus-chatter trade-off,
+and it is invisible to users either way:
 
-When a refresh token expires, the user is forced to log in again — typing their username, password, and TOTP code.
+- **Short (5–15 minutes)** — better security: if a token is ever stolen,
+  the window it can be misused in is small. Costs a little more renewal
+  traffic.
 
-- Short TTL (1-4 hours): more frequent re-login. Sensible in high-security environments.
-- Long TTL (8-24 hours): users log in once per shift. More convenient, slightly more exposure.
+- **Long (1 hour)** — fewer renewals, but a stolen token stays useful
+  longer.
 
-Typical value: `28800` (8 hours — one trading session).
+A typical value is 15 minutes. Lengthen it if renewals are showing up as
+noticeable pauses on slow networks.
 
-The form displays the human equivalent next to the field as you type: `28800` becomes *"8 h"*.
+### 5.3 Refresh token lifetime
 
-### `invite_token_ttl_seconds`
+How long a user stays logged in before the platform makes them sign in
+again from scratch. When this expires, the user must re-enter username,
+password, and a one-time code. This is the setting that actually governs
+session length:
 
-How long a fresh user-invite token remains valid, in seconds. When you invite a new user, they receive an email with a one-time link; if they don't click it within this window, the invitation expires and you must re-invite them.
+- **Short (1–4 hours)** — more frequent re-login; sensible in
+  high-security environments.
 
-Typical value: `86400` (24 hours).
+- **Long (8–24 hours)** — users log in once per shift; more convenient,
+  slightly more exposure.
 
-### `password_min_length`
+A typical value is 8 hours — one trading session.
 
-Minimum number of characters a new password must have. Enforced on sign-up, password reset, and password change — but not retroactively against existing passwords.
+### 5.4 Invite link lifetime
 
-Typical value: `10-12`.
+How long a new-user invitation stays usable. When you invite someone,
+they receive a one-time link; if they do not use it within this window,
+the invitation expires and you must send a fresh one. A typical value is
+24 hours.
 
-Nothing on this page enforces complexity rules beyond length (no "must have a digit", no character class requirements). Length alone is the industry consensus for strong-enough policy when combined with TOTP.
+### 5.5 Minimum password length
 
-### `password_reset_ttl_seconds`
+The fewest characters a new password may have, enforced at sign-up,
+reset, and change (not retroactively — Section 4). A typical value is
+10–12. Note that length is the only rule here — there are deliberately
+no "must contain a digit" or character-class requirements. Length alone,
+combined with the mandatory one-time code at login, is the accepted
+basis for a strong-enough policy.
 
-How long a password-reset link remains valid, in seconds. When a user clicks "Forgot password" and requests a reset, they get an email with a one-time link; if they don't use it within this window, the link expires and they have to request another.
+### 5.6 Password-reset link lifetime
 
-Typical value: `3600` (1 hour).
+How long a "forgot password" reset link stays usable. A user who
+requests a reset receives a one-time link; if it is not used within this
+window, it expires and they must request another. A typical value is 1
+hour — short, because a reset link is a powerful, sensitive credential.
 
-## Common tasks
+## 6. Common Tasks
 
-### Force everyone to log in again at the start of each trading session
+### 6.1 Make everyone log in again each trading session
 
-Set `refresh_token_ttl_seconds` to slightly less than the gap between sessions. If your desk opens at 07:00 and closes at 17:00, and you want everyone to re-auth in the morning:
+Set the refresh-token lifetime a little shorter than the gap between
+sessions, so it always expires overnight. For a desk that runs
+07:00–17:00, a 10-hour refresh lifetime means anyone still logged in at
+day’s end is signed out and must re-authenticate next morning. Save and
+restart the core service.
 
-1. Set `refresh_token_ttl_seconds` to `36000` (10 hours).
-2. Save and restart `nexrisk_service`.
+### 6.2 Reduce session chatter on slow networks
 
-Anyone still logged in at the end of that period will be logged out when their refresh token expires and forced to re-authenticate.
+If access-token renewals are causing visible pauses, lengthen the
+access-token lifetime. Going from 15 minutes to 1 hour cuts renewal
+frequency to a quarter, with no change to how long users stay logged in.
 
-### Make sessions less chatty on slow networks
+### 6.3 Tighten password policy without disrupting anyone
 
-If access-token refreshes are showing up as noticeable pauses in the UI, lengthen `access_token_ttl_seconds`. Going from `900` (15 min) to `3600` (1 hour) reduces refresh-request frequency by a factor of four.
+Raise the minimum length, save, and restart. Existing users keep their
+current passwords and are undisturbed; the new rule applies the next
+time each one sets a password. Forcing everyone onto the new policy at
+once (expiring all passwords) is a separate administrative action, not
+owned by this page.
 
-### Tighten password policy without surprising existing users
+## 7. Saving and Restarting
 
-1. Raise `password_min_length`.
-2. Save and restart.
-3. Existing users keep their current passwords. Next time each one changes their password (or is forced to reset it), the new policy applies.
+- When you save, a **yellow restart banner** appears across the Settings
+  area and stays until the core service is restarted; the form confirms
+  with a short "restart to apply" message.
 
-If you need to force everyone onto the new policy, that's a separate administrative action — expire all passwords and require resets. That flow isn't owned by this page.
+- No current session is disturbed by saving — the values are only read
+  when the core service starts.
 
-## What's not implemented yet
+- After the restart, new tokens use the new lifetimes; tokens already in
+  circulation keep their original lifetimes until they expire (Section
+  4). The banner clears itself within about half a minute.
 
-### Policy preview
+## 8. The Side Panels
 
-The right-hand "Policy preview" panel shows a summary of what the current settings would mean in human terms (*"Access tokens expire after 15 min. Refresh tokens last 8 hours…"*). It is live — it updates as you edit. This is the panel that would otherwise show "Live status"; auth has no runtime probe to show, so the preview takes its place.
+- **Policy preview** — updates as you edit, restating the current
+  settings in plain terms ("Access tokens expire after 15 min. Refresh
+  tokens last 8 hours…"). Use it to sanity-check a change before saving.
 
-### Recent changes
+- **Recent changes** — lists the last few edits to these settings, with
+  attribution.
 
-Placeholder until the audit-log integration lands. Will eventually show the last five edits to the `auth` subsection with attribution.
+- **Service panel** — shows the service’s Status, Uptime and Last start,
+  along with its Process name, Configuration file, and Log directory.
 
-### Service status
+## 9. Troubleshooting
 
-The **Service** panel shows `—` for Status / Uptime / Last start with "awaiting backend" notes — same pattern as every other sub-page. Process name, config file path, and log directory are known from configuration.
+### 9.1 I shortened a lifetime but sessions did not end
 
-## After you save
+Expected. Either the core service has not been restarted, or the
+in-flight tokens have not expired yet. The new lifetime applies only to
+tokens issued after the restart; already-issued tokens run out the
+lifetime they were born with (Section 4).
 
-- A yellow **restart banner** appears site-wide. It stays until `nexrisk_service` is restarted.
-- The confirmation line below the form reads something like `Saved. Restart nexrisk_service to apply.`
-- No user's current session is affected. TTLs are read at service startup.
-- After the restart, new tokens use the new TTLs. Tokens already in circulation continue to use the old TTLs until they expire naturally.
+### 9.2 Users are being logged out constantly
 
-## Troubleshooting
+Check the two lifetimes. If either is set very small (seconds, or a few
+minutes), the browser renews constantly and soon hits the refresh-token
+expiry, forcing a re-login. Sane starting values are about 15 minutes
+for access and 8 hours for refresh.
 
-### "I shortened the TTL but sessions didn't end"
+### 9.3 I set a lifetime of zero by accident
 
-The service hasn't been restarted, or the in-flight tokens haven't expired yet. The new TTL applies only to tokens issued after the restart; already-issued tokens respect the TTL they were born with.
+Avoid this. The core service treats zero or negative lifetimes as a
+misconfiguration and may refuse to start, or fall back to an internal
+default. Set a positive number and restart.
 
-### "Users are getting logged out constantly"
+### 9.4 Can I set an unlimited lifetime?
 
-Check `access_token_ttl_seconds` and `refresh_token_ttl_seconds`. If one or both are set to a very small number (seconds or low double-digit minutes), the client will refresh constantly and eventually hit the refresh-token expiry. Typical sane values: `900` access, `28800` refresh.
+No — and you should not want to. A token that never expires is a token
+that is never rotated, which is a security liability rather than a
+convenience. If you want near-unlimited convenience, use a long lifetime
+(many hours, or a full day), not an unlimited one.
 
-### "I set a TTL of zero by accident"
-
-Don't do that. The service treats non-positive values as misconfigurations and may refuse to start, or may default silently to some internal value. Set a positive integer and restart.
-
-### "Can I set an unlimited TTL?"
-
-No, and you shouldn't. Tokens that never expire are tokens that are never rotated — which is a security liability, not a feature. Use a long TTL (many hours or a full day) if you want near-unlimited convenience.
+*End of guide — Settings › Auth & session. One of nine Settings operator
+guides.*

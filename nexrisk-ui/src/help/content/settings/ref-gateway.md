@@ -1,166 +1,356 @@
 ---
 id: ref-gateway
-title: "Price feed gateway"
+title: "Price Feed Gateway — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
 route: /settings/gateway
+order: 1
 source:
-  - "nexrisk-ui/src/pages/settings/help/01-gateway.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, gateway, operator-manual]
+  - "Settings_01_Price_Feed_Gateway.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,gateway,price-feed,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
 
-## At a glance
+The Price feed gateway is a standalone service that sits between your
+upstream MetaTrader 5 (MT5) broker server and the rest of Taiga. It logs
+in to MT5 as a dedicated market-data account, subscribes to real-time
+price ticks, and republishes those ticks on a network port to any
+terminals and services downstream that need a price feed. This page
+configures both sides of that job: how the gateway connects up to MT5,
+and how it exposes itself down to your network.
 
-The Price feed gateway is a small service that sits between your upstream MetaTrader 5 (MT5) broker server and the rest of Taiga. It receives real-time tick data from MT5 and republishes it to any downstream terminals or services that need price feeds. This page configures how the gateway connects to MT5 and how it exposes itself to your network.
+You reach it at **Settings › Price feed gateway**. It has seven
+settings, one of which is a password.
 
-Settings page path: **Settings → Price feed gateway**
-Route: `/settings/gateway`
+|                                                                                                                                                                                                                                                                                                                                                              |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **The gateway is a production dependency.** If your pricing runs through it, changing its settings and restarting the gateway service interrupts price delivery to every downstream consumer — including Taiga’s own core service — for the length of the restart. Always coordinate with the trading desk, and mind the service restart order in Section 3. |
 
-## What this page controls
+## 2. How the Gateway Fits Together
 
-This page reads and writes the `gateway` object inside `config/nexrisk_gateway.json` on the server. It is a single small JSON file dedicated to the price feed gateway and is separate from the main NexRisk config. There are seven fields in total, one of which is a secret.
+The data path is simple: **MT5 server → NexRisk Gateway service →
+downstream consumers**. The gateway holds one authenticated session
+upstream to MT5 and serves many connections downstream on its listen
+port. It runs as its own process with its own configuration, so it can
+be restarted on its own — but the platform depends on it, so the restart
+is not without consequence.
 
-Changes on this page take effect only after the **`nexrisk_gateway`** process is restarted. The `nexrisk_service` is not affected — gateway is its own independent binary.
+There are three moving parts around this page, and it is worth being
+precise about which is which, because only one of them is the service
+you restart here:
 
-## Who can access it
+| **Component**           | **What it is**                                                                                                                                | **Restarted here?**                                        |
+|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------|
+| Upstream MT5 server     | Your broker’s (or infrastructure provider’s) MT5 server — the source of prices, and where symbols are defined. The gateway is a client of it. | No. External to Taiga; never restarted from here.          |
+| NexRisk Gateway service | The standalone Taiga service this page configures — the MT5 client and price republisher, running as its own process.                         | Yes. This is the service you restart to apply changes.     |
+| NexRisk service (core)  | The core Taiga service (risk, dashboards, sessions). It is a downstream consumer of the gateway’s prices.                                     | Not by this page — but see the restart order in Section 3. |
 
-This page is visible to users with one of the following roles:
+## 3. The Three Services and the Restart Order
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+Taiga runs as three cooperating services. This page configures one of
+them, but a gateway restart has to be planned with the other two in
+mind, because they depend on each other in a fixed order.
 
-Other roles will not see a Settings entry in the navigation.
+| **Service**                | **Role**                                                             |
+|----------------------------|----------------------------------------------------------------------|
+| NexRisk FIX Bridge service | Liquidity-provider connectivity — the FIX sessions to your LPs.      |
+| NexRisk Gateway service    | The price feed — MT5 prices republished to the platform (this page). |
+| NexRisk service (core)     | Risk, dashboards and user sessions — it consumes both of the above.  |
 
-## Before you change anything
+The core service **subscribes to the two feeds at startup**. If the core
+starts before the FIX bridge and the gateway are up and running, its
+subscriptions attach to nothing — it will sit there without prices or LP
+connectivity until it is restarted after the feeds are ready. The feeds
+must therefore be fully up before the core.
 
-- **The gateway is a production dependency.** If your pricing feeds go through it, changing its settings and restarting it will interrupt price delivery to every downstream consumer for the duration of the restart. Coordinate with your trading desk before proceeding.
-- **Have the MT5 server reachable first.** If you change `mt5_server` to an address the host cannot resolve or reach, the gateway will restart, fail to connect, and stay offline until you correct it.
-- **Know your MT5 gateway account.** The `gateway_login` and `gateway_password` fields are the credentials for a dedicated MT5 account the gateway uses to pull prices. This is **not** a trader's account — it should be a service account with read-only access to the instruments you care about.
+### 3.1 The order to bring services up
 
-## Field reference
+1.  **NexRisk FIX Bridge service** — start first, and wait until it is
+    fully up (logged on and connected).
 
-### `mt5_server`
+2.  **NexRisk Gateway service** — start next; confirm it has connected
+    to MT5 and is serving prices.
 
-The address of your upstream MT5 server, in `host:port` format. Example: `175.110.113.174:15024`.
+3.  **NexRisk service (core)** — start last; it now attaches to the two
+    feeds that are ready and waiting.
 
-This is the server the gateway connects to as a client — it is provided by your broker or by whoever operates your MT5 infrastructure. The gateway resolves this host on startup; if the name cannot be resolved or the TCP connection fails, the gateway will not start serving prices.
+|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **What this means when you change gateway settings.** Restarting the gateway cuts the price feed to the core service. If the core does not re-establish its price subscription on its own once the gateway is back, restart the core service after the gateway — always the gateway first, the core last. For a full platform restart, follow the order above: FIX bridge, then gateway, then core. Coordinate the sequence with the desk so nobody is watching a dashboard that has quietly lost its feed. |
 
-### `gateway_login`
+## 4. Symbols, LP Mapping, and the MT5 Administrator’s Scope
 
-The MT5 account number (numeric) the gateway logs in as. This account must exist on the `mt5_server` above, must have permission to subscribe to market data, and ideally has no trading permissions.
+The gateway is the pipe. What flows through it — which symbols exist and
+what they are called — is defined upstream on the MT5 server, not on
+this page and mostly not in Taiga at all. Two symbol matters sit outside
+this page and are worth calling out, because when a symbol is missing
+the cause is almost always here rather than in a gateway setting.
 
-### `gateway_password`
+### 4.1 The MT5-side symbol set (out of Taiga’s scope)
 
-**Secret field.** The password for the `gateway_login` account.
+Which symbols exist on the server, how they are named, and whether the
+gateway’s market-data account is entitled to and subscribed to them, is
+all configured **on the MT5 server** — the symbol list, the account’s
+market-data permissions, and the symbol subscription. This is the **MT5
+administrator’s responsibility, not Taiga’s**. Creating or adjusting
+that symbol mapping happens on the MT5 side, outside this application.
 
-The input on this page always starts empty, with the placeholder *"Leave blank to keep current value"*. The server never returns the real password — it returns `"***"` — and the form never sends that masked value back. The rules are:
+|                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Coordinate the symbol set with your MT5 administrator.** Setting up which symbols the gateway account can see, and their MT5 names, falls outside the scope of Taiga. Agree the symbol set and naming with your MT5 administrator before relying on the feed. If a symbol you expect never appears, the fix is on the MT5 server — an entitlement or subscription that the MT5 administrator must add — not a change on this page. |
 
-- Leave the field blank to keep the current password unchanged.
-- Type a new password to replace it.
-- Never paste `"***"` (three asterisks) into the field — doing so would literally save the string `"***"` as the password.
+**4.2 LP-to-MT5 symbol mapping (elsewhere in Taiga, and dependent on the
+above)**
 
-Passwords are stored encrypted on the server using the encryption key you can rotate on the Secret rotation page.
+For pricing and hedging to line up end to end, the symbol names your
+**liquidity providers** use must correspond to the **MT5** symbol names
+the gateway delivers. That LP-to-MT5 correspondence is maintained
+elsewhere in Taiga (on the Symbol mapping page), and it can only be
+completed once the MT5 symbols exist and are named consistently. In
+other words, the MT5-side naming (Section 4.1, agreed with your MT5
+administrator) has to be settled first; the LP-to-MT5 mapping in Taiga
+is built on top of it. The gateway page itself does not map symbols — it
+simply delivers whatever the MT5 account is subscribed to.
 
-### `gateway_listen`
+## 5. What This Page Controls
 
-The address and port the gateway listens on for downstream consumers, in `host:port` format. Example: `0.0.0.0:16390`.
+This page reads and writes the gateway’s own configuration file on the
+server (named nexrisk_gateway.json), dedicated to the gateway and kept
+separate from the platform’s main configuration. The gateway loads this
+file once, at startup — which is why every change here is inert until
+the gateway service restarts and re-reads it. The service to restart is
+the **NexRisk Gateway service** (Section 3): not the upstream MT5
+server, and not, by this change alone, the core service.
 
-Use `0.0.0.0` to listen on all network interfaces on the host. Use `127.0.0.1` to restrict connections to the same machine. The port must be free — if something else is already bound to it, the gateway will fail to start with a bind error.
+## 6. Before You Change Anything
 
-### `gateway_name`
+- **Have the MT5 server reachable first.** If you point the gateway at
+  an address the host cannot resolve or reach, the service will restart,
+  fail to connect, and stay offline until you correct it. Verify basic
+  network reachability to the address and port before saving.
 
-A human-readable name for this gateway instance, shown in logs and to MT5 terminals that connect. Example: `NexRisk Price Feed`. Purely cosmetic — it does not affect behaviour.
+- **Use a dedicated market-data account.** The login and password should
+  belong to a service account on the MT5 server with permission to
+  subscribe to market data and, ideally, no trading permission — not a
+  trader’s account.
 
-### `timezone_minutes`
+- **Confirm the symbol set with the MT5 administrator.** Make sure the
+  account is entitled to the symbols you need (Section 4) — the gateway
+  can only serve what the account can see.
 
-The gateway's configured timezone, expressed as an offset from UTC in **minutes**. `0` means UTC. `60` means UTC+01:00. `-300` means UTC-05:00 (US Eastern Standard Time).
+- **Plan the restart window and order.** Nothing applies until you
+  restart the gateway service, that restart stops prices, and the core
+  service may need to follow (Section 3). Pick a moment the desk is
+  expecting.
 
-This affects how timestamps in gateway-generated log lines and tick records are presented. It does not alter MT5's own server time — MT5 publishes whatever time its server uses, and the gateway passes it through.
+## 7. The Settings
 
-### `log_path`
+The seven settings, in the order they appear on the page.
 
-Directory (relative to the gateway working directory, or absolute) where gateway log files are written. Default is `logs`. The gateway rotates log files daily.
+### 7.1 MT5 server
 
-## Common tasks
+The address of your upstream MT5 server, given as an address and port
+(for example, 175.110.113.174:15024). This is the endpoint the gateway
+connects to as a client, supplied by your broker or MT5 infrastructure
+provider. The gateway resolves and connects to this address on startup;
+if the host cannot be resolved or the connection is refused, the gateway
+will not begin serving prices, and it will keep retrying while logging
+the failure.
 
-### Change the upstream MT5 server
+### 7.2 Gateway login
 
-1. Confirm the new server is reachable from your host (a simple TCP connectivity test to `host:port` is enough).
-2. Confirm the `gateway_login` account exists on the new server and has market data permission.
-3. Update `mt5_server` on this page.
-4. If the password is different on the new server, update `gateway_password` at the same time. Otherwise leave it blank.
-5. Click **Save**. The banner at the top of the page will show a pending restart.
-6. Restart the `nexrisk_gateway` process. Prices will come back online within a few seconds of startup.
+The numeric MT5 account the gateway logs in as. This account must exist
+on the MT5 server above, must be entitled to subscribe to the symbols
+you care about, and ideally carries no trading rights. If the account
+lacks market-data entitlement for a symbol, the gateway connects but no
+ticks arrive for that symbol — an entitlement matter for the MT5
+administrator (Section 4).
 
-### Change the MT5 password
+### 7.3 Gateway password
 
-1. Clear the password field (it already starts empty on load — you don't have to delete `"***"`).
-2. Type the new password.
-3. Click **Save**.
-4. Restart the gateway. If the new password is wrong, the gateway will log an authentication failure and stay offline — you won't have broken anything, but you'll need to correct it before prices flow again.
+**This is a password field, and it behaves specially for security.** It
+always loads empty, showing the prompt "Leave blank to keep current
+value". The server never returns the stored password — it returns three
+asterisks — and the page never sends those asterisks back. The rules
+are:
 
-### Move the listen port
+- Leave the field **blank** to keep the current password unchanged.
 
-1. Confirm no other service is using the target port.
-2. Confirm all downstream consumers (terminals, services) can be updated to the new port at roughly the same time as the restart.
-3. Update `gateway_listen`.
-4. Save and restart.
-5. Reconfigure every downstream consumer to connect to the new port.
+- Type a **new password** to replace it.
 
-## What's not implemented yet
+- **Never type three asterisks yourself** — that literally stores
+  "\*\*\*" as the password, and the gateway then fails MT5
+  authentication on the next restart.
 
-### Live status
+The password is held encrypted at rest on the server, using the
+encryption key you can change on the Secret rotation page. It is
+decrypted only in memory, at startup, to log in to MT5.
 
-The page shows a "Live status" panel in the right-hand column. Today this panel displays dashes because the backend endpoint (`GET /settings/gateway/status`) returns **501 Not Implemented**. When the backend is wired, this panel will show:
+### 7.4 Listen address
 
-- Upstream MT5 connection state (connected / disconnected / authenticating)
-- Number of downstream terminals connected
-- Last tick timestamp received
-- Rolling tick rate (ticks per second)
+The address and port the gateway binds to for downstream consumers (for
+example, 0.0.0.0:16390). Binding to 0.0.0.0 accepts connections on every
+network interface on the host; binding to 127.0.0.1 restricts
+connections to the same machine only. The chosen port must be free at
+startup — if another process already holds it, the gateway cannot bind
+and will not start. Remember to allow the port through any host or
+network firewall in front of your downstream consumers.
 
-You'll see a `GET /gateway/status — 501 stub` badge in the panel header until this lands. No action needed on your part — when the endpoint returns 200, the panel will fill in automatically.
+### 7.5 Gateway name
 
-### Recent changes
+A human-readable label for this gateway instance (for example, "NexRisk
+Price Feed"), shown in the gateway’s logs and to MT5 terminals that
+connect. Cosmetic — it does not affect behaviour, and is useful mainly
+for telling instances apart if you run more than one.
 
-The "Recent changes" panel is a placeholder. Once the audit-log integration lands in a later ticket, it will show the last five edits to `nexrisk_gateway.json` — who made them, when, and what changed.
+### 7.6 Timezone
 
-### Service status
+The gateway’s timezone, as an offset from UTC in minutes: 0 is UTC, 60
+is UTC+1, and −300 is UTC−5 (US Eastern Standard Time). It affects only
+how timestamps are presented in the gateway’s own log lines and tick
+records; it does not alter MT5’s server time, which is passed through
+unchanged.
 
-The "Service" panel at the bottom right shows `—` for **Status**, **Uptime**, and **Last start** with an "awaiting backend" note. These three fields need a backend health endpoint that doesn't exist yet. **Process**, **Config file**, and **Log dir** are filled in because they're known from configuration, not from runtime probing.
+### 7.7 Log directory
 
-## After you save
+Where the gateway writes its log files — a relative folder in the
+gateway’s working directory (default "logs") or an absolute path. Logs
+rotate daily. This is the first place to look when the gateway will not
+start or reconnect (Section 10).
 
-- A yellow **restart banner** appears at the top of the Settings hub and on this sub-page. It stays visible on every Settings page you visit until the gateway is restarted.
-- The bottom of the form confirms the save with a message like `Saved. Restart nexrisk_gateway to apply.`
-- No downstream consumers notice anything until you actually restart. The new values sit in the JSON file waiting.
-- After restart, the banner clears automatically within the next 30-second hub refresh cycle.
+## 8. Common Tasks
 
-## Troubleshooting
+### 8.1 Change the upstream MT5 server
 
-### "Gateway won't start after I saved"
+1.  Confirm the new server is reachable from the host (address and
+    port).
 
-Check the gateway's log file (path shown in the **Service** panel as `Log dir`). Common causes:
+2.  Confirm the gateway login exists on the new server and is entitled
+    to the symbols you need (with the MT5 administrator).
 
-- **`mt5_server` unreachable.** Host doesn't resolve, or the port is blocked. Fix the address or firewall rule and restart.
-- **Authentication failure.** Wrong `gateway_login` / `gateway_password`. Re-save with corrected credentials and restart.
-- **Bind error on `gateway_listen`.** Another process is using the port. Either stop the other process or pick a different port.
+3.  Update the MT5 server address; if the password differs on the new
+    server, enter it too, otherwise leave it blank.
 
-### "I can't tell what password is saved"
+4.  Save — the restart banner appears — then restart the **NexRisk
+    Gateway service**, and the core service afterwards if it does not
+    re-subscribe on its own (Section 3).
 
-You can't — and that's intentional. The server returns `"***"` on read, and the UI never pre-fills a secret. If you're unsure whether the current password is correct, the fastest test is to restart the gateway and check whether it connects successfully. If it doesn't, update the password.
+### 8.2 Change the MT5 password
 
-### "I typed `"***"` by accident"
+5.  Leave the password field as it loads (empty) and type the new
+    password.
 
-Clear the password field (it starts empty on the next page load — or just reload the page, which discards unsaved input) and re-enter the correct password before saving again. If you already saved `"***"` as the password, the gateway will fail to authenticate with MT5 on next restart, and you'll need to save the real password again.
+6.  Save, then restart the NexRisk Gateway service. If the new password
+    is wrong, the gateway logs an authentication failure and stays
+    offline — nothing is broken, but correct it before prices flow.
 
-### "My changes didn't take effect"
+### 8.3 Move the listen port
 
-The save was persisted but the gateway has not been restarted. The file on disk is up to date; the running process is still using the values it loaded at startup. Restart `nexrisk_gateway`.
+7.  Confirm no other process is using the target port, and that every
+    downstream consumer can be moved to it at about the same time.
+
+8.  Update the listen address, save, and restart the NexRisk Gateway
+    service.
+
+9.  Point every downstream consumer at the new port, update firewall
+    rules, and restart the core service if it consumed the old port
+    directly.
+
+## 9. Saving and Restarting
+
+Saving and applying are two separate steps, by design — which is what
+makes changes safe to stage and easy to undo.
+
+- When you save, the values are written to the gateway’s configuration
+  file, and a **yellow restart banner** appears across the Settings area
+  and stays on every Settings page until the gateway service is
+  restarted. The form also confirms with a short "restart to apply"
+  message.
+
+- Until you restart the gateway service, **nothing downstream changes**
+  — the new values sit in the file while the running gateway keeps using
+  what it loaded at its last startup.
+
+- After the restart, the banner clears by itself within about half a
+  minute, when the Settings area next re-checks the server for pending
+  changes.
+
+|                                                                                                                                                                                                                                                                                                              |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Staged changes are reversible until you restart.** Save a bad value and notice before restarting? Correct it and save again — no restart means no effect, so the running gateway never saw it. This also lets you stage several changes and apply them in one planned restart, in the right service order. |
+
+## 10. Live Status and Service Panels
+
+The right-hand column carries three panels:
+
+- **Live status** — shows the upstream MT5 connection state, the number
+  of downstream terminals connected, the last tick received, and the
+  rolling tick rate.
+
+- **Recent changes** — lists the last few edits to the gateway
+  configuration: who changed what, and when.
+
+- **Service panel** — shows the service’s Status, Uptime and Last start,
+  along with its Process name, Configuration file, and Log directory.
+
+## 11. Troubleshooting
+
+### 11.1 The gateway will not start after I saved
+
+Open the gateway’s log file (location shown in the Service panel as the
+log directory). The usual causes:
+
+- **MT5 server unreachable** — the address does not resolve or the port
+  is blocked. Correct the address or firewall rule and restart the
+  gateway service.
+
+- **Authentication failure** — wrong gateway login or password. Re-save
+  the correct credentials and restart.
+
+- **Port already in use** — another process holds the listen port, so
+  the gateway cannot bind. Free the port or choose another, then
+  restart.
+
+### 11.2 I cannot tell which password is saved
+
+You cannot, by design — the server never returns a saved password and
+the page never pre-fills one. The quickest test is to restart the
+gateway service and see whether it authenticates and serves prices; if
+not, enter the password again.
+
+### 11.3 I entered three asterisks by accident
+
+Reload the page — that discards the unsaved input and the field loads
+empty again — then enter the correct password and save. If you had
+already saved the asterisks, the gateway fails MT5 authentication at the
+next restart; save the real password and restart again.
+
+### 11.4 A symbol is missing from the feed
+
+If the gateway is connected and serving other symbols but one is
+missing, the gateway login most likely lacks market-data entitlement or
+subscription for that symbol on the MT5 server, or the symbol is not set
+up upstream. This is an MT5-side matter for your MT5 administrator
+(Section 4), not a gateway setting.
+
+### 11.5 The dashboard lost prices after I restarted the gateway
+
+The core service consumes the gateway’s feed, and a gateway restart
+interrupts it. If the core does not re-establish its price subscription
+on its own, restart the core service after the gateway (Section 3).
+Always the gateway first, the core last.
+
+### 11.6 My changes did not take effect
+
+The save succeeded, but the gateway service has not been restarted. The
+configuration file holds the new values; the running gateway is still
+using what it loaded at startup. Restart the NexRisk Gateway service.
+
+*End of guide — Settings › Price feed gateway. One of nine Settings
+operator guides.*

@@ -1,178 +1,203 @@
 ---
 id: ref-trading-economics
-title: "Trading Economics"
+title: "Trading Economics — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
 route: /settings/trading-economics
+order: 3
 source:
-  - "nexrisk-ui/src/pages/settings/help/03-trading-economics.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, trading-economics, operator-manual]
+  - "Settings_03_Trading_Economics.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,trading-economics,calendar,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
+
+Trading Economics is an external data provider for the economic calendar
+— the schedule of market-moving events such as non-farm payrolls,
+central-bank decisions, and inflation releases. This page configures
+Taiga’s connection to that calendar feed: whether it is running, what
+credentials it uses, how much past and upcoming data it loads at
+startup, and how often it checks for updates.
+
+You reach it at **Settings › Trading Economics**. Six settings, one of
+which is a credential.
 
-## At a glance
+|                                                                                                                                                                                                                                                                                                       |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **This is a licensed, metered external feed.** Your Trading Economics subscription has an allowed request rate and a monthly quota. Frequent polling and wide data windows both consume quota faster — check your subscription tier with the provider before making the feed poll harder (Section 4). |
 
-Trading Economics is an upstream data provider for the economic calendar — the schedule of scheduled events that can move markets (NFP prints, central bank decisions, inflation releases, etc.). This page configures Taiga's connection to their calendar feed: whether it's running, what credentials to use, how much historical and upcoming data to hold on startup, and how often to poll.
+## 2. What This Page Controls
 
-Settings page path: **Settings → Trading Economics**
-Route: `/settings/trading-economics`
+This page manages the Trading Economics section of the platform’s main
+configuration file (nexrisk_config.json). Every setting is read by the
+core platform service, so a change here applies only after that service
+is restarted.
 
-## What this page controls
+|                                                                                                                                                                                                                                                                                                           |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Which service to restart: the NexRisk service (the core).** The feed runs inside the core platform service. Restart the core service to apply a change; the feed keeps running with the old settings until you do. In a full platform restart, bring the price and LP feeds up first and the core last. |
 
-This page reads and writes the `trading_economics` sub-object inside `config/nexrisk_config.json`. It is one of several subsections sharing the main NexRisk config file.
+## 3. How the Feed Gets Its Data
 
-All changes on this page require a restart of the **`nexrisk_service`** to take effect.
+The feed uses two channels together. A live stream delivers events in
+real time as the provider pushes them, and a periodic poll re-checks the
+calendar on a fixed cadence to catch edits and revisions the stream may
+not push. Together they keep Taiga’s calendar current. Downstream
+features that depend on the calendar — news-driven trader behaviour,
+pre-event risk flags — read from this data, so when the feed is off,
+they simply see an empty calendar.
 
-## Who can access it
+## 4. Before You Change Anything
 
-Visible to users with one of:
+- **Mind your quota.** Short poll intervals and wide preload windows
+  both increase how much of your monthly quota the feed uses. Confirm
+  your subscription tier before lowering the poll interval.
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+- **Know your key.** The credential is stored encrypted and never shown
+  back. If you are unsure the stored key is correct, the simplest test
+  is to enable the feed, restart, and watch the logs for authentication
+  errors.
 
-## Before you change anything
+- **Disabling is safe and non-destructive.** Turning the feed off stops
+  it consuming quota after the next restart, and preserves every setting
+  — you can switch it back on later without re-entering anything.
 
-- **The feed consumes API quota.** Your Trading Economics subscription has an allowed request rate and a monthly quota. Short poll intervals and wide preload windows both push quota consumption up. Check your subscription tier before lowering the poll interval.
-- **Know your API key.** The key is stored encrypted and never returned to the UI — if you're unsure whether the current key is correct, the simplest test is to enable the feed, restart, and watch the logs for authentication errors.
-- **The feed is safe to disable.** Turning it off stops polling immediately after restart; the stored config is preserved, so you can re-enable without re-entering anything. Downstream features that rely on calendar events (news-driven trader archetypes, pre-event risk flags) will have no new data during the off period.
+## 5. The Settings
 
-## Field reference
+### 5.1 Feed enabled
 
-### `enabled` (toggle)
+The master switch for the integration. When off, the feed stops polling
+and stops maintaining its live stream, no quota is consumed, and any
+downstream feature that filters on upcoming events sees an empty
+calendar. Every other setting is preserved, so you can turn it back on
+to resume exactly as before.
 
-Master switch for the Trading Economics integration. When **off**:
+### 5.2 API key
 
-- The service stops polling the REST endpoint for the calendar.
-- The service stops maintaining a WebSocket subscription for live events.
-- No API quota is consumed.
-- Any downstream features that filter on upcoming economic events will see an empty calendar.
-- All other settings on this page are preserved — flip it back on later to resume.
+**This is a credential field, handled specially for security.** It is
+the key Trading Economics issues you (typically two strings separated by
+a colon, such as 51056C49BC90461:C5F849F9F1F84A5) — you cannot generate
+it yourself. It loads empty with the prompt "Leave blank to keep current
+value"; the server returns three asterisks instead of the real key, and
+the page never sends those back. Leave it blank to keep the current key,
+type a new one to replace it, and never type three asterisks yourself.
+The key is stored encrypted.
 
-When **on**, behaviour depends on the remaining fields below.
+### 5.3 Stream address
 
-### `api_key`
+The address of the live event stream (for example,
+wss://stream.tradingeconomics.com/). It must be a secure streaming
+address; the page checks the address form and rejects anything malformed
+before saving. The provider’s production address is the secure one — an
+unencrypted address would only ever be for a rare test setup, where
+credentials would not travel encrypted.
 
-**Secret field.** Your Trading Economics API key.
+### 5.4 Poll interval
 
-Format is typically two hex strings separated by a colon — e.g. `51056C49BC90461:C5F849F9F1F84A5`. This is what Trading Economics issues you; it is not something you can generate locally.
+How often the feed re-checks the calendar for new or revised events,
+entered in seconds, with the human equivalent shown as you type (90
+shows as "every 90 s", 300 as "every 5 min"). A typical value is 90
+seconds. Short intervals (30–60 s) cost more quota; long intervals (5–15
+min) mean calendar edits take longer to appear in Taiga. This poll is
+separate from the live stream — it exists to catch the edits the stream
+might miss.
 
-The input always starts empty, with the placeholder *"Leave blank to keep current value"*. The server never returns the real key (it returns `"***"` on read), and the form never sends that masked value back. Rules:
+### 5.5 Preload — days back
 
-- Leave blank to keep the current key unchanged.
-- Type a new key to replace it.
-- Never paste `"***"` — you'd literally save three asterisks as your API key.
+How many days of past calendar events to load when the feed starts (for
+example, 2 loads the last two days). A typical value is 2 — enough
+recent history to relate events to current market moves, without
+spending startup time and quota pulling weeks of history. Zero is
+allowed.
 
-Stored encrypted.
+### 5.6 Preload — days ahead
 
-### `ws_endpoint`
+How many days of upcoming events to fetch at startup (for example, 14
+loads today through two weeks out). A typical value is 14 — enough
+lookahead for pre-event risk features to react in good time. Zero is
+allowed.
 
-The WebSocket URL for live event streaming. Example: `wss://stream.tradingeconomics.com/`.
+## 6. Common Tasks
 
-Must start with either `ws://` (unencrypted) or `wss://` (TLS). Trading Economics' production endpoint is `wss://`; `ws://` would only be used in rare test environments. The form validates the prefix client-side and rejects anything else before the save request is sent.
+### 6.1 Rotate the API key
 
-### `poll_interval_seconds`
+1.  Obtain the new key from your Trading Economics account.
 
-How often the service polls the REST calendar endpoint for new or updated events, in **seconds**. This is separate from the WebSocket — the poll catches edits and revisions that the stream might not push.
+2.  Type the new key into the (empty) key field and save.
 
-The form shows the human equivalent as you type: `90` displays as *"every 90 s"*, `300` as *"every 5 min"*, `3600` as *"every 1 h"*.
+3.  Restart the core service, and watch the logs for authentication
+    success — a wrong key shows as an authentication (unauthorised)
+    error from the provider.
 
-Typical value: `90` (90 seconds).
+### 6.2 Disable the feed temporarily (to save quota)
 
-Short intervals (30s, 60s) cost more API quota. Long intervals (5 min, 15 min) mean calendar edits take longer to show up in Taiga.
+4.  Turn the Feed enabled switch off, save, and restart the core
+    service.
 
-### `preload_days_back`
+5.  When ready to resume, turn it back on, save, and restart again. Your
+    key and settings are untouched throughout.
 
-Number of days of **historical** calendar events to pull on service startup. Example: `2` means "on boot, fetch events from the last 2 days."
+### 6.3 Lower quota use without disabling
 
-Typical value: `2`. You want enough history to correlate recent events against current market moves, but pulling weeks of history on every restart wastes startup time and quota.
+Increase the poll interval. Going from 60 to 300 seconds cuts poll
+traffic to a fifth; the trade-off is that provider-side calendar edits
+take up to five minutes to appear in Taiga.
 
-Positive integer, zero allowed.
+## 7. Saving and Restarting
 
-### `preload_days_ahead`
+- Saving raises the **yellow restart banner** across the Settings area
+  and confirms with a short "restart to apply" message.
 
-Number of days of **upcoming** calendar events to prefetch on service startup. Example: `14` means "on boot, fetch events from today through 14 days out."
+- The feed keeps running on its **old** settings until you restart the
+  core service; the new settings take effect on restart, and the banner
+  clears itself shortly after.
 
-Typical value: `14`. Two weeks is enough lookahead that pre-event risk features have time to react.
+## 8. The Side Panels
 
-Positive integer, zero allowed.
+- **Feed summary** — updates as you edit, restating your current draft
+  in plain terms ("every 90 s", "14 days ahead"). Use it to sanity-check
+  a change before saving.
 
-## Common tasks
+- **Live status** — shows the current connection state and when the last
+  event was received.
 
-### Rotate the API key
+- **Recent changes** — lists the last few edits to these settings, with
+  attribution.
 
-1. Obtain the new key from your Trading Economics account.
-2. Clear the `api_key` field (it starts empty on load anyway).
-3. Paste the new key.
-4. Click **Save**. The banner shows a pending restart.
-5. Restart `nexrisk_service`. Watch the logs for authentication success; if the new key is wrong, you'll see the Trading Economics API return 401 Unauthorized.
+- **Service panel** — shows the service’s Status, Uptime and Last start,
+  along with its Process name, Configuration file and Log directory.
 
-### Disable the feed temporarily (e.g. to save quota during a quiet week)
+## 9. Troubleshooting
 
-1. Flip the **Feed enabled** toggle off.
-2. Click **Save**.
-3. Restart `nexrisk_service`.
-4. When you're ready to resume, flip it back on, save, and restart again.
+### 9.1 No data after restart
 
-Disabling does not delete your API key or any other settings — the feed just goes quiet.
+Check the core service’s logs. Authentication (unauthorised) errors mean
+the key is wrong or expired — re-save a correct key. Connection or
+name-resolution timeouts mean the stream address is not reachable from
+the host — check the address and test connectivity. Rate-limit ("too
+many requests") errors mean the poll interval is too short for your tier
+— lengthen it.
 
-### Lower quota consumption without disabling
+### 9.2 The key looks right but authentication fails
 
-Increase `poll_interval_seconds`. Going from 60 to 300 reduces poll traffic by a factor of five. The trade-off is that calendar *edits* on the provider side take up to 5 minutes to propagate into Taiga.
+These keys have a specific shape: two alphanumeric strings separated by
+a colon — a key with no colon is wrong. Hidden whitespace also causes
+silent failures, so check for trailing spaces or line breaks when
+pasting from an email. And if you accidentally saved three asterisks,
+that is literally the stored key now — save the real one again.
 
-### Move to a different Trading Economics endpoint
+### 9.3 Events show up late, or history is missing
 
-Update `ws_endpoint` to the new URL. Make sure the prefix is `wss://` (or `ws://` if you have a specific reason). Save and restart.
+For faster updates, shorten the poll interval (mindful of quota); the
+live stream is usually faster than polling, so confirm the stream
+address is correct. For more lookahead, raise days-ahead; for more past
+events, raise days-back — remembering history is only loaded at startup,
+so a restart is needed for a new value to take effect.
 
-## What's not implemented yet
-
-### Feed summary panel
-
-The right-hand **Feed summary** panel *is* live — it updates as you edit the form and shows your current draft in human terms (*"every 90 s"*, *"14 days ahead"*, etc.). This exists so you can sanity-check your changes before hitting Save.
-
-### Live status / health
-
-There's no runtime probe for Trading Economics itself yet — the page doesn't show "currently connected" or "last event received at…". That is tracked on the backend but not exposed to this page in v1.
-
-### Recent changes
-
-Placeholder, awaiting audit-log integration.
-
-### Service status
-
-Process / Status / Uptime / Last start panel shows `—` with "awaiting backend" — same pattern as every other sub-page.
-
-## After you save
-
-- Yellow **restart banner** appears site-wide, cleared automatically after the next 30-second hub refresh following the restart.
-- Confirmation line: `Saved. Restart nexrisk_service to apply.`
-- The feed continues running with *old* settings until you restart. On restart, the new settings take effect.
-
-## Troubleshooting
-
-### "Trading Economics isn't returning data after restart"
-
-1. Check the logs at `nexrisk_service`'s log directory.
-2. Look for `401 Unauthorized` — that means the API key is wrong or expired. Re-save with a correct key.
-3. Look for DNS or connection timeouts — that means `ws_endpoint` isn't reachable from the host. Check the URL and test connectivity from the server.
-4. Look for rate-limit errors (`429 Too Many Requests`). Your poll interval may be too short for your subscription tier. Increase `poll_interval_seconds`.
-
-### "My API key looks right but authentication fails"
-
-- Trading Economics keys have a specific format: two alphanumeric strings separated by a colon. A key that doesn't contain a colon is wrong.
-- Whitespace in the key will cause silent failures. Check for trailing spaces or newlines when pasting from email.
-- If you saved `"***"` by mistake (by clearing the placeholder and re-typing three asterisks), you literally saved three asterisks as your key. Save the real key again.
-
-### "Events are showing up late"
-
-Increase `preload_days_ahead` if you want more lookahead. Decrease `poll_interval_seconds` if you want updates faster. Note that live streaming via the WebSocket is usually faster than polling — make sure `ws_endpoint` is correctly configured.
-
-### "Events from last week aren't showing up"
-
-Increase `preload_days_back`. The service only loads history on startup, so you'll need to restart for the new value to apply.
+*End of guide — Settings › Trading Economics. One of nine Settings
+operator guides.*

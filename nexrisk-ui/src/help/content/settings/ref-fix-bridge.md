@@ -1,261 +1,252 @@
 ---
 id: ref-fix-bridge
-title: "FIX bridge"
+title: "FIX Bridge — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
-route: /settings/fixbridge
+route: /settings/fix-bridge
+order: 5
 source:
-  - "nexrisk-ui/src/pages/settings/help/05-fix-bridge.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, fix-bridge, operator-manual]
+  - "Settings_05_FIX_Bridge.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,fix-bridge,audit,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
+
+The FIX bridge is the service that connects Taiga to your liquidity
+providers (LPs) using FIX, the industry-standard messaging protocol for
+broker-to-venue connectivity. This page does not configure the LP
+connections themselves — it configures the bridge’s operational
+plumbing: how much it logs, how much traffic history it keeps, what it
+captures when something goes wrong, and how much it buffers before it
+starts dropping messages under load. Fifteen settings across five
+groups, and none of them is a secret.
+
+You reach it at **Settings › FIX bridge**.
+
+|                                                                                                                                                                                                                                                                                                                     |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **This page is the bridge’s plumbing, not its LP connections.** The actual liquidity-provider connections and their credentials are configured on the LP management page. This page governs logging, audit capture, incident bundling and buffering — the operational behaviour that sits around those connections. |
 
-## At a glance
+## 2. What This Page Controls
+
+This page manages the logging, audit, incident and backpressure sections
+of the FIX bridge’s configuration file (fixbridge_config.json). Other
+parts of that file — the LP list and session settings — are managed
+elsewhere and are left untouched when you save here; this page writes
+only its four groups of settings.
+
+|                                                                                                                                                                                                                                                                                                        |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Which service to restart: the NexRisk FIX Bridge service.** Every change here applies only after the FIX Bridge service is restarted — not the price gateway, not the core service. Restarting the FIX Bridge drops and re-establishes your FIX sessions to the LPs, so coordinate it with the desk. |
+
+## 3. Before You Change Anything
+
+- **Audit and incident capture consume disk.** Raw traffic capture on a
+  busy bridge can be tens of gigabytes a day before compression. If you
+  turn on capture with long retention and large files, make sure the
+  host has the disk to hold it.
+
+- **Backpressure caps are silent drops.** When one of the buffers fills,
+  new messages are dropped, not held. Set caps too low and you lose
+  messages under load; set them too high and you use more memory and
+  delay the warning that something downstream is too slow.
+
+- **Verbose logging is heavy.** The two most detailed logging levels
+  generate enormous log files quickly on a production bridge. Use them
+  only while actively debugging, and drop back afterwards.
+
+## 4. The Settings
+
+The fifteen settings fall into five groups, matching the dividers on the
+page.
+
+### 4.1 Log level
+
+How much detail the bridge writes to its main log. Five levels, from
+most to least detail:
 
-The FIX bridge is the process that connects Taiga to your liquidity providers using the FIX protocol — the industry standard for broker-to-broker and broker-to-venue connectivity. This page configures the *operational* aspects of the bridge: log verbosity, audit capture (raw FIX traffic and normalised order book snapshots), incident bundling, and backpressure queue caps. Fifteen fields across five sections, **no secrets**.
+| **Level** | **What it captures**                                                                      |
+|-----------|-------------------------------------------------------------------------------------------|
+| Trace     | Everything — every internal event. For deep debugging only; very heavy.                   |
+| Debug     | Per-session and per-message detail. Heavy, but manageable for a while.                    |
+| Info      | Significant events only — sessions up and down, error conditions. The production default. |
+| Warn      | Only things that might be wrong; suppresses routine information.                          |
+| Error     | Only outright failures; suppresses warnings.                                              |
 
-This page does **not** configure specific LP connections or credentials. That lives on the LP management page. Think of this page as the bridge's "plumbing": how much it logs, how much history it keeps, what it does when things go wrong, how much it buffers before dropping messages.
+Keep production on Info. Raise to Debug or Trace only to investigate a
+specific problem, and return to Info when done — the detailed levels
+fill disks fast.
 
-Settings page path: **Settings → FIX bridge**
-Route: `/settings/fixbridge`
+### 4.2 Audit — raw traffic capture
 
-## What this page controls
+"Raw traffic" means every FIX message that crosses the bridge — the
+market data coming in, the orders going out, the session heartbeats,
+everything — written to disk exactly as exchanged. It is invaluable for
+post-trade analysis, dispute resolution, compliance, and debugging. Four
+settings:
 
-This page reads and writes the `log_level`, `audit`, `incident`, and `backpressure` sections of `config/fixbridge/fixbridge_config.json`. Other sections of that file (enabled_lps, session config) are managed elsewhere and are **silently preserved** on save — the backend scope-limits writes from this page to the four sections above.
+- **Capture on/off** — whether raw traffic is written to disk at all.
+  Off means less disk used and less detail retained.
 
-All changes on this page require a restart of the **`fixbridge_service`** to take effect.
+- **Retention hours** — how many hours of captured traffic to keep
+  before older files are pruned (typically 6 to 24; longer for
+  compliance, shorter for tight disk).
 
-## Who can access it
+- **File size** — the capture is split into rotating files; each starts
+  a new one at this size (typically 50 MB). Smaller files are easier to
+  move and inspect but more numerous.
 
-Visible to users with one of:
+- **Compression** — how rotated files are compressed: none (fastest,
+  largest), or one of two standard formats. One good-ratio, low-effort
+  format is the usual choice; the other is more widely compatible.
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+### 4.3 Audit — order-book snapshots
 
-## Before you change anything
+Separate from raw traffic, the bridge can periodically snapshot its own
+processed view of the order book — the merged depth-of-market picture it
+builds from all its sources. These snapshots are what let you
+reconstruct "what did the book look like at 10:42:03?" after the fact.
+Four settings, mirroring the raw-traffic group: an on/off switch,
+retention hours (for example, 48 — two days), a snapshot interval in
+seconds (for example, one snapshot per second during active sessions;
+more seconds between snapshots when quieter), and a rotating file size
+(typically 100 MB). Lower snapshot intervals give more detail at the
+cost of more disk and processing.
 
-- **Audit and incident storage consume disk.** If you enable audit with large retention and large segment sizes, make sure the host has enough disk. The `raw_fix` stream on a busy bridge can be tens of GB per day before compression.
-- **Backpressure caps are silent drops.** When a queue hits its cap, new messages are dropped, not buffered indefinitely. Setting caps too low will lose messages under load; setting them too high will consume more memory and delay the failure signal.
-- **`trace` and `debug` log levels are heavy.** Raising the log level on a production bridge generates enormous log files fast. Use only for active debugging, and drop back to `info` when done.
+### 4.4 Incident bundles
 
-## Field reference
+When the bridge detects a significant problem, it can automatically
+export an "incident bundle" — a single package containing the relevant
+raw traffic, order-book snapshots, and log slices from around the time
+of the event. It is the first thing to reach for in a post-mortem.
+Settings:
 
-The form is grouped into five sections, each with a small uppercase divider.
+- **Bundle location** — the folder where bundles are written.
 
-### Log level
+- **Maximum bundles** — how many to keep before the oldest is pruned
+  (for example, 100).
 
-#### `log_level`
+- **Automatic triggers** — which conditions cause a bundle to be
+  exported. You may enable any combination:
 
-Verbosity of the FIX bridge process's main log output. Dropdown with five choices (increasing detail):
+| **Trigger**           | **The condition that fires it**                                                                                     |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------|
+| Session gap           | A FIX session dropped or reconnected with a gap in message numbering — usually network trouble or an LP-side issue. |
+| Book stale (extended) | The order book stopped updating for longer than an internal threshold — usually an upstream market-data problem.    |
+| Mass reject           | A burst of order rejections crossed a threshold — often a rule, a bad setting, or an unhappy LP.                    |
+| Forced sequence reset | A forced reset of message numbering on a session — part of recovering from severe session trouble.                  |
 
-- `trace` — extremely verbose. Every internal event logged. For deep debugging only.
-- `debug` — verbose. Per-session state transitions, per-message details. Heavy but tractable.
-- `info` — default for production. Significant events only: session up/down, error conditions.
-- `warn` — suppresses info; only reports things that might be wrong.
-- `error` — suppresses warnings; only reports outright failures.
+The usual practice is to enable all four: bundles are cheap to produce
+and invaluable to have after the fact.
 
-Typical production value: `info`.
+### 4.5 Backpressure
 
-### Audit · Raw FIX
+Backpressure is the bridge’s self-protection against a slow downstream
+consumer. Each of three internal buffers holds a limited number of
+messages; when a buffer fills, new arrivals are dropped rather than held
+indefinitely or allowed to block everything upstream. This keeps one
+slow consumer from cascading into a bridge-wide stall. The three caps:
 
-"Raw FIX" means every FIX message that crosses the bridge — inbound market data, outbound order submissions, session-level heartbeats, everything — captured to disk. Useful for post-trade analysis, dispute resolution, compliance, and debugging.
+| **Buffer**          | **Holds**                                                                             | **Typical size**          |
+|---------------------|---------------------------------------------------------------------------------------|---------------------------|
+| Trading outbound    | Messages queued for delivery to trading sessions — order flow is relatively low-rate. | Smallest (e.g. 10,000).   |
+| Market-data inbound | Incoming market-data messages waiting to be processed — the chattiest stream.         | Largest (e.g. 100,000).   |
+| Order-book publish  | Processed order-book updates queued for downstream consumers.                         | In between (e.g. 50,000). |
 
-#### Raw FIX capture (`audit.raw_fix.enabled`)
+If the bridge routinely hits a cap and drops, that is a signal that
+something downstream is too slow, or the cap is too low. Raise caps
+cautiously and watch memory — fixing the underlying slowness is usually
+more useful than raising a cap.
 
-Toggle. When **on**, raw FIX is written to disk segmented into rotating files. When **off**, no raw FIX capture — less disk, less detail.
+## 5. Common Tasks
 
-#### Retention hours (`audit.raw_fix.retention_hours`)
+### 5.1 Enable full audit for a compliance requirement
 
-How many hours of raw FIX segments stay on disk before being pruned. Example: `6` means "keep the last 6 hours; delete older files."
+1.  Turn on raw-traffic capture and order-book snapshots.
 
-Typical value: `6` to `24`. Longer retention for compliance; shorter for disk-constrained hosts.
+2.  Set retention to your compliance window (for example, seven days).
 
-Disabled when the toggle above is off.
+3.  Confirm a good-ratio compression format is selected to save disk,
+    then save and restart the FIX Bridge service.
 
-#### Segment size MB (`audit.raw_fix.segment_size_mb`)
+### 5.2 Turn on verbose logging temporarily
 
-Each raw FIX capture file rotates when it reaches this size, in megabytes. Example: `50` means "start a new file every 50 MB."
+4.  Change the log level from Info to Debug, save, and restart the FIX
+    Bridge service.
 
-Smaller segments are easier to handle (download, copy, analyse) but produce more files. Larger segments reduce file-count overhead but are harder to work with.
+5.  Reproduce the problem and collect the logs.
 
-Typical value: `50`.
+6.  Change the level back to Info, save, and restart again — be
+    disciplined about this second step; leaving a detailed level on
+    fills disks.
 
-#### Compression (`audit.raw_fix.compression`)
+### 5.3 Investigate dropped messages
 
-Compression format applied to rotated segments. Dropdown:
+The logs record a "queue full, dropping" warning when a cap is hit. If
+the market-data buffer is the culprit, the processor after it is too
+slow; if the trading-outbound buffer is, the session writer to an LP is
+too slow. Raise the cap gradually and watch memory, but fix the
+underlying slowness where you can.
 
-- `none` — no compression. Fastest writes, largest disk.
-- `zstd` — good ratio, low CPU. **Usually the right choice.**
-- `gzip` — widely compatible, slightly worse ratio than zstd at similar CPU cost.
+## 6. Saving and Restarting
 
-Typical value: `zstd`.
+- Saving raises the **yellow restart banner** and confirms with a short
+  "restart to apply" message.
 
-### Audit · Normalized DOM
+- The bridge keeps running on its old settings until the **FIX Bridge
+  service** is restarted — which drops and re-establishes the FIX
+  sessions, so time it with the desk. The banner clears itself shortly
+  after.
 
-"Normalized DOM" means Taiga's internal depth-of-market representation — not raw FIX, but the bridge's processed view of the book after merging sources. Periodic snapshots of this state can be invaluable when trying to reconstruct "what did the book look like at 10:42:03?".
+## 7. Live Status and Service Panels
 
-#### Normalized DOM snapshots (`audit.normalized_dom.enabled`)
+- **Live status** — shows how many FIX sessions are connected of those
+  configured, the last message time, and the inbound and outbound
+  message rates.
 
-Toggle. When **on**, the service takes periodic snapshots of its internal book state and writes them to disk. When **off**, no DOM snapshots.
+- **Recent changes** — lists the last few edits to these settings, with
+  attribution.
 
-#### Retention hours (`audit.normalized_dom.retention_hours`)
+- **Service panel** — shows the service’s Status, Uptime and Last start,
+  along with its Process name, Configuration file and Log directory.
 
-How many hours of DOM snapshots stay on disk. Example: `48` (2 days).
+## 8. Troubleshooting
 
-#### Snapshot interval seconds (`audit.normalized_dom.snapshot_interval_sec`)
+### 8.1 The bridge will not start after I saved
 
-How often a snapshot is taken, in **seconds**. Example: `1` (one snapshot every second).
+Check the bridge log (its directory is shown in the Service panel).
+Common causes: the incident-bundle folder does not exist and cannot be
+created (fix permissions or pre-create it); a backpressure cap set to
+zero (all three must be positive); or an absurdly small file size (the
+bridge may refuse it, or rotate so fast it cannot keep up).
 
-Lower = more detail but more disk and more CPU. Higher = less detail, cheaper.
+### 8.2 Disk is filling up fast
 
-Typical value: `1` during active sessions; `5` or more for quieter environments.
+Check, in order: raw-traffic retention (too long?), order-book snapshot
+retention (same), the log level (did someone leave it on a detailed
+level?), and the incident folder (too many bundles — lower the maximum).
 
-#### Segment size MB (`audit.normalized_dom.segment_size_mb`)
+### 8.3 Incident bundles are not being generated
 
-Same idea as raw FIX segment size. Each DOM snapshot file rotates at this size in MB. Typical value: `100`.
+Confirm the trigger for that event type is enabled, that the bundle
+folder is writeable by the service, and that the maximum-bundles cap and
+the disk both have room.
 
-### Incident
+### 8.4 Messages are being dropped
 
-When the bridge detects a significant issue (session dropped, book stale, burst of rejects), it can export an "incident bundle" — a package of the relevant raw FIX, DOM snapshots, and log slices from around the time of the event. These are the first thing you reach for when debugging a post-mortem.
+Backpressure has kicked in somewhere. Find the offending buffer in the
+logs, then either raise its cap gradually (watching memory) or, better,
+address the downstream slowness causing the backlog.
 
-#### Bundle path (`incident.bundle_path`)
+### 8.5 I saved, but the log level did not change
 
-Directory (relative to the service working directory, or absolute) where incident bundles are written. Example: `incidents`.
+The FIX Bridge service has not been restarted — the log level is read at
+startup. Restart the service.
 
-#### Max bundles (`incident.max_bundles`)
-
-How many incident bundles to keep before pruning the oldest. Example: `100`.
-
-#### Auto-export triggers (`incident.auto_export_on`)
-
-Which conditions trigger automatic bundle export. Multi-select — any subset of:
-
-- `SESSION_GAP` — a FIX session dropped or reconnected with a sequence-number gap. Usually indicates network trouble or LP-side issues.
-- `BOOK_STALE_EXTENDED` — the normalised book stopped updating for longer than an internal threshold. Usually an upstream MD issue.
-- `MASS_REJECT` — a burst of order rejects crossed a configured threshold. Often a compliance rule, a bad config, or an angry LP.
-- `SEQ_RESET_FORCED` — a forced sequence-number reset was issued on a session. Happens during recovery from severe session state issues.
-
-Each trigger is rendered as a checkbox row with the trigger name in monospace and a short description of what condition fires it.
-
-Typical practice: enable all four. Incident bundles are cheap to produce and invaluable to have after the fact.
-
-### Backpressure
-
-Three queue caps. Each controls how many messages can be buffered in a specific internal queue before new arrivals are **dropped** (not buffered indefinitely, not blocked upstream). These exist so the bridge can protect itself from cascading failures when one downstream consumer slows down.
-
-#### Trading outbound queue cap (`backpressure.trading_outbound_max`)
-
-Max messages queued for outbound delivery to trading sessions. Example: `10000`.
-
-#### MD inbound queue cap (`backpressure.md_inbound_max`)
-
-Max inbound market-data messages queued for processing. Example: `100000`.
-
-#### DOM publish queue cap (`backpressure.dom_publish_max`)
-
-Max normalised DOM events queued for delivery to downstream consumers. Example: `50000`.
-
-### Typical backpressure-cap sizing
-
-- Trading outbound tends to be smallest — order flow is relatively low-rate.
-- MD inbound is largest — raw market data can be very chatty.
-- DOM publish sits in between.
-
-If your bridge is routinely hitting these caps and dropping, that's a signal that something downstream is too slow or the caps are too low. Raise cautiously and watch memory.
-
-## Common tasks
-
-### Enable full audit for a new compliance requirement
-
-1. Turn on `audit.raw_fix.enabled`.
-2. Turn on `audit.normalized_dom.enabled`.
-3. Set retention hours based on your compliance window (e.g. 168 for 7 days).
-4. Check `compression` is `zstd` to save disk.
-5. Save and restart.
-
-### Turn on verbose logging temporarily to debug an issue
-
-1. Change `log_level` from `info` to `debug`.
-2. Save and restart.
-3. Reproduce the problem. Pull logs.
-4. Change `log_level` back to `info`.
-5. Save and restart.
-
-Be disciplined about the second restart — leaving `debug` on in production fills disks.
-
-### Reduce incident noise
-
-If `SESSION_GAP` is firing constantly due to a flaky LP connection, you can temporarily untick it from `auto_export_on` to stop generating bundles for that specific issue. Fix the underlying connectivity problem first, though — the incident itself isn't noise; it's a signal.
-
-### Suspect messages are being dropped due to backpressure
-
-1. Check the bridge logs — there'll be a "queue full, dropping" warning when caps hit.
-2. If `md_inbound_max` is the culprit, the processor downstream of it is too slow.
-3. If `trading_outbound_max` is the culprit, the session writer to an LP is too slow.
-4. Raise the cap gradually. Monitor memory.
-5. Fix the underlying slowness if possible (it's usually more useful than raising caps).
-
-## What's not implemented yet
-
-### Live status
-
-The right-hand **Live status** panel shows `—` for all metrics with a `GET /fixbridge/status — 501 stub` badge. Today the backend returns 501 for this endpoint. When wired, it will show:
-
-- Number of FIX sessions connected / configured
-- Last message timestamp
-- Inbound messages per second
-- Outbound messages per second
-
-When the endpoint lands, the panel fills in automatically — no UI change needed.
-
-### Recent changes
-
-Placeholder, awaiting audit-log integration.
-
-### Service status
-
-Process / Status / Uptime / Last start panel shows `—` with "awaiting backend" notes — same pattern as every other sub-page.
-
-## After you save
-
-- Yellow **restart banner** appears site-wide. Cleared after the next 30-second hub refresh following the restart.
-- Confirmation line: `Saved. Restart fixbridge_service to apply.`
-- The bridge continues with *old* settings until you restart. On restart, new settings take effect.
-
-## Troubleshooting
-
-### "The bridge won't start after I saved"
-
-Check the bridge logs (`Log dir` in the Service panel). Common causes:
-
-- **`incident.bundle_path` doesn't exist and can't be created.** Fix permissions or pre-create the directory.
-- **A numeric cap was set to zero.** All three backpressure caps must be positive.
-- **Segment size is absurdly small (e.g. 0 or 1 MB).** The service may refuse to start, or rotate so fast it can't keep up.
-
-### "Disk is filling up fast"
-
-1. Check `audit.raw_fix.retention_hours` — too long? Dial it back.
-2. Check `audit.normalized_dom.retention_hours` — same.
-3. Check `log_level` — did someone leave it on `debug`?
-4. Check the incident directory — too many bundles? Lower `incident.max_bundles`.
-
-### "Incident bundles aren't being generated"
-
-1. Is the trigger checkbox for that event type enabled?
-2. Is `incident.bundle_path` writeable by the service process?
-3. Has `max_bundles` been hit? When the cap is hit, new bundles replace oldest — but also check disk space.
-
-### "I can see messages are being dropped"
-
-Backpressure kicked in somewhere. Find the offending queue in the logs, then either raise the cap or address the downstream slowness.
-
-### "I saved, but the log level didn't change"
-
-The service hasn't been restarted yet. The log_level is read at startup only. Restart `fixbridge_service`.
+*End of guide — Settings › FIX bridge. One of nine Settings operator
+guides.*

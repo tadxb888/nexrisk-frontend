@@ -1,253 +1,250 @@
 ---
 id: ref-nexday
-title: "NexDay integration"
+title: "NexDay Integration — operating guide"
 type: reference
 domain: settings
 module: settings
 minLevel: VIEW
 route: /settings/nexday
+order: 4
 source:
-  - "nexrisk-ui/src/pages/settings/help/04-nexday.md (dev-authored operator manual)"
-related: [ref-system-settings, ref-users]
-tags: [settings, nexday, operator-manual]
+  - "Settings_04_NexDay_Integration.docx — operating guide (ingested verbatim)"
+related: []
+tags: [settings,nexday,gopredict,integration,operator-manual]
 status: reviewed
-version: settings-v2
+version: settings-v3
 ---
 
+## 1. At a Glance
 
-## At a glance
+NexDay (from Forsa LTD) is an external market-data platform Taiga uses
+for daily and intra-day price bars and for hedging suggestions. This
+page configures the whole integration — the connection and licence, how
+often data is pulled, how much history is kept, and how the
+hedging-suggestion engine behaves. There are twelve settings across four
+groups, one of which is a credential.
 
-NexDay is an upstream market-data provider used by Taiga for daily and intraday price bars, plus hedging suggestions. This page configures the full integration — connection, polling cadence, how much bar history to retain, and how the hedging-suggestion engine behaves. Twelve fields across four logical groups, one of which is a secret.
+You reach it at **Settings › NexDay integration**. This page sets up the
+**connection**; the separate Predictions page is where you map your
+symbols to NexDay and read its signals.
 
-Settings page path: **Settings → NexDay integration**
-Route: `/settings/nexday`
+|                                                                                                                                                                                                                                                                                                   |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **This is a paid, licensed integration.** Your licence is the credential the service uses to authenticate with NexDay, and how often you poll affects your data costs — more frequent polling means more calls and more cost. Check your NexDay contract before increasing the polling frequency. |
 
-## What this page controls
+## 2. What This Page Controls
 
-This page reads and writes the `nexday` sub-object inside `config/nexrisk_config.json`. It is one of several subsections in the main NexRisk config file.
+This page manages the NexDay section of the platform’s main
+configuration file (nexrisk_config.json). Some settings here apply as
+soon as the service next polls, and others need a full restart; in
+practice, **treat every change as needing a restart of the core
+service** — erring on the side of a restart is always safe, and the
+confirmation message will tell you which was needed.
 
-Restart semantics are **mixed** — some fields apply immediately once written to disk (the service picks them up on its next poll), others require a full service restart. In practice, treat every change on this page as requiring a restart of **`nexrisk_service`**. The backend is the authoritative source for what's "live" vs "restart", and erring on the side of restart is always safe.
+|                                                                                                                                                                                                                                                       |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Which service to restart: the NexRisk service (the core).** The integration runs inside the core platform service. Restart the core service to apply a change; in a full platform restart, bring the price and LP feeds up first and the core last. |
 
-## Who can access it
+## 3. Before You Change Anything
 
-Visible to users with one of:
+- **Treat the licence as a secret.** The licence ID is the credential
+  that authenticates you with NexDay. Handle it like a password.
 
-- `root`
-- `administrator`
-- `sysadmin`
-- `broker_dealer`
+- **Polling frequency drives cost.** Higher frequency means more calls
+  and more cost; lower frequency means less cost but older intra-day
+  bars. Balance freshness against your contract.
 
-## Before you change anything
+- **Hedging suggestions are suggestions only.** Turning suggestions on
+  does not place any hedges. It surfaces candidates on the Hedging
+  strategies page for a person to review and act on. Automated execution
+  is a separate matter entirely, not controlled here.
 
-- **NexDay is a paid licensed integration.** Your license ID is the credential the service uses to authenticate upstream. Keep it treated as a secret.
-- **Polling frequency affects your data costs.** Higher frequency = more API calls = more cost (check your NexDay contract). Lower frequency = less cost, but also older intraday bars.
-- **Hedging suggestions are suggestions only.** The `auto_suggest` toggle does *not* cause Taiga to place hedges. It surfaces suggestions for humans to act on. If you want automated execution, that's a separate page.
-- **Daily poll time is US Eastern.** NexDay publishes end-of-day bars on a US schedule. The `daily_time_et` field is the local time in New York that Taiga will poll for the day's closing bars — typically shortly after 17:00 ET (close of US cash session).
+- **The daily poll time is US Eastern.** NexDay publishes end-of-day
+  bars on a US schedule, so the daily poll time is set in New York time
+  — typically shortly after the US cash-session close.
 
-## Field reference
+## 4. The Settings
 
-The form is grouped into four sections. Each section has a small uppercase divider on the page itself.
+The twelve settings fall into four groups, matching the dividers on the
+page: Connection, Polling, Retention, and Hedging.
 
-### Connection
+### 4.1 Connection
 
-#### `enabled` (toggle)
+**Enabled**
 
-Master switch for the NexDay integration. When **off**:
+The master switch for the whole integration. When off, there is no
+polling of any kind, no hedging suggestions, and no calls to NexDay — so
+no licence cost — while every other setting is preserved for when you
+switch it back on.
 
-- No polling (intraday or daily).
-- No hedging suggestions generated.
-- No API calls to NexDay — zero license cost.
-- All other settings preserved for when you flip back on.
+**API server**
 
-#### `api_server`
+The address of the NexDay server (for example,
+https://175.110.113.174:8080). In production this should be a secure
+(encrypted) address; an unencrypted one would mean your licence
+credentials travel unprotected, so it is only for rare test setups.
 
-Base URL of the NexDay API server. Example: `http://175.110.113.174:8080`.
+**Licence ID**
 
-Must start with `http://` or `https://`. In production this should almost always be `https://` — the form accepts both but the difference is whether your license credentials travel encrypted.
+**This is a credential field, handled specially for security.** It is
+your NexDay licence ID (a numeric string). It loads empty with the
+prompt "Leave blank to keep current value"; the server returns three
+asterisks instead of the real value and the page never sends those back.
+Leave it blank to keep the current licence, type a new one to replace
+it, and never type three asterisks yourself. It is stored encrypted.
 
-#### `license_id`
+### 4.2 Polling
 
-**Secret field.** Your NexDay license ID — a numeric string. Example: `3561334610044732`.
+NexDay is polled in two independent modes — intra-day (frequent) and
+daily (once a day) — each with its own on/off switch.
 
-Same write-preserve discipline as every other secret on this page:
+**Intra-day polling**
 
-- Input starts empty with placeholder *"Leave blank to keep current value"*.
-- Leave blank to keep the current license unchanged.
-- Type a new license ID to replace it.
-- Never paste `"***"` — you'd save three asterisks as your license.
+A switch and an interval. When on, the service fetches intra-day bars
+every so many minutes (shown with the human equivalent as you type, e.g.
+"every 15 min"). A typical value is 15 minutes during active sessions —
+shorter intervals give fresher bars at higher cost. When the switch is
+off, the interval field is disabled and no intra-day polling happens.
 
-Stored encrypted.
+**Daily polling**
 
-### Polling
+A switch and a time-of-day. When on, the service pulls the day’s closing
+bars at the set time, entered in US Eastern time (for example, 17:01).
+The page checks the time is well-formed. A typical value is 17:01 — the
+US cash session closes at 16:00 ET and end-of-day bars are reliably
+available about an hour later, and one minute past the hour avoids
+clashing with anything set to fire exactly on the hour. When the switch
+is off, the time field is disabled.
 
-NexDay has two polling modes — intraday (hourly or more frequent) and daily (once per day). They're controlled independently.
+### 4.3 Retention
 
-#### `intraday_enabled` (toggle)
+How many bars the service keeps in memory per symbol, so recent history
+can be analysed without re-fetching.
 
-Master switch for intraday polling. Disables the intraday interval field below when off.
+**Daily bars**
 
-#### `intraday_interval_minutes`
+How many past daily bars to retain per symbol (for example, 100 —
+roughly four months of trading days). More bars allow longer historical
+analysis but use more memory.
 
-How often, in **minutes**, the service fetches intraday bars. Example: `15` means "every 15 minutes."
+**Intra-day bars**
 
-The form shows the human equivalent as you type: `15` displays as *"every 15 min"*, `60` as *"every 1 h"*.
+How many recent intra-day bars to retain per symbol (for example, 12 —
+which at a 15-minute interval is the last three hours). This is
+expressed in intervals, so its span depends on the intra-day interval
+above.
 
-Typical value: `15` during active trading sessions. Shorter intervals produce more up-to-date bars but cost more API calls.
+### 4.4 Hedging
 
-When `intraday_enabled` is off, this field is disabled.
+The hedging-suggestion engine surfaces candidate hedges from NexDay’s
+signals onto the Hedging strategies page for review.
 
-#### `daily_enabled` (toggle)
+**Auto-suggest**
 
-Master switch for daily polling. Disables the daily time field below when off.
+**The master switch for generating suggestions** — when off, none are
+produced. To be completely clear: this surfaces suggestions for a person
+to consider; it **does not place any hedge automatically**. The
+decision, and the action, remain with a human.
 
-#### `daily_time_et`
+**Minimum position size**
 
-Time of day (in US Eastern time) when the service pulls daily closing bars. Format: `HH:MM`. Example: `17:01`.
+The smallest position (in lots) that can trigger a suggestion — for
+example, 0.01 means positions below that size raise no suggestions.
+Decimals are allowed; raise it to suppress noise from very small
+positions. Disabled when auto-suggest is off.
 
-Typical value: `17:01`. US cash session closes at 16:00 ET; allowing roughly an hour for end-of-day settlement, 17:00 ET is when daily bars are reliably available. Using `17:01` (one minute past the hour) avoids contention with any other process that might fire at 17:00 sharp.
+**Suggestion expiry**
 
-The form validates the format client-side — `17:01` is accepted, `7:1` is rejected, `25:00` is rejected.
+How long a suggestion stays actionable before it is automatically
+dismissed, in minutes (for example, 60 keeps it on the Hedging page for
+an hour). Shorter expiry keeps the list "live" but a suggestion may
+vanish before anyone sees it; longer expiry risks acting on a suggestion
+after conditions have moved. Disabled when auto-suggest is off.
 
-When `daily_enabled` is off, this field is disabled.
+## 5. Common Tasks
 
-### Retention
+### 5.1 Rotate the licence
 
-How many bars the service holds in memory per symbol. Relevant for features that analyse recent price history without re-fetching.
+1.  Obtain the new licence from your NexDay account, type it into the
+    (empty) licence field, and save.
 
-#### `daily_bars`
+2.  Restart the core service and watch the logs for authentication
+    success.
 
-Number of historical daily bars retained per symbol, in memory. Example: `100` (roughly 4 months of daily data, excluding weekends).
+### 5.2 Pull daily bars only, skip intra-day
 
-Higher numbers consume more memory but enable longer historical windows for analytics.
+Turn intra-day polling off, leave daily polling on, save, and restart.
+The service still authenticates and pulls the daily close once a day; it
+simply stops polling between daily runs.
 
-#### `intraday_bars`
+### 5.3 Stop hedging suggestions without stopping the feed
 
-Number of recent intraday bars retained per symbol, in memory. Example: `12` (12 intervals of whatever `intraday_interval_minutes` is set to — so at 15-minute intervals, that's 3 hours of recent intraday data).
+Turn auto-suggest off, save, and restart. Polling continues and bars are
+still retained — only suggestion generation stops.
 
-### Hedging
+### 5.4 Pause the integration overnight
 
-The hedging-suggestion engine surfaces candidate hedges based on NexDay's signals. Suggestions appear in the Hedging strategies page for operators to review and act on.
+Turn the main Enabled switch off, save, and restart; reverse it in the
+morning. (A scheduled, automatic pause is not offered here — that would
+be arranged outside the application.)
 
-#### `auto_suggest` (toggle)
+## 6. Saving and Restarting
 
-Master switch for suggestion generation. When off, no suggestions are produced regardless of the remaining fields below.
+- Saving raises the **yellow restart banner**. The confirmation message
+  tells you whether the change applied live or needs a restart — treat a
+  restart as the norm.
 
-Critically: this does **not** cause automatic execution. Suggestions are surfaced; humans decide.
+- The integration keeps running on its old settings until the core
+  service is restarted; the banner clears itself shortly after.
 
-#### `min_position_volume`
+## 7. The Side Panels
 
-Minimum position size (in lots) that can trigger a hedging suggestion. Example: `0.01` means "positions smaller than 0.01 lots won't trigger suggestions."
+- **Integration summary** — restates your current draft in plain terms
+  ("every 15 min", "at 17:01 ET", the retention counts, the hedging
+  thresholds) so you can check a change before saving.
 
-Decimals are allowed. Set higher to suppress noise from very small positions.
+- **Live status** — shows whether the integration is currently polling
+  and when the last bar was received.
 
-When `auto_suggest` is off, this field is disabled.
+- **Recent changes** — lists the last few edits to these settings, with
+  attribution.
 
-#### `suggestion_expiry_minutes`
+- **Service panel** — shows the service’s Status, Uptime and Last start,
+  along with its Process name, Configuration file and Log directory.
 
-How long a suggestion stays actionable before it is auto-dismissed, in **minutes**. Example: `60` means "a suggestion remains on the Hedging page for an hour, then disappears if no one acts on it."
+## 8. Troubleshooting
 
-Shorter expiry produces a more "live" list but suggestions may vanish before an operator sees them. Longer expiry risks stale suggestions being acted on after market conditions have moved.
+### 8.1 No bars after restart
 
-When `auto_suggest` is off, this field is disabled.
+Check the logs for authentication failures. Confirm the NexDay server
+address is reachable from the host, and that the licence is correct —
+and if you accidentally saved three asterisks, that is the stored
+licence now, so save the real one again.
 
-## Common tasks
+### 8.2 Authenticating, but no intra-day bars
 
-### Rotate the NexDay license ID
+Intra-day polling is probably switched off. With it off, daily bars
+still arrive but no intra-day polling occurs — turn it on if you need
+intra-day data.
 
-1. Obtain the new license from your NexDay account.
-2. Clear the `license_id` field (starts empty anyway).
-3. Paste the new license.
-4. Save and restart `nexrisk_service`.
-5. Watch logs for authentication success.
+### 8.3 Daily bars look old
 
-### Pause the integration overnight to save API calls
+The daily poll time may be firing before NexDay has published the day’s
+close. Move it to 17:01 ET or later.
 
-1. Turn off the main `enabled` toggle.
-2. Save and restart.
-3. In the morning, turn it back on, save, and restart.
+### 8.4 Hedging suggestions never appear
 
-If you want a scheduled pause (rather than manual), that's not supported on this page — you'd need to script it externally.
+Work down the chain: the main Enabled switch on; auto-suggest on; your
+positions larger than the minimum size (if all are smaller, nothing
+triggers); and recent suggestions not already expired. If all of those
+are fine, check the logs for signal-generation errors.
 
-### Only pull daily bars, skip intraday
+### 8.5 The form will not save
 
-1. Turn off the `intraday_enabled` toggle under Polling.
-2. Leave `daily_enabled` on.
-3. Save and restart.
+Look for a red message above the save buttons — usually a malformed
+daily poll time, a server address missing its secure/unsecured prefix,
+or a numeric field left blank or zero where a positive number is
+required. Fix the highlighted field and try again.
 
-The service still runs, still authenticates, still pulls daily bars once per day — it just stops polling intraday between daily runs.
-
-### Disable hedging suggestions without disabling the feed entirely
-
-1. Turn off `auto_suggest` under Hedging.
-2. Save and restart.
-
-Polling continues. Bars continue to be retained. Only the suggestion-generation engine stops.
-
-### Shorten the daily poll window
-
-If you want daily bars pulled earlier than 17:01 ET (e.g. for a market that closes before US cash):
-
-1. Update `daily_time_et` to the desired `HH:MM`.
-2. Save and restart.
-
-Be aware that pulling before NexDay has published the day's closing bars will return stale data.
-
-## What's not implemented yet
-
-### Integration summary panel
-
-The right-hand **Integration summary** panel is live — it updates as you edit and summarises your current draft (*"every 15 min"*, *"at 17:01 ET"*, retention counts, hedging thresholds). This is the sanity-check panel.
-
-### Live status / health
-
-No runtime probe for NexDay yet. The page doesn't show "currently polling" or "last bar received at…". That's on the backend roadmap.
-
-### Recent changes
-
-Placeholder, awaiting audit-log integration.
-
-### Service status
-
-Process / Status / Uptime / Last start panel shows `—` with "awaiting backend" notes. Same as every other sub-page.
-
-## After you save
-
-- Yellow **restart banner** appears site-wide. Cleared after the next 30-second hub refresh once the service is restarted.
-- Confirmation message below the form: either `Saved.` (for mixed-tag fields that apply live) or `Saved. Restart nexrisk_service to apply.` (if any restart-tagged field was touched). Treat restart as the norm.
-- The service continues with *old* settings until restart. On restart, new settings take effect.
-
-## Troubleshooting
-
-### "NexDay isn't returning bars after restart"
-
-1. Check logs — look for authentication failures.
-2. Verify `api_server` is reachable from the host (simple TCP test to the host:port).
-3. Confirm `license_id` is correct. If you saved `"***"` by mistake, you saved three asterisks as your license; save the real one.
-
-### "I see NexDay authenticating but no intraday bars"
-
-Check `intraday_enabled`. If it's off, daily bars still come in but no intraday polling occurs.
-
-### "Daily bars are showing up but look old"
-
-`daily_time_et` might be firing before NexDay publishes the day's close. Try `17:01` or later.
-
-### "Hedging suggestions never appear"
-
-Work through the chain:
-
-1. Is the main `enabled` toggle on?
-2. Is `auto_suggest` on?
-3. Are your positions all smaller than `min_position_volume`? If so, nothing triggers.
-4. Have recent suggestions expired? `suggestion_expiry_minutes` controls the dismissal window.
-5. Check the logs for signal-generation errors.
-
-### "The form won't let me save"
-
-Look for a red error message above the save buttons. Common issues:
-
-- `daily_time_et` not in `HH:MM` format.
-- `api_server` missing `http://` or `https://` prefix.
-- A numeric field left blank or set to zero when the field requires a positive integer.
-
-Fix the highlighted problem and try again.
+*End of guide — Settings › NexDay integration. One of nine Settings
+operator guides.*
