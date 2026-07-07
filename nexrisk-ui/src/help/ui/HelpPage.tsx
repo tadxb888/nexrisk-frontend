@@ -1,24 +1,24 @@
 // help/ui/HelpPage.tsx
-// The Operational Manual page (route /help/manual). Left: corpus domain tree.
-// Right: a conversation area (grounded, cited answers) or a selected article,
-// a draggable divider, the ask box, and the AI disclaimer.
+// The Content page (route /help/manual). Left: corpus domain tree.
+// Right: the selected article. Version labels in the lower-right footer.
+// (The ask/prompt assistant is hidden for now — will return with codebase RAG.)
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { T, DOMAIN_LABEL, DOMAIN_ORDER } from './helpTheme';
 import { helpClient, HelpArticle, HelpArticleMeta } from './helpClient';
-import { useHelpAsk } from './useHelpAsk';
 import Markdown from './Markdown';
+
+declare const __APP_VERSION__: string | undefined;
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : 'dev';
 
 export default function HelpPage() {
   const [manifest, setManifest] = useState<HelpArticleMeta[]>([]);
   const [filter, setFilter] = useState('');
   const [active, setActive] = useState<HelpArticle | null>(null);
   const [activeChapter, setActiveChapter] = useState<string | null>(null);
-  const [input, setInput] = useState('');
-  const [inputH, setInputH] = useState(120);
   const [openDomains, setOpenDomains] = useState<Set<string>>(new Set()); // collapsed by default
   const [expandedLeaves, setExpandedLeaves] = useState<Set<string>>(new Set());
-  const { messages, loading, ask } = useHelpAsk(undefined); // no page context on the manual itself
+  const [backendVersion, setBackendVersion] = useState<string>('');
   const threadRef = useRef<HTMLDivElement>(null);
 
   const toggleLeaf = (id: string) =>
@@ -46,7 +46,13 @@ export default function HelpPage() {
     });
 
   useEffect(() => { helpClient.getManifest().then((m) => setManifest(m.articles)).catch(() => {}); }, []);
-  useEffect(() => { threadRef.current?.scrollTo(0, threadRef.current.scrollHeight); }, [messages, loading]);
+  // backend version for the footer (best-effort; shows — if unavailable)
+  useEffect(() => {
+    fetch('/api/v1/health', { credentials: 'include' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((h) => { const v = h?.versions?.service ?? h?.versions?.bff ?? h?.version; if (v) setBackendVersion(String(v)); })
+      .catch(() => {});
+  }, []);
 
   const openArticle = useCallback(async (id: string, anchor?: string) => {
     try {
@@ -94,20 +100,6 @@ export default function HelpPage() {
     for (const d of Object.keys(byDomain)) byDomain[d].sort(byOrder);
     return byDomain;
   }, [manifest, filter]);
-
-  // draggable divider: resize the ask box height
-  const startDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const move = (ev: MouseEvent) => {
-      const fromBottom = window.innerHeight - ev.clientY;
-      setInputH(Math.max(90, Math.min(360, fromBottom - 34)));
-    };
-    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
-  };
-
-  const send = () => { if (input.trim() && !loading) { ask(input); setInput(''); } };
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '307px 1fr', height: '100%', background: T.pageBg, color: T.text, fontFamily: T.ui }}>
@@ -218,7 +210,7 @@ export default function HelpPage() {
           {active ? (
             <article>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.textDim, marginBottom: 10 }}>
-                <button onClick={() => { setActive(null); setActiveChapter(null); }} style={{ background: 'transparent', border: 'none', color: T.accent, fontSize: 12, cursor: 'pointer', padding: 0 }}>← Back to chat</button>
+                <button onClick={() => { setActive(null); setActiveChapter(null); }} style={{ background: 'transparent', border: 'none', color: T.accent, fontSize: 12, cursor: 'pointer', padding: 0 }}>← Back</button>
                 <span style={{ color: T.textMute }}>·</span>
                 <span>{DOMAIN_LABEL[active.domain] || active.domain}</span>
                 <span style={{ color: T.textMute }}>›</span>
@@ -258,61 +250,17 @@ export default function HelpPage() {
               })()}
               <Markdown text={active.body} onCite={openArticle} />
             </article>
-          ) : messages.length === 0 ? (
-            <div style={{ color: T.textDim, fontSize: 14, maxWidth: 520, marginTop: 48, lineHeight: 1.6 }}>
-              Ask about any Taiga feature — how to configure it, what a field means, or where a setting lives.
-              Answers are drawn only from the Content library and cite their sources. Browse the sections on the left.
-            </div>
           ) : (
-            messages.map((m, n) => (
-              <div key={n} style={{ margin: '0 0 16px' }}>
-                {m.role === 'user' ? (
-                  <div style={{ color: T.textDim, fontSize: 13 }}><span style={{ color: T.textMute, fontFamily: T.mono, fontSize: 11, marginRight: 8 }}>you</span>{m.text}</div>
-                ) : (
-                  <div style={{ background: T.panel, border: `1px solid ${m.refused ? T.borderSoft : T.border}`, borderRadius: 8, padding: '12px 14px' }}>
-                    {m.refused
-                      ? <div style={{ color: T.amber, fontSize: 13, lineHeight: 1.6 }}>{m.text}</div>
-                      : <Markdown text={m.text} onCite={openArticle} />}
-                    {m.citations && m.citations.length > 0 && (
-                      <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.borderSoft}`, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        <span style={{ fontSize: 11, color: T.textMute, marginRight: 2 }}>Sources:</span>
-                        {m.citations.map((c) => (
-                          <button key={c.id} onClick={() => openArticle(c.id)} title={c.title}
-                            style={{ fontFamily: T.mono, fontSize: 11, color: T.accent, background: 'transparent', border: `1px solid ${T.accentDim}`, borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>
-                            {c.title}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))
+            <div style={{ color: T.textMute, fontSize: 14, marginTop: 48 }}>
+              Select a topic on the left to read.
+            </div>
           )}
-          {loading && <div style={{ color: T.textMute, fontSize: 12, fontFamily: T.mono }}>thinking…</div>}
         </div>
 
-        {/* draggable divider */}
-        <div onMouseDown={startDrag} title="Drag to resize"
-          style={{ height: 6, cursor: 'row-resize', background: T.pageBg, borderTop: `1px solid ${T.border}`, borderBottom: `1px solid ${T.borderSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ width: 40, height: 2, background: T.border, borderRadius: 2 }} />
-        </div>
-
-        {/* ask box */}
-        <div style={{ height: inputH, padding: '10px 22px 4px', display: 'flex', gap: 8, alignItems: 'stretch' }}>
-          <textarea
-            value={input} onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder="Ask a question about Taiga…"
-            style={{ flex: 1, resize: 'none', background: T.field, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text, fontFamily: T.ui, fontSize: 13, padding: '10px 12px', outline: 'none' }}
-          />
-          <button onClick={send} disabled={loading || !input.trim()} title="Send"
-            style={{ width: 44, background: input.trim() && !loading ? T.accentDim : T.field, border: `1px solid ${T.border}`, borderRadius: 10, color: input.trim() && !loading ? '#fff' : T.textMute, cursor: input.trim() && !loading ? 'pointer' : 'default', fontSize: 18 }}>
-            ➤
-          </button>
-        </div>
-        <footer style={{ textAlign: 'center', color: T.textMute, fontSize: 11, padding: '2px 22px 8px' }}>
-          Taiga is AI and can make mistakes. Please double-check responses with Technical Support if necessary.
+        {/* item 4: version labels, lower-right of the help screen */}
+        <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 14, color: T.textMute, fontSize: 11, fontFamily: T.mono, padding: '6px 18px 8px', borderTop: `1px solid ${T.borderSoft}` }}>
+          <span>Frontend {APP_VERSION}</span>
+          <span>Backend {backendVersion || '—'}</span>
         </footer>
       </main>
     </div>
