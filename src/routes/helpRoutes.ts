@@ -1,9 +1,9 @@
 // ============================================================
 // src/routes/helpRoutes.ts   (Fastify BFF plugin — ESM / NodeNext)
-// Help assistant + corpus browsing, under /api/v1/help/*.
-// Reaches C++ /api/v1/llm/complete via the shared nexriskApi helper (reuses
-// X-Internal-Secret + NEXRISK_API_URL — no new env). Corpus is resolved from
-// this file's own location, so it works regardless of the launch cwd.
+// Help + live-data operations assistant, under /api/v1/help/*.
+// Reaches C++ /api/v1/llm/complete via the shared nexriskApi helper for model
+// completion, and read-only GET endpoints (WHITELISTED in helpAgent.mjs) for
+// live business data. Corpus is resolved from this file's own location.
 // ============================================================
 
 import type { FastifyInstance } from 'fastify';
@@ -11,14 +11,13 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { nexriskApi } from '../services/nexrisk-api.js';
 
-// dist/routes/helpRoutes.js -> two up is the repo root -> nexrisk-ui/src/help.
-// Override with HELP_DIR only for non-standard layouts.
 const HERE = __dirname;
 const HELP_DIR = process.env.HELP_DIR || join(HERE, '..', '..', 'nexrisk-ui', 'src', 'help');
 const esm = (name: string) => import(pathToFileURL(join(HELP_DIR, name)).href);
 
 type CompleteResult = { ok: boolean; text?: string; circuitOpen?: boolean };
 
+// ── model completion (unchanged from the working help route) ──
 async function complete({ system, question }: { system: string; question: string }): Promise<CompleteResult> {
   const res = await nexriskApi.post('/api/v1/llm/complete', {
     system,
@@ -36,20 +35,35 @@ async function complete({ system, question }: { system: string; question: string
   return { ok: true, text: body.data.text };
 }
 
+// ── live read-only data access. Second gate: the agent already whitelists, but
+// we ONLY ever issue GETs here, and only for /api/v1/* paths. No writes ever. ──
+async function api(path: string): Promise<{ ok: boolean; status?: number; data?: unknown }> {
+  if (typeof path !== 'string' || !path.startsWith('/api/v1/')) return { ok: false };
+  const res = await nexriskApi.get(path);
+  return { ok: res.ok, status: res.status, data: res.ok ? (res.data as { data?: unknown })?.data ?? res.data : undefined };
+}
+
+// answer shape the frontend already expects
+type AgentResult = { bucket: string; answer: string; refused?: boolean; tool?: string; sources?: string[] };
+
 export async function helpRoutes(fastify: FastifyInstance): Promise<void> {
-  const [{ getManifest, getArticle }, { answerQuestion }] = (await Promise.all([
+  const [{ getManifest, getArticle }, retrievalMod, { answerQuestion }] = (await Promise.all([
     esm('helpRetrieval.mjs'),
-    esm('helpAssistant.mjs'),
+    esm('helpRetrieval.mjs'),
+    esm('helpAgent.mjs'),
   ])) as [
     { getManifest: () => unknown; getArticle: (id: string) => unknown },
-    { answerQuestion: (q: string, route: string | undefined, c: typeof complete) => Promise<unknown> },
+    { retrieve?: (q: string, route?: string) => unknown },
+    { answerQuestion: (q: string, ctx: unknown) => Promise<AgentResult> },
   ];
 
-  fastify.get(
-    '/help/manifest',
-    { preHandler: [fastify.authenticate] },
-    async () => getManifest(),
-  );
+  // corpus retrieval for the "howto" bucket (returns { context, articles } | null)
+  const retrieve = (q: string) => {
+    try { return (retrievalMod as { retrieve?: (x: string) => unknown }).retrieve?.(q) ?? null; }
+    catch { return null; }
+  };
+
+  fastify.get('/help/manifest', { preHandler: [fastify.authenticate] }, async () => getManifest());
 
   fastify.get<{ Params: { id: string } }>(
     '/help/article/:id',
@@ -65,11 +79,19 @@ export async function helpRoutes(fastify: FastifyInstance): Promise<void> {
     '/help/ask',
     { preHandler: [fastify.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (req, reply) => {
-      const { question, route } = req.body || {};
+      const { question } = req.body || {};
       if (!question || typeof question !== 'string' || question.trim().length === 0 || question.length > 1000) {
         return reply.code(400).send({ error: 'question required (1-1000 chars)' });
       }
-      return answerQuestion(question, typeof route === 'string' ? route : undefined, complete);
+      const r = await answerQuestion(question, { complete, api, retrieve });
+      // normalize to the { answer, citations, refused } shape the client already renders
+      return {
+        refused: !!r.refused,
+        answer: r.answer,
+        citations: [],
+        sources: r.sources ?? [],
+        bucket: r.bucket,
+      };
     },
   );
 }
