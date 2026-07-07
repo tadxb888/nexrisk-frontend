@@ -86,6 +86,12 @@ export default function HelpPage() {
         );
       }
     }
+
+    const byOrder = (x: HelpArticleMeta, y: HelpArticleMeta) => {
+      const ox = x.order ?? 999, oy = y.order ?? 999;
+      return ox !== oy ? ox - oy : (x.title.split('—')[0].trim()).localeCompare(y.title.split('—')[0].trim());
+    };
+    for (const d of Object.keys(byDomain)) byDomain[d].sort(byOrder);
     return byDomain;
   }, [manifest, filter]);
 

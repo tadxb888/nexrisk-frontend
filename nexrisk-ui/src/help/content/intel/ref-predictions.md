@@ -6,6 +6,7 @@ domain: intel
 module: predictions
 minLevel: VIEW
 route: /predictions
+order: 6
 source:
   - "cockpitHelp.ts cards 7/8/9 (NexDay daily outlook, intraday co-trending, best opportunities — predicted_strength, momentum states, reversal windows, tier reference)"
   - "Settings API nexday section (daily ~17:01 ET, intraday polling interval, mapped-symbol scope)"

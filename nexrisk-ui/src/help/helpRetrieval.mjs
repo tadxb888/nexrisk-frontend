@@ -115,6 +115,7 @@ export function getManifest() {
     articles: bundle.articles.filter((a) => reviewed.has(a.id)).map((a) => ({
       id: a.id, title: a.title, type: a.type, domain: a.domain,
       module: a.module, route: a.route, tags: a.tags || [], related: a.related || [],
+      order: a.order ?? null,
       chapters: a.chapters || [],
     })),
   };

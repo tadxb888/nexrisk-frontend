@@ -5,6 +5,7 @@
 export interface HelpArticleMeta {
   id: string; title: string; type: string; domain: string;
   module: string; route: string; tags: string[]; related: string[];
+  order?: number | null;
   chapters?: { title: string; id: string }[];
 }
 export interface HelpManifest { version: string; articles: HelpArticleMeta[]; }

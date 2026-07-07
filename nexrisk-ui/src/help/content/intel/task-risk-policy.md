@@ -6,6 +6,7 @@ domain: intel
 module: charter
 minLevel: VIEW
 route: /risk-charter
+order: 1
 source:
   - "Risk_Charter_Guide.docx — operating guide (ingested verbatim)"
 related: []
