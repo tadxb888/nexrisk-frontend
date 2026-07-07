@@ -18,8 +18,7 @@
 //   • Network Cluster (/infra, 'infra_monitor') — rendered ungated for now so
 //     it's visible before the C++ module grant exists. To gate later, wrap the
 //     renderLeaf(NETWORK_CLUSTER) call in `can(NETWORK_CLUSTER.module) && ...`.
-//   • Help → Operational Manual (/help/manual, route not built) + frontend /
-//     backend version strings (copy-to-clipboard; placeholder values).
+//   • Help → direct link to /help/manual (version labels now live on the help page).
 //
 // Colour convention mirrors the old TopBar:
 //   #f5802c (orange) — the section that owns the current page ("you-are-here")
@@ -48,12 +47,9 @@ const RAIL_PIN_KEY    = 'taiga:rail-pinned';   // when pinned, the rail stays op
 // ── Provisioned placeholders (wired later) ───────────────────
 const NETWORK_CLUSTER: SubItem = { path: '/infra', label: 'Network Cluster', module: 'infra_monitor' };
 
-const HELP_ID = '__help__';
 
 // Frontend build version, injected by Vite at build time (see vite.config.ts
 // `define`). Backend version is fetched at runtime — see the component.
-declare const __APP_VERSION__: string;
-const FRONTEND_VERSION = __APP_VERSION__;
 
 // ── Pin persistence (shares the existing key with the top bar) ───────────────
 const PIN_KEY = 'taiga:pinned-items';
@@ -97,12 +93,6 @@ const Chevron = ({ open }: { open: boolean }) => (
   </svg>
 );
 
-const CopyIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-    <rect x="9" y="9" width="12" height="12" rx="2" />
-    <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
-  </svg>
-);
 
 // Sidebar toggle glyph (from sidebar.svg) — panel with a rail divider.
 const SidebarToggleIcon = ({ size = 16 }: { size?: number }) => (
@@ -125,19 +115,7 @@ export function Sidebar() {
   const can = useCallback((module: string) => hasPermission(module, 'VIEW'), [hasPermission]);
 
   const [pins, setPins] = useState<string[]>(loadPins);
-  const [copied, setCopied] = useState<string | null>(null);
 
-  // Backend version — fetched from /api/health. Shows '—' until the backend
-  // exposes it (see backend-brief-version-endpoint.md); lights up once present.
-  const [backendVersion, setBackendVersion] = useState('—');
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/health', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => { if (!cancelled && d?.versions?.service) setBackendVersion(d.versions.service); })
-      .catch(() => { /* health unreachable — leave placeholder */ });
-    return () => { cancelled = true; };
-  }, []);
   // Auto-collapse unless pinned. `pinned` persists; `hovered` expands the rail
   // on mouse-over when it isn't pinned. Effective expanded = pinned || hovered.
   const [pinned, setPinned] = useState<boolean>(() => {
@@ -180,11 +158,6 @@ export function Sidebar() {
     if (o) setOpenId(o.id);
   }, [location.pathname]);
 
-  const copy = useCallback((label: string, value: string) => {
-    try { void navigator.clipboard.writeText(value); } catch { /* clipboard blocked */ }
-    setCopied(label);
-    setTimeout(() => setCopied(c => (c === label ? null : c)), 1200);
-  }, []);
 
   // ── Render helpers ─────────────────────────────────────────
   const renderLeaf = (item: SubItem, opts: { showPin?: boolean } = {}) => {
@@ -241,23 +214,6 @@ export function Sidebar() {
     );
   };
 
-  const renderVersionRow = (label: string, value: string) => (
-    <button
-      key={label}
-      onClick={() => copy(label, value)}
-      className="group w-full flex items-center justify-between transition-colors"
-      style={{ padding: '5px 12px 5px 26px', fontSize: 12, color: COLOR_SUB_DEFAULT }}
-      title={`Copy ${label.toLowerCase()}`}
-    >
-      <span>{label}</span>
-      <span className="flex items-center gap-1.5" style={{ color: '#9a9a9a' }}>
-        <span style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#bdbdbd' }}>{value}</span>
-        <span style={{ color: copied === label ? COLOR_ACCENT : '#888' }}>
-          {copied === label ? '✓' : <CopyIcon />}
-        </span>
-      </span>
-    </button>
-  );
 
   // ── Render ─────────────────────────────────────────────────
   return (
@@ -345,16 +301,28 @@ export function Sidebar() {
             );
           })}
 
-          {/* PROVISIONED: Help — always visible (ungated chrome). */}
+          {/* PROVISIONED: Help — direct link to the help page (no submenu). */}
           <div style={{ borderBottom: `1px solid ${BORDER}`, marginTop: 'auto' }}>
-            {renderSectionHeader(HELP_ID, 'Help', false)}
-            {openId === HELP_ID && (
-              <div style={{ paddingBottom: 6 }}>
-                {renderLeaf({ path: '/help/manual', label: 'Operational Manual', module: '__help__' }, { showPin: false })}
-                {renderVersionRow('Frontend version', FRONTEND_VERSION)}
-                {renderVersionRow('Backend version', backendVersion)}
-              </div>
-            )}
+            {(() => {
+              const isActive = location.pathname === '/help/manual';
+              return (
+                <NavLink
+                  to="/help/manual"
+                  className="w-full flex items-center gap-2 transition-colors"
+                  style={{
+                    padding: '9px 12px',
+                    fontSize: 14,
+                    color: isActive ? COLOR_ACCENT : '#cfcfcf',
+                    borderLeft: `2px solid ${isActive ? COLOR_ACCENT : 'transparent'}`,
+                    backgroundColor: isActive ? HOVER_BG : 'transparent',
+                  }}
+                  onMouseEnter={e => { if (!isActive) e.currentTarget.style.backgroundColor = HOVER_BG; }}
+                  onMouseLeave={e => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                >
+                  <span className="truncate">Help</span>
+                </NavLink>
+              );
+            })()}
           </div>
         </>
       )}
