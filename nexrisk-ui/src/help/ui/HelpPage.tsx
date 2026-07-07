@@ -8,7 +8,6 @@ import { T, DOMAIN_LABEL, DOMAIN_ORDER } from './helpTheme';
 import { helpClient, HelpArticle, HelpArticleMeta } from './helpClient';
 import { useHelpAsk } from './useHelpAsk';
 import Markdown from './Markdown';
-import { HELP_GRAPHIC } from './helpGraphic';
 
 export default function HelpPage() {
   const [manifest, setManifest] = useState<HelpArticleMeta[]>([]);
@@ -135,7 +134,7 @@ export default function HelpPage() {
                 >
                   <span style={{ display: 'inline-block', width: 12, color: T.textDim, fontSize: 10, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s' }}>▶</span>
                   <span style={{ flex: 1 }}>{DOMAIN_LABEL[d] || d}</span>
-                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMute }}>{grouped[d].length}</span>
+                  
                 </button>
                 {open && (
                   <div style={{ paddingBottom: 6, marginLeft: 18, borderLeft: `1px solid ${T.border}` }}>
@@ -260,12 +259,9 @@ export default function HelpPage() {
               <Markdown text={active.body} onCite={openArticle} />
             </article>
           ) : messages.length === 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', paddingTop: 24, width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
-              <div style={{ width: '100%', maxWidth: 420, margin: '0 auto', opacity: 0.96, lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: HELP_GRAPHIC }} />
-              <div style={{ color: T.textDim, fontSize: 14, maxWidth: 560, marginTop: 8, lineHeight: 1.6 }}>
-                Ask about any Taiga feature — how to configure it, what a field means, or where a setting lives.
-                Answers are drawn only from the Content library and cite their sources. Browse the sections on the left.
-              </div>
+            <div style={{ color: T.textDim, fontSize: 14, maxWidth: 520, marginTop: 48, lineHeight: 1.6 }}>
+              Ask about any Taiga feature — how to configure it, what a field means, or where a setting lives.
+              Answers are drawn only from the Content library and cite their sources. Browse the sections on the left.
             </div>
           ) : (
             messages.map((m, n) => (
