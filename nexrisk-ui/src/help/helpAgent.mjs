@@ -33,6 +33,11 @@ You are Taiga's operations assistant for an institutional FX/CFD broker. Hard ru
 
 const gapsText = KNOWN_GAPS.map((g) => `- ${g.topic}: ${g.note}`).join('\n');
 
+function historyText(history) {
+  if (!Array.isArray(history) || !history.length) return '';
+  return history.slice(-6).map((h) => `${h.role === 'user' ? 'User' : 'Assistant'}: ${String(h.text).slice(0, 500)}`).join('\n');
+}
+
 // ── PASS 1: planner ──
 function buildPlannerPrompt() {
   return `${SAFETY_RULES}
@@ -122,11 +127,13 @@ const DECLINE = {
 export async function answerQuestion(question, ctx) {
   const q = (question || '').trim();
   if (!q) return { bucket: 'decline', refused: true, answer: DECLINE.default };
-  const { complete, api, retrieve } = ctx;
+  const { complete, api, retrieve, history } = ctx;
+  const convo = historyText(history);
 
   let plan;
   try {
-    const p = await complete({ system: buildPlannerPrompt(), question: q });
+    const plannerQ = convo ? `Recent conversation (for resolving references like "it"/"that symbol"):\n${convo}\n\nCurrent question: ${q}` : q;
+    const p = await complete({ system: buildPlannerPrompt(), question: plannerQ });
     plan = p && p.ok ? safeParse(p.text) : null;
   } catch { plan = null; }
   if (!plan || !plan.bucket) plan = { bucket: 'general' };
@@ -167,7 +174,7 @@ export async function answerQuestion(question, ctx) {
     }
     let ans;
     try {
-      const r = await complete({ system: liveAnswerPrompt(results), question: q });
+      const r = await complete({ system: liveAnswerPrompt(results), question: convo ? `${convo}\n\nCurrent question: ${q}` : q });
       ans = r && r.ok && r.text ? r.text.trim() : null;
     } catch { ans = null; }
     return { bucket: 'live', refused: false, answer: ans || 'I retrieved the data but had trouble summarising it — please try again.', sources: results.map((x) => x.id) };

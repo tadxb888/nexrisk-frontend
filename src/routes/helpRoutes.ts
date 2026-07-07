@@ -75,15 +75,16 @@ export async function helpRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
-  fastify.post<{ Body: { question?: string; route?: string } }>(
+  fastify.post<{ Body: { question?: string; route?: string; history?: { role: string; text: string }[] } }>(
     '/help/ask',
     { preHandler: [fastify.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (req, reply) => {
-      const { question } = req.body || {};
+      const { question, history } = req.body || {};
       if (!question || typeof question !== 'string' || question.trim().length === 0 || question.length > 1000) {
         return reply.code(400).send({ error: 'question required (1-1000 chars)' });
       }
-      const r = await answerQuestion(question, { complete, api, retrieve });
+      const hist = Array.isArray(history) ? history.filter((h) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.text === 'string').slice(-6) : [];
+      const r = await answerQuestion(question, { complete, api, retrieve, history: hist });
       // normalize to the { answer, citations, refused } shape the client already renders
       return {
         refused: !!r.refused,

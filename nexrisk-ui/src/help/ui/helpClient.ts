@@ -31,11 +31,11 @@ export const helpClient = {
   getArticle: (id: string): Promise<HelpArticle> =>
     fetch(`/api/v1/help/article/${encodeURIComponent(id)}`, { credentials: 'include' }).then(j),
 
-  ask: (question: string, route?: string): Promise<HelpAnswer> =>
+  ask: (question: string, route?: string, history?: { role: string; text: string }[]): Promise<HelpAnswer> =>
     fetch('/api/v1/help/ask', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, route }),
+      body: JSON.stringify({ question, route, history: history ?? [] }),
     }).then(j),
 };

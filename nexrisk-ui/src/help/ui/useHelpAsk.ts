@@ -4,7 +4,7 @@
 // the grounded answer or refusal. The BFF is stateless/single-turn, so we send
 // only the latest question; the thread here is for display.
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { helpClient, HelpCitation } from './helpClient';
 
 export interface HelpMessage {
@@ -17,6 +17,8 @@ export interface HelpMessage {
 export function useHelpAsk(route?: string) {
   const [messages, setMessages] = useState<HelpMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const messagesRef = useRef<HelpMessage[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const ask = useCallback(async (raw: string) => {
     const question = raw.trim();
@@ -24,7 +26,9 @@ export function useHelpAsk(route?: string) {
     setMessages((m) => [...m, { role: 'user', text: question }]);
     setLoading(true);
     try {
-      const res = await helpClient.ask(question, route);
+      // send recent turns so follow-ups like "what about that symbol?" keep context
+      const history = messagesRef.current.slice(-6).map((m) => ({ role: m.role, text: m.text }));
+      const res = await helpClient.ask(question, route, history);
       setMessages((m) => [...m, { role: 'assistant', text: res.answer, citations: res.citations, refused: res.refused }]);
     } catch {
       setMessages((m) => [...m, {
