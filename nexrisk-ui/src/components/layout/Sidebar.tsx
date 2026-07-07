@@ -43,6 +43,7 @@ const BORDER             = '#2f2f33';
 const RAIL_W_OPEN     = 240;
 const RAIL_W_COLLAPSED = 46;
 const COLLAPSE_KEY    = 'taiga:rail-collapsed';
+const RAIL_PIN_KEY    = 'taiga:rail-pinned';   // when pinned, the rail stays open; otherwise it auto-collapses
 
 // ── Provisioned placeholders (wired later) ───────────────────
 const NETWORK_CLUSTER: SubItem = { path: '/infra', label: 'Network Cluster', module: 'infra_monitor' };
@@ -137,14 +138,18 @@ export function Sidebar() {
       .catch(() => { /* health unreachable — leave placeholder */ });
     return () => { cancelled = true; };
   }, []);
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
+  // Auto-collapse unless pinned. `pinned` persists; `hovered` expands the rail
+  // on mouse-over when it isn't pinned. Effective expanded = pinned || hovered.
+  const [pinned, setPinned] = useState<boolean>(() => {
+    try { return localStorage.getItem(RAIL_PIN_KEY) === '1'; } catch { return false; }
   });
+  const [hovered, setHovered] = useState(false);
+  const collapsed = !(pinned || hovered);
 
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed(prev => {
+  const togglePinned = useCallback(() => {
+    setPinned(prev => {
       const next = !prev;
-      try { localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      try { localStorage.setItem(RAIL_PIN_KEY, next ? '1' : '0'); } catch { /* ignore */ }
       return next;
     });
   }, []);
@@ -259,6 +264,8 @@ export function Sidebar() {
     <nav
       aria-label="Primary"
       className="shrink-0 flex flex-col overflow-y-auto"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         width: collapsed ? RAIL_W_COLLAPSED : RAIL_W_OPEN,
         height: '100%',
@@ -273,9 +280,9 @@ export function Sidebar() {
         <>
           <div className="flex justify-center" style={{ padding: '9px 0', borderBottom: `1px solid ${BORDER}` }}>
             <button
-              onClick={toggleCollapsed}
-              title="Expand menu"
-              aria-label="Expand menu"
+              onClick={togglePinned}
+              title="Pin menu open"
+              aria-label="Pin menu open"
               style={{ color: COLOR_OWNER, display: 'flex', alignItems: 'center', padding: 2 }}
             >
               <SidebarToggleIcon size={18} />
@@ -285,7 +292,8 @@ export function Sidebar() {
               bottom-to-top to match the DOM Trader tab. */}
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <span
-              onClick={toggleCollapsed}
+              onClick={togglePinned}
+              title="Pin menu open"
               style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 13, letterSpacing: '0.16em', textTransform: 'uppercase', color: COLOR_OWNER, fontWeight: 500, cursor: 'pointer' }}
             >
               Menu
@@ -295,9 +303,9 @@ export function Sidebar() {
       ) : (
         <div className="flex items-center gap-2" style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}` }}>
           <button
-            onClick={toggleCollapsed}
-            title="Collapse menu"
-            aria-label="Collapse menu"
+            onClick={togglePinned}
+            title={pinned ? 'Unpin (auto-collapse)' : 'Pin menu open'}
+            aria-label="Toggle menu pin"
             style={{ color: COLOR_OWNER, display: 'flex', alignItems: 'center', padding: 2 }}
           >
             <SidebarToggleIcon size={18} />
@@ -305,6 +313,14 @@ export function Sidebar() {
           <span style={{ fontSize: 13, letterSpacing: '0.10em', textTransform: 'uppercase', color: COLOR_OWNER, fontWeight: 500 }}>
             Menu
           </span>
+          <button
+            onClick={togglePinned}
+            title={pinned ? 'Unpin (auto-collapse)' : 'Pin menu open'}
+            aria-label="Toggle menu pin"
+            style={{ marginLeft: 'auto', color: pinned ? COLOR_ACCENT : '#7a7a7a', display: 'flex', alignItems: 'center', padding: 2, transform: pinned ? 'none' : 'rotate(45deg)', transition: 'transform 0.12s, color 0.12s' }}
+          >
+            <PinIcon filled={pinned} />
+          </button>
         </div>
       )}
 

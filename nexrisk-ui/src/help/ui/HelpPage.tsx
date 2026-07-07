@@ -48,9 +48,9 @@ export default function HelpPage() {
   useEffect(() => { helpClient.getManifest().then((m) => setManifest(m.articles)).catch(() => {}); }, []);
   // backend version for the footer (best-effort; shows — if unavailable)
   useEffect(() => {
-    fetch('/api/v1/health', { credentials: 'include' })
+    fetch('/api/health', { credentials: 'include' })
       .then((r) => r.ok ? r.json() : null)
-      .then((h) => { const v = h?.versions?.service ?? h?.versions?.bff ?? h?.version; if (v) setBackendVersion(String(v)); })
+      .then((h) => { const v = h?.versions?.service ?? h?.versions?.bff; if (v) setBackendVersion(String(v)); })
       .catch(() => {});
   }, []);
 
