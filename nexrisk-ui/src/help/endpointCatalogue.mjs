@@ -199,13 +199,37 @@ export const ENDPOINTS = [
     purpose: 'Behavioural cluster profiles for a run.', group: 'intel' },
   { id: 'clustering_assignments', path: '/api/v1/clustering/runs/:run_id/assignments',
     purpose: 'Trader members of clusters for a run.', group: 'intel' },
+
+  // ── Predictions (NexDay forecasts) ──────────────────────────────
+  { id: 'pred_intraday_symbol', path: '/api/v1/predictions/intraday/:mt5_symbol',
+    purpose: "Intraday NexDay forecast for ONE symbol — all four timeframes (15min/30min/1hour/2hour) in one call: predicted_high, predicted_low, predicted_close, trend, strength, momentum. TAKES AN MT5 SYMBOL (e.g. EURUSD). Use for 'predicted high/low for <symbol> 15min', intraday forecast for a symbol. If unmapped, returns mapped=false.", group: 'predictions' },
+  { id: 'pred_intraday_all', path: '/api/v1/predictions/intraday', params: { timeframe: '15min|30min|1hour|2hour (default 15min)' },
+    purpose: 'Latest intraday forecast for ALL symbols at one timeframe. Use for market-wide intraday view, or scanning all symbols at 15min/1hour/etc.', group: 'predictions' },
+  { id: 'pred_daily_all', path: '/api/v1/predictions/daily',
+    purpose: "All symbols' latest DAILY forecast (predicted OHLC, trend, strength, confidence, momentum, 2-day-ahead). Use for daily outlook across the book.", group: 'predictions' },
+  { id: 'pred_daily_symbol', path: '/api/v1/predictions/daily/:symbol', params: { limit: '? (max 100)' },
+    purpose: "Daily forecast history for one NexDay symbol. TAKES A NEXDAY SYMBOL (e.g. EURUSD.FXCM, not EURUSD) — resolve via nexday mapping first, or prefer pred_intraday_symbol which takes MT5 symbols. 404 on miss.", group: 'predictions' },
+  { id: 'pred_signals', path: '/api/v1/predictions/signals', params: { mt5_symbols: 'comma-separated MT5 symbols, e.g. EURUSD,GBPUSD (required)' },
+    purpose: "Batch signal per MT5 symbol: Opp@<tf> / Hdg@<tf> / none, with strength and conviction. TAKES MT5 SYMBOLS. Use for 'what's the signal on <symbols>', opportunity vs hedge signal, net-exposure signal column.", group: 'predictions' },
+  { id: 'pred_opportunities', path: '/api/v1/opportunities', params: { conviction: '? exact-match filter' },
+    purpose: 'Trade opportunities across symbols (conviction, opportunity, recommended_action, risk_reward). Use for best opportunities, what to trade, ranked ideas.', group: 'predictions' },
+  { id: 'pred_opportunity_symbol', path: '/api/v1/opportunities/:symbol',
+    purpose: 'Opportunity for one NexDay symbol (bare object). TAKES A NEXDAY SYMBOL. 404 on miss.', group: 'predictions' },
+  { id: 'pred_tradebook', path: '/api/v1/tradebook',
+    purpose: 'Tradebook entries across symbols: action, entry/TP/SL bands, risk_reward. Use for suggested entry/stop/target levels.', group: 'predictions' },
+  { id: 'pred_tradebook_symbol', path: '/api/v1/tradebook/:symbol',
+    purpose: 'Tradebook for one NexDay symbol (bare object). TAKES A NEXDAY SYMBOL. 404 on miss.', group: 'predictions' },
+  { id: 'nexday_symbols', path: '/api/v1/nexday/symbols',
+    purpose: 'The NexDay symbol universe (NexDay-keyed names + descriptions). Use to resolve an MT5 symbol to its NexDay symbol, or list available forecast symbols.', group: 'predictions' },
+  { id: 'nexday_sync_status', path: '/api/v1/nexday/sync-status',
+    purpose: 'Per-endpoint NexDay sync rows (last_sync_at, records, status).', group: 'predictions' },
+  { id: 'pred_status', path: '/api/v1/predictions/status',
+    purpose: "Predictions freshness/health (ok|pending|degraded, last sync times). Use for 'are predictions up to date', prediction data health.", group: 'predictions' },
 ];
 
 // Known data gaps — endpoints that DON'T exist yet, so the agent answers honestly
 // ("that data isn't exposed to me yet") instead of a generic refusal.
 export const KNOWN_GAPS = [
-  { topic: 'predictions / NexDay forecast values (predicted high/low/direction per symbol/timeframe)',
-    note: 'No prediction-data GET endpoint is published in the endpoint index. NexDay settings exist, but the live forecast values are not exposed as a callable endpoint yet.' },
   { topic: 'live tick / current quote for a symbol (spot price right now)',
     note: 'Live quotes stream over WebSocket (quote.{source}.{symbol}), not a REST GET the assistant can call.' },
 ];
@@ -214,7 +238,7 @@ export const KNOWN_GAPS = [
 export const READ_WHITELIST = ENDPOINTS.map((e) => {
   const rx = e.path
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')       // escape
-    .replace(/:[A-Za-z_]+/g, '[^/?]+');           // :param -> segment
+    .replace(/:[A-Za-z0-9_]+/g, "[^/?]+");           // :param -> segment
   return new RegExp('^' + rx + '(\\?.*)?$');
 });
 
