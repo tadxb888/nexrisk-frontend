@@ -623,17 +623,87 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
-   * GET /api/v1/settings/gateway/status
-   * Live probe — currently 501 NOT_IMPLEMENTED at the C++ layer. The UI
-   * renders the Live Status panel in inactive state while this returns 501
-   * and will flip to live values once the gateway exposes its ZMQ control
-   * channel. The proxy forwards 501 verbatim so the frontend can branch on it.
+   * GET /api/v1/settings/gateway/status  (§ G3 — live)
+   * Live probe, derived from the gateway status log + SCM process state.
+   * Envelope: { success, service_state, running, state, mt5_connected,
+   *   ticks_received, ticks_sent, tick_rate_per_sec, status_line_time,
+   *   status_age_sec, source, note }. `state` ∈ live | warming_up |
+   *   no_recent_status | stale | down | unknown. Metrics are null unless
+   *   state === 'live'. Forwarded verbatim (snake_case). Poll ~30-60s.
    */
   fastify.get(
     '/settings/gateway/status',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       return proxyGetRaw('/api/v1/settings/gateway/status', reply);
+    }
+  );
+
+  // ══════════════════════════════════════════════════════════
+  // SERVICE HEALTH (§ G1) + SETTINGS AUDIT HISTORY (§ G2)
+  // Cross-cutting: every Settings sub-page reads these. Raw pass-through
+  // to preserve the exact snake_case shapes captured live in the FE
+  // action list. Both are poll-based (no WebSocket).
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * GET /api/v1/settings/services/health  (§ G1) — poll ~10-30s.
+   * Live process state for the three managed services (nexrisk / gateway /
+   * fixbridge) from the Windows SCM, with uptime + last_start from the real
+   * app process.
+   * Envelope: { success, services:[{ id, label, state, running,
+   *   uptime_seconds, last_start }] }. state ∈ RUNNING | STOPPED |
+   *   START_PENDING | STOP_PENDING | PAUSED | PAUSE_PENDING |
+   *   CONTINUE_PENDING | UNKNOWN. uptime_seconds/last_start are null when
+   *   the service isn't running. Snake_case forwarded verbatim.
+   */
+  fastify.get(
+    '/settings/services/health',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/services/health', reply);
+    }
+  );
+
+  /**
+   * GET /api/v1/settings/{section}/history?limit=&from=&to=  (§ G2)
+   * Audit trail of settings edits with real JWT-email attribution.
+   * Envelope: { history:[{ id, subsection, change_type, old_values,
+   *   new_values, changed_by, changed_at, reason }], total } — no success
+   *   wrapper. Newest-first. limit default 100, capped 1000.
+   *
+   * Raw pass-through (snake_case) — distinct from the classifier/detection/
+   * llm history routes above, which camelCase-transform for the archetype
+   * surface. These three belong to the System Administration surface and
+   * match the FE action list 1:1.
+   *
+   * Caveat: the `nexrisk` section history covers all NexRisk subsections
+   * (alerts, mt5, analysis, detection-system, memory, llm-system, nexday,
+   * telegram, webhooks) — the Auth/TE/NexDay/Alerting panels all read it and
+   * filter client-side on `subsection`. LP history is not audited yet
+   * (backend "G2 LP tail" pending) — no LP history route until it ships.
+   */
+  fastify.get(
+    '/settings/nexrisk/history',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/nexrisk/history', reply, request.query as Record<string, unknown>);
+    }
+  );
+
+  fastify.get(
+    '/settings/gateway/history',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/gateway/history', reply, request.query as Record<string, unknown>);
+    }
+  );
+
+  fastify.get(
+    '/settings/fixbridge/history',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/fixbridge/history', reply, request.query as Record<string, unknown>);
     }
   );
 
@@ -1258,10 +1328,19 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
-   * GET /api/v1/settings/fixbridge/status
-   * Live probe — currently 501 NOT_IMPLEMENTED at the C++ layer. Will return
-   * FIX session state, message counters, last-message timestamps once wired.
-   * Forwarded verbatim so the UI can branch on status code.
+   * GET /api/v1/settings/fixbridge/status  (§ G4 — live)
+   * Queries the bridge over its command channel + core service client view.
+   * Envelope: { success, connected, client:{ connected, commands_sent,
+   *   commands_failed, events_received, executions_received,
+   *   md_updates_received, last_event_timestamp_us, last_heartbeat_us },
+   *   bridge:{ bridge_id, environment, state, uptime_sec, commands_processed,
+   *   commands_failed, lps:[{ lp_id, provider_type, state }] } }.
+   * Degraded: { success, connected:false, state:'unavailable', message } when
+   *   the bridge client is uninitialised; or bridge:null + bridge_error string
+   *   when the round-trip fails while the SUB link is up. Forwarded verbatim.
+   * Caveat: use client.last_event_timestamp_us for "last message" — NOT
+   *   last_heartbeat_us (currently 0). Poll ~10-15s; each call round-trips
+   *   the shared command channel, so keep cadence modest.
    */
   fastify.get(
     '/settings/fixbridge/status',
