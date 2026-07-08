@@ -272,7 +272,7 @@ export function AuthFooter() {
         </a>
       </div>
       <p style={{ fontSize: 11, color: '#505060', margin: 0, textAlign: 'center' as const }}>
-        © 2026 Taiga Ltd, England. All rights reserved.
+        © 2026 Forsa Ltd, England. All rights reserved.
       </p>
     </div>
   );

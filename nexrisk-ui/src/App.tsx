@@ -12,6 +12,9 @@ import { SetupPage } from '@/pages/SetupPage';
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
+import { TermsPage } from '@/pages/legal/TermsPage';
+import { DisclosurePage } from '@/pages/legal/DisclosurePage';
+import { PrivacyPage } from '@/pages/legal/PrivacyPage';
 import { CockpitHelpPage } from './help/CockpitHelpPage';
 import HelpPage from './help/ui/HelpPage';
 
@@ -88,6 +91,11 @@ function App() {
             <Route path="/change-password" element={<ChangePasswordPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+            {/* ── Legal (public — linked from the auth footer) ── */}
+            <Route path="/terms"      element={<TermsPage />} />
+            <Route path="/disclosure" element={<DisclosurePage />} />
+            <Route path="/privacy"    element={<PrivacyPage />} />
 
             {/* ── Protected routes — session required ── */}
             <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
