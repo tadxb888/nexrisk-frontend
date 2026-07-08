@@ -14,7 +14,7 @@
 //   Right — Live status (501 stub today) · Recent changes · Service
 // ============================================
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 
@@ -37,6 +37,7 @@ import {
   type ApiResult,
   type LogServiceDescriptor,
 } from '@/services/api';
+import { useServiceHealth, ServiceHealthRows, RecentChangesPanel } from './SettingsSidePanels';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Access control — same set as the hub
@@ -139,6 +140,36 @@ export function FixBridgePage() {
   const [statusResult,    setStatusResult]    = useState<ApiResult<FixBridgeStatus> | null>(null);
   const [fixbridgeLogDir, setFixbridgeLogDir] = useState<string | null>(null);
 
+  // ── live service health (§ G1) + recent-changes refresh (§ G2) ──
+  const { health, loading: healthLoading, error: healthError } = useServiceHealth('fixbridge');
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+
+  // ── in/out message rates (§ G4) — derived from counter deltas between polls ──
+  const prevSampleRef = useRef<{ ts: number; sent: number; recv: number } | null>(null);
+  const [rates, setRates] = useState<{ inbound: number | null; outbound: number | null }>({ inbound: null, outbound: null });
+
+  function applyStatus(r: ApiResult<FixBridgeStatus>) {
+    setStatusResult(r);
+    if (r.kind === 'ok' && r.data.client) {
+      const c = r.data.client;
+      const now = Date.now();
+      const recv = (c.events_received ?? 0) + (c.md_updates_received ?? 0);
+      const sent = c.commands_sent ?? 0;
+      const prev = prevSampleRef.current;
+      if (prev && now > prev.ts) {
+        const dt = (now - prev.ts) / 1000;
+        setRates({
+          inbound:  Math.max(0, (recv - prev.recv) / dt),
+          outbound: Math.max(0, (sent - prev.sent) / dt),
+        });
+      }
+      prevSampleRef.current = { ts: now, sent, recv };
+    } else {
+      prevSampleRef.current = null;
+      setRates({ inbound: null, outbound: null });
+    }
+  }
+
   // ── load ────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -155,7 +186,7 @@ export function FixBridgePage() {
         if (cancelled) return;
         setInitial(getResp.data);
         setDraft(draftFromConfig(getResp.data));
-        setStatusResult(statusResp);
+        applyStatus(statusResp);
         if (logsResp) {
           const svc = logsResp.services.find((s: LogServiceDescriptor) => s.id === 'fixbridge');
           setFixbridgeLogDir(svc?.log_dir ?? null);
@@ -171,6 +202,23 @@ export function FixBridgePage() {
 
     void load();
     return () => { cancelled = true; };
+  }, []);
+
+  // ── live status poll (§ G4) — modest cadence: each call round-trips the
+  //    bridge command channel shared with order dispatch. ──
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function tick() {
+      try {
+        const r = await settingsApi.fixbridge.status();
+        if (!cancelled) applyStatus(r);
+      } catch { /* keep last good value */ }
+      finally { if (!cancelled) timer = setTimeout(tick, 12_000); }
+    }
+    timer = setTimeout(tick, 12_000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── dirty ───────────────────────────────────────────────────────
@@ -305,6 +353,8 @@ export function FixBridgePage() {
       const fresh = await settingsApi.fixbridge.get();
       setInitial(fresh.data);
       setDraft(draftFromConfig(fresh.data));
+      setHistoryRefresh(k => k + 1);
+      settingsApi.fixbridge.status().then(applyStatus).catch(() => { /* keep last */ });
 
       const services = res.restart_required ?? [];
       setSavedMessage(
@@ -593,7 +643,7 @@ export function FixBridgePage() {
               <h2 className="text-base font-medium text-text-primary m-0">Live status</h2>
               <StatusStub result={statusResult} />
             </div>
-            <LiveStatusBody result={statusResult} />
+            <LiveStatusBody result={statusResult} rates={rates} />
           </div>
 
           {/* Recent changes */}
@@ -604,13 +654,7 @@ export function FixBridgePage() {
                 Last edits to this file, drawn from the audit log
               </p>
             </div>
-            <div className="px-5 py-5">
-              <p className="text-xs text-text-muted m-0 text-center">
-                Audit log integration is scheduled for a follow-up ticket. This panel will
-                populate with the last five edits to
-                <span className="font-mono"> config/fixbridge/fixbridge_config.json</span> once wired.
-              </p>
-            </div>
+            <RecentChangesPanel section="fixbridge" refreshKey={historyRefresh} />
           </div>
 
           {/* Service */}
@@ -618,14 +662,12 @@ export function FixBridgePage() {
             <div className="px-5 pt-3.5 pb-2.5 border-b border-border">
               <h2 className="text-base font-medium text-text-primary m-0">Service</h2>
               <p className="text-xs text-text-muted leading-snug m-0 mt-0.5">
-                Process metadata. Status, uptime, and last-start require backend support.
+                Live process state (§ G1), refreshed periodically.
               </p>
             </div>
             <div className="px-5 py-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
               <ServiceField label="Process"     value="fixbridge_service" mono />
-              <ServiceField label="Status"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Uptime"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Last start"  value="—" mono tone="muted" note="awaiting backend" />
+              <ServiceHealthRows health={health} loading={healthLoading} error={healthError} />
               <ServiceField label="Config file" value="config/fixbridge/fixbridge_config.json" mono small />
               <ServiceField label="Log dir"     value={fixbridgeLogDir ?? '—'} mono small />
             </div>
@@ -833,58 +875,126 @@ function Toggle({ on, onChange, disabled }: ToggleProps) {
   );
 }
 
+function fmtUsTs(us: number | undefined): string {
+  if (!us || us <= 0) return '—';
+  const d = new Date(us / 1000);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function fmtUptimeSec(sec: number | undefined): string {
+  if (sec === undefined || sec === null) return '—';
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
 function StatusStub({ result }: { result: ApiResult<FixBridgeStatus> | null }) {
-  if (!result || result.kind === 'ok') return null;
-  const label =
-    result.kind === 'not_implemented'
-      ? 'GET /fixbridge/status — 501 stub'
-      : `GET /fixbridge/status — ${result.status}`;
+  if (!result) return null;
+  let color = '#808080';
+  let label: string;
+  if (result.kind === 'not_implemented')      label = 'unavailable';
+  else if (result.kind === 'error')         { label = `error ${result.status}`; color = '#c09060'; }
+  else {
+    const d = result.data;
+    if (!d.connected)                    { color = '#d07070'; label = 'disconnected'; }
+    else if (d.state === 'unavailable')  { color = '#c09060'; label = 'unavailable'; }
+    else if (d.bridge === null)          { color = '#c09060'; label = 'bridge error'; }
+    else                                 { color = '#6aaa78'; label = 'connected'; }
+  }
   return (
     <span
-      className="font-mono text-[11px] px-2 py-0.5 rounded shrink-0"
-      style={{ background: '#18202a', color: '#5b86b8', border: '1px solid #2b3e57' }}
+      className="font-mono text-[11px] px-2 py-0.5 rounded shrink-0 uppercase tracking-wide"
+      style={{ color, border: `1px solid ${color}55` }}
     >
       {label}
     </span>
   );
 }
 
-function LiveStatusBody({ result }: { result: ApiResult<FixBridgeStatus> | null }) {
-  const notLive = !result || result.kind !== 'ok';
+function LiveStatusBody({ result, rates }: {
+  result: ApiResult<FixBridgeStatus> | null;
+  rates: { inbound: number | null; outbound: number | null };
+}) {
   const data = result?.kind === 'ok' ? result.data : null;
-  const val = (v: string | number | undefined | null) =>
-    v === undefined || v === null ? '—' : String(v);
+  const bridge = data?.bridge ?? null;
+  const active = !!data && data.connected && data.state !== 'unavailable';
+
+  const lps = bridge?.lps ?? [];
+  const connectedCount = lps.filter(l => l.state === 'CONNECTED').length;
+  const sessionsValue = bridge ? `${connectedCount} / ${lps.length}` : '—';
+  const sessionsTone: MetricTone =
+    !bridge ? undefined
+    : lps.length > 0 && connectedCount === lps.length ? 'ok'
+    : connectedCount === 0 ? 'crit'
+    : undefined;
+
+  const rate = (v: number | null | undefined) => (v === null || v === undefined ? '—' : v.toFixed(1));
+
+  let footer: React.ReactNode;
+  if (!result || result.kind === 'not_implemented') {
+    footer = 'Live status is not currently reported by the FIX bridge.';
+  } else if (result.kind === 'error') {
+    footer = `Status request failed (${result.status}).`;
+  } else if (data && data.state === 'unavailable') {
+    footer = data.message ?? 'FIX bridge client is not initialised.';
+  } else if (data && data.bridge === null) {
+    footer = data.bridge_error ?? 'Bridge command round-trip failed while the link is up.';
+  } else if (bridge) {
+    footer = (
+      <>
+        Bridge <span className="font-mono">{bridge.bridge_id}</span> · {bridge.environment} · up {fmtUptimeSec(bridge.uptime_sec)}
+      </>
+    );
+  }
 
   return (
     <div className="px-5 pt-3.5 pb-4">
       <div className="grid grid-cols-4 gap-3.5 mb-2.5">
-        <Metric label="Sessions"           value={val(data?.sessions_connected != null ? `${data.sessions_connected} / ${data.sessions_configured ?? '?'}` : undefined)} muted={notLive} />
-        <Metric label="Last message"       value={val(data?.last_message_at)} muted={notLive} />
-        <Metric label="Inbound msg/s"      value={val(data?.messages_per_sec_in)} muted={notLive} />
-        <Metric label="Outbound msg/s"     value={val(data?.messages_per_sec_out)} muted={notLive} />
+        <Metric label="Sessions"      value={sessionsValue}                       muted={!active} tone={sessionsTone} />
+        <Metric label="Last message"  value={fmtUsTs(data?.client?.last_event_timestamp_us)} muted={!active} />
+        <Metric label="In msg/s"      value={rate(rates.inbound)}                 muted={!active} />
+        <Metric label="Out msg/s"     value={rate(rates.outbound)}                muted={!active} />
       </div>
+
+      {bridge && lps.length > 0 && (
+        <div className="flex flex-col gap-1 border-t border-border pt-2.5 mb-2">
+          {lps.map(l => {
+            const ok = l.state === 'CONNECTED';
+            return (
+              <div key={l.lp_id} className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-mono text-text-secondary truncate">{l.lp_id}</span>
+                <span className="font-mono uppercase tracking-wide shrink-0" style={{ color: ok ? '#6aaa78' : '#d07070' }}>
+                  {l.state}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <p className="text-[11.5px] text-text-muted border-t border-border pt-2.5 leading-snug m-0">
-        {notLive
-          ? (
-            <>
-              Metrics populate once the FIX bridge exposes its control channel. The UI will
-              poll <span className="font-mono text-text-muted">/fixbridge/status</span> once it returns 200.
-            </>
-          )
-          : 'Live from the FIX bridge control channel.'}
+        {footer}
       </p>
     </div>
   );
 }
 
-function Metric({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+type MetricTone = 'ok' | 'crit' | undefined;
+
+function Metric({ label, value, muted, tone }: {
+  label: string; value: string; muted?: boolean; tone?: MetricTone;
+}) {
+  const color = tone === 'ok' ? '#6aaa78' : tone === 'crit' ? '#d07070' : undefined;
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[11px] text-text-muted uppercase tracking-wide">{label}</span>
-      <span className={clsx(
-        'text-lg font-mono font-medium',
-        muted ? 'text-text-muted' : 'text-text-primary',
-      )}>
+      <span
+        className={clsx('text-lg font-mono font-medium', muted ? 'text-text-muted' : 'text-text-primary')}
+        style={color && !muted ? { color } : undefined}
+      >
         {value}
       </span>
     </div>

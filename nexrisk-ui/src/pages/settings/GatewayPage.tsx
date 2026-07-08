@@ -25,6 +25,7 @@ import {
   type LogServiceDescriptor,
   type ApiResult,
 } from '@/services/api';
+import { useServiceHealth, ServiceHealthRows, RecentChangesPanel } from './SettingsSidePanels';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Access control — same set as the hub
@@ -89,6 +90,10 @@ export function GatewayPage() {
 
   const help = useHelp();
 
+  // ── live service health (§ G1) + recent-changes refresh (§ G2) ──
+  const { health, loading: healthLoading, error: healthError } = useServiceHealth('gateway');
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+
   // ── remote state ─────────────────────────────────────────────────
   const [initial,      setInitial]      = useState<GatewayConfig | null>(null);
   const [draft,        setDraft]        = useState<DraftState>(EMPTY_DRAFT);
@@ -134,6 +139,21 @@ export function GatewayPage() {
 
     void load();
     return () => { cancelled = true; };
+  }, []);
+
+  // ── live status poll (§ G3) — gateway status refreshes ~every 60s ──
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function tick() {
+      try {
+        const r = await settingsApi.gateway.status();
+        if (!cancelled) setStatusResult(r);
+      } catch { /* keep last good value */ }
+      finally { if (!cancelled) timer = setTimeout(tick, 45_000); }
+    }
+    timer = setTimeout(tick, 45_000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
   // ── dirty check ──────────────────────────────────────────────────
@@ -216,6 +236,8 @@ export function GatewayPage() {
       const fresh = await settingsApi.gateway.get();
       setInitial(fresh.data);
       setDraft(draftFromConfig(fresh.data));
+      setHistoryRefresh(k => k + 1);
+      settingsApi.gateway.status().then(setStatusResult).catch(() => { /* keep last */ });
 
       const services = res.restart_required ?? [];
       setSavedMessage(
@@ -418,7 +440,7 @@ export function GatewayPage() {
             <LiveStatusBody result={statusResult} />
           </div>
 
-          {/* Recent changes — placeholder awaiting audit-log wiring */}
+          {/* Recent changes (§ G2) */}
           <div className="bg-surface border border-border rounded overflow-hidden">
             <div className="px-5 pt-3.5 pb-2.5 border-b border-border">
               <h2 className="text-base font-medium text-text-primary m-0">Recent changes</h2>
@@ -426,13 +448,7 @@ export function GatewayPage() {
                 Last edits to this configuration, drawn from the audit log
               </p>
             </div>
-            <div className="px-5 py-5">
-              <p className="text-xs text-text-muted m-0 text-center">
-                Audit log integration is scheduled for a follow-up ticket. This panel will
-                populate with the last five edits to <span className="font-mono">config/nexrisk_gateway.json</span>
-                {' '}once wired.
-              </p>
-            </div>
+            <RecentChangesPanel section="gateway" refreshKey={historyRefresh} />
           </div>
 
           {/* Service */}
@@ -440,14 +456,12 @@ export function GatewayPage() {
             <div className="px-5 pt-3.5 pb-2.5 border-b border-border">
               <h2 className="text-base font-medium text-text-primary m-0">Service</h2>
               <p className="text-xs text-text-muted leading-snug m-0 mt-0.5">
-                Process metadata. Status, uptime, and last-start require backend support.
+                Live process state (§ G1), refreshed periodically.
               </p>
             </div>
             <div className="px-5 py-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
               <ServiceField label="Process"     value="nexrisk_gateway_service" mono />
-              <ServiceField label="Status"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Uptime"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Last start"  value="—" mono tone="muted" note="awaiting backend" />
+              <ServiceHealthRows health={health} loading={healthLoading} error={healthError} />
               <ServiceField label="Config file" value="config/nexrisk_gateway.json" mono small />
               <ServiceField label="Log dir"     value={gatewayLogDir ?? '—'} mono small />
             </div>
@@ -517,16 +531,29 @@ function Field({ label, value, onChange, placeholder, helper, type = 'text', sec
   );
 }
 
+const GW_STATE_BADGE: Record<string, { color: string; label: string }> = {
+  live:             { color: '#6aaa78', label: 'live' },
+  warming_up:       { color: '#c09060', label: 'warming up' },
+  no_recent_status: { color: '#c09060', label: 'no recent status' },
+  stale:            { color: '#c09060', label: 'stale' },
+  down:             { color: '#d07070', label: 'down' },
+  unknown:          { color: '#808080', label: 'unknown' },
+};
+
 function StatusStub({ result }: { result: ApiResult<GatewayStatus> | null }) {
-  if (!result || result.kind === 'ok') return null;
-  const label =
-    result.kind === 'not_implemented'
-      ? 'GET /gateway/status — 501 stub'
-      : `GET /gateway/status — ${result.status}`;
+  if (!result) return null;
+  let color = '#808080';
+  let label: string;
+  if (result.kind === 'not_implemented')      label = 'unavailable';
+  else if (result.kind === 'error')         { label = `error ${result.status}`; color = '#c09060'; }
+  else {
+    const b = GW_STATE_BADGE[result.data.state] ?? { color: '#808080', label: result.data.state };
+    color = b.color; label = b.label;
+  }
   return (
     <span
-      className="font-mono text-[11px] px-2 py-0.5 rounded shrink-0"
-      style={{ background: '#18202a', color: '#5b86b8', border: '1px solid #2b3e57' }}
+      className="font-mono text-[11px] px-2 py-0.5 rounded shrink-0 uppercase tracking-wide"
+      style={{ color, border: `1px solid ${color}55` }}
     >
       {label}
     </span>
@@ -534,42 +561,64 @@ function StatusStub({ result }: { result: ApiResult<GatewayStatus> | null }) {
 }
 
 function LiveStatusBody({ result }: { result: ApiResult<GatewayStatus> | null }) {
-  const notLive = !result || result.kind !== 'ok';
   const data = result?.kind === 'ok' ? result.data : null;
+  const live = data?.state === 'live';
 
-  const val = (v: string | number | undefined | null) =>
-    v === undefined || v === null ? '—' : String(v);
+  const num  = (v: number | null | undefined) => (v === null || v === undefined ? '—' : String(v));
+  const rate = (v: number | null | undefined) => (v === null || v === undefined ? '—' : v.toFixed(2));
+
+  const mt5Value =
+    !data ? '—'
+    : data.state !== 'live' ? '—'
+    : data.mt5_connected ? 'Linked' : 'No link';
+  const mt5Tone: MetricTone =
+    live && data ? (data.mt5_connected ? 'ok' : 'crit') : undefined;
+
+  let footer: React.ReactNode;
+  if (!result || result.kind === 'not_implemented') {
+    footer = 'Live status is not currently reported by the gateway.';
+  } else if (result.kind === 'error') {
+    footer = `Status request failed (${result.status}).`;
+  } else if (data) {
+    const age = data.status_age_sec !== null && data.status_age_sec !== undefined
+      ? ` (${data.status_age_sec}s ago)` : '';
+    const asOf = data.status_line_time ? `as of ${data.status_line_time}${age}` : '';
+    footer = (
+      <>
+        {live ? '' : 'Metrics are stale until a fresh status line arrives. '}
+        {asOf}{asOf && data.note ? ' · ' : ''}{data.note}
+      </>
+    );
+  }
 
   return (
     <div className="px-5 pt-3.5 pb-4">
       <div className="grid grid-cols-4 gap-3.5 mb-2.5">
-        <Metric label="Upstream MT5"       value={val(data?.upstream_mt5)} muted={notLive} />
-        <Metric label="Downstream clients" value={val(data?.downstream_clients)} muted={notLive} />
-        <Metric label="Last tick"          value={val(data?.last_tick_at)} muted={notLive} />
-        <Metric label="Tick rate"          value={val(data?.tick_rate_per_sec)} muted={notLive} />
+        <Metric label="MT5 link"   value={mt5Value}                     muted={!live} tone={mt5Tone} />
+        <Metric label="Ticks recv" value={num(data?.ticks_received)}    muted={!live} />
+        <Metric label="Ticks sent" value={num(data?.ticks_sent)}        muted={!live} />
+        <Metric label="Tick rate"  value={rate(data?.tick_rate_per_sec)} muted={!live} />
       </div>
       <p className="text-[11.5px] text-text-muted border-t border-border pt-2.5 leading-snug m-0">
-        {notLive
-          ? (
-            <>
-              Metrics populate once the gateway exposes its ZMQ control channel. The UI will poll{' '}
-              <span className="font-mono text-text-muted">/gateway/status</span> once it returns 200.
-            </>
-          )
-          : 'Live from the gateway control channel.'}
+        {footer}
       </p>
     </div>
   );
 }
 
-function Metric({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+type MetricTone = 'ok' | 'crit' | undefined;
+
+function Metric({ label, value, muted, tone }: {
+  label: string; value: string; muted?: boolean; tone?: MetricTone;
+}) {
+  const color = tone === 'ok' ? '#6aaa78' : tone === 'crit' ? '#d07070' : undefined;
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[11px] text-text-muted uppercase tracking-wide">{label}</span>
-      <span className={clsx(
-        'text-lg font-mono font-medium',
-        muted ? 'text-text-muted' : 'text-text-primary',
-      )}>
+      <span
+        className={clsx('text-lg font-mono font-medium', muted ? 'text-text-muted' : 'text-text-primary')}
+        style={color && !muted ? { color } : undefined}
+      >
         {value}
       </span>
     </div>

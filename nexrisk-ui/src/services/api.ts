@@ -1485,12 +1485,25 @@ export type GatewayUpdateBody = Partial<Omit<GatewayConfig, 'gateway_password'>>
   gateway_password?: string | null;
 };
 
-/** GET /api/v1/settings/gateway/status — returns 501 today; check status code. */
+/** GET /api/v1/settings/gateway/status  (§ G3 — live). Derived from the
+ *  gateway status log + SCM process state. Metrics are null unless
+ *  state === 'live'. Trust mt5_connected only when state === 'live'. */
+export type GatewayLiveState =
+  | 'live' | 'warming_up' | 'no_recent_status' | 'stale' | 'down' | 'unknown';
+
 export interface GatewayStatus {
-  upstream_mt5?:       string;
-  downstream_clients?: number;
-  last_tick_at?:       string;
-  tick_rate_per_sec?:  number;
+  success:           boolean;
+  service_state:     string;              // SCM state, e.g. RUNNING / STOPPED
+  running:           boolean;             // primary up/down signal
+  state:             GatewayLiveState;
+  mt5_connected:     boolean | null;      // only trustworthy when state==='live'
+  ticks_received:    number | null;
+  ticks_sent:        number | null;
+  tick_rate_per_sec: number | null;
+  status_line_time:  string | null;       // raw ts of the last status line
+  status_age_sec:    number | null;        // how old that line is
+  source:            string;               // e.g. 'log'
+  note:              string;
 }
 
 // ── FIX Bridge operational (§ 8) ──────────────────────────────
@@ -1553,15 +1566,47 @@ export interface FixBridgeGetResponse {
  *  ignored. Nested sub-objects are sent whole (no merge semantics). */
 export type FixBridgeUpdateBody = Partial<FixBridgeConfig>;
 
-/** GET /api/v1/settings/fixbridge/status — returns 501 today. Shape
- *  deliberately loose because the real response hasn't been specified;
- *  field names below are a hypothesis for when the backend ships. */
+/** GET /api/v1/settings/fixbridge/status  (§ G4 — live). Queries the bridge
+ *  over its command channel + the core service client-side view. Degraded
+ *  shapes: client uninitialised -> { connected:false, state:'unavailable',
+ *  message }; command round-trip fails while SUB link up -> bridge:null +
+ *  bridge_error. Use client.last_event_timestamp_us for "last message" —
+ *  NOT last_heartbeat_us (currently always 0). */
+export interface FixBridgeLp {
+  lp_id:         string;
+  provider_type: string;
+  state:         string;                   // e.g. 'CONNECTED'
+}
+
+export interface FixBridgeClient {
+  connected:               boolean;
+  commands_sent:           number;
+  commands_failed:         number;
+  events_received:         number;
+  executions_received:     number;
+  md_updates_received:     number;
+  last_event_timestamp_us: number;          // microseconds epoch
+  last_heartbeat_us:       number;          // currently 0 — do NOT use
+}
+
+export interface FixBridgeBridge {
+  bridge_id:          string;
+  environment:        string;
+  state:              string;
+  uptime_sec:         number;
+  commands_processed: number;
+  commands_failed:    number;
+  lps:                FixBridgeLp[];
+}
+
 export interface FixBridgeStatus {
-  sessions_connected?:    number;
-  sessions_configured?:   number;
-  last_message_at?:       string;
-  messages_per_sec_in?:   number;
-  messages_per_sec_out?:  number;
+  success:       boolean;
+  connected:     boolean;                   // core<->bridge SUB link
+  client?:       FixBridgeClient;
+  bridge?:       FixBridgeBridge | null;    // null when the round-trip fails
+  state?:        string;                    // 'unavailable' when uninitialised
+  message?:      string;
+  bridge_error?: string;
 }
 
 // ── Log services (used by Gateway Service panel) ───────────────
@@ -1576,6 +1621,62 @@ export interface LogServiceDescriptor {
 export interface LogServicesResponse {
   success:  boolean;
   services: LogServiceDescriptor[];
+}
+
+// ── Service health (§ G1) ──────────────────────────────────────
+// GET /api/v1/settings/services/health — live process state for the three
+// managed services. Snake_case, matches the FE action list 1:1.
+
+export type ServiceState =
+  | 'RUNNING' | 'STOPPED' | 'START_PENDING' | 'STOP_PENDING'
+  | 'PAUSED'  | 'PAUSE_PENDING' | 'CONTINUE_PENDING' | 'UNKNOWN';
+
+export interface ServiceHealth {
+  id:             'nexrisk' | 'gateway' | 'fixbridge';
+  label:          string;
+  state:          ServiceState;
+  running:        boolean;             // convenience: state === 'RUNNING'
+  uptime_seconds: number | null;       // null when the service is down
+  last_start:     string | null;       // ISO-8601 UTC; null when down
+}
+
+export interface ServicesHealthResponse {
+  success:  boolean;
+  services: ServiceHealth[];
+}
+
+// ── Settings audit history (§ G2) ──────────────────────────────
+// GET /api/v1/settings/{section}/history?limit=&from=&to= — newest-first.
+// Envelope is { history, total } (no success wrapper). changed_by is the
+// real JWT email. old_values/new_values are per-field diffs.
+
+/** Sections that expose an audit history. LP is intentionally excluded —
+ *  LP profile/enabled writes aren't audited yet (backend "G2 LP tail"). */
+export type SettingsHistorySection =
+  | 'nexrisk' | 'classifier' | 'detection' | 'llm' | 'gateway' | 'fixbridge';
+
+export interface SettingsHistoryEntry {
+  id:          number;
+  subsection:  string;
+  change_type: string;                      // UPDATE | CREATE | DELETE
+  old_values:  Record<string, unknown> | null;
+  new_values:  Record<string, unknown> | null;
+  changed_by:  string;                      // real user (JWT email)
+  changed_at:  string;                      // ISO-8601 UTC
+  reason:      string;
+}
+
+export interface SettingsHistoryResponse {
+  history: SettingsHistoryEntry[];
+  total:   number;
+}
+
+/** Query params for a history fetch. limit default 100, capped 1000 by the
+ *  backend; from/to are an optional ISO-8601 range. */
+export interface SettingsHistoryParams {
+  limit?: number;
+  from?:  string;
+  to?:    string;
 }
 
 // ── Alerting (§§ 3.2 alerts, 4 telegram, 5 webhooks) ────────────
@@ -1878,6 +1979,17 @@ async function fetchWithStub<T>(endpoint: string, init?: RequestInit): Promise<A
   return { kind: 'ok', data: await res.json() as T };
 }
 
+// ── query-string builder for the settings history endpoints (§ G2) ──
+function historyQuery(params?: SettingsHistoryParams): string {
+  if (!params) return '';
+  const q = new URLSearchParams();
+  if (params.limit !== undefined) q.set('limit', String(params.limit));
+  if (params.from) q.set('from', params.from);
+  if (params.to)   q.set('to',   params.to);
+  const qs = q.toString();
+  return qs ? `?${qs}` : '';
+}
+
 // ── Nexrisk config (§ 3) — powers NexDay / TE / Auth tiles ────
 //
 // All three subsections live inside config/nexrisk_config.json. One GET
@@ -1970,6 +2082,14 @@ export const settingsApi = {
   getPendingRestart: () =>
     fetchAPI<PendingRestartResponse>('/api/v1/settings/pending-restart-raw'),
 
+  services: {
+    /** GET /services/health (§ G1) — live status / uptime / last_start for
+     *  the three managed services (nexrisk / gateway / fixbridge). Match a
+     *  page's Service panel by entry.id. Poll ~10-30s. */
+    health: () =>
+      fetchAPI<ServicesHealthResponse>('/api/v1/settings/services/health'),
+  },
+
   gateway: {
     get: () =>
       fetchAPI<GatewayGetResponse>('/api/v1/settings/gateway'),
@@ -1982,9 +2102,17 @@ export const settingsApi = {
         body:   JSON.stringify(patch),
       }),
 
-    /** Returns 501 today. Caller should branch on kind === 'not_implemented'. */
+    /** GET /gateway/status (§ G3 — live). Resolves to kind:'ok' with the
+     *  live payload; the not_implemented branch is retained for safety but
+     *  the endpoint no longer 501s. */
     status: () =>
       fetchWithStub<GatewayStatus>('/api/v1/settings/gateway/status'),
+
+    /** GET /gateway/history (§ G2) — settings audit trail, newest-first.
+     *  limit default 100 (capped 1000); optional ISO from/to range. */
+    history: (params?: SettingsHistoryParams) =>
+      fetchAPI<SettingsHistoryResponse>(
+        `/api/v1/settings/gateway/history${historyQuery(params)}`),
   },
 
   fixbridge: {
@@ -2000,9 +2128,16 @@ export const settingsApi = {
         body:   JSON.stringify(patch),
       }),
 
-    /** Returns 501 today. Same discriminated-union pattern as gateway.status. */
+    /** GET /fixbridge/status (§ G4 — live). Same discriminated-union pattern
+     *  as gateway.status; the not_implemented branch is retained for safety
+     *  but the endpoint no longer 501s. */
     status: () =>
       fetchWithStub<FixBridgeStatus>('/api/v1/settings/fixbridge/status'),
+
+    /** GET /fixbridge/history (§ G2) — settings audit trail, newest-first. */
+    history: (params?: SettingsHistoryParams) =>
+      fetchAPI<SettingsHistoryResponse>(
+        `/api/v1/settings/fixbridge/history${historyQuery(params)}`),
   },
 
   lp: {
@@ -2095,6 +2230,14 @@ export const settingsApi = {
       const inner   = wrapped && typeof wrapped === 'object' ? wrapped : raw;
       return inner as NexriskConfig;
     },
+
+    /** GET /nexrisk/history (§ G2) — audit trail covering ALL NexRisk
+     *  subsections (alerts, mt5, analysis, detection-system, memory,
+     *  llm-system, nexday, telegram, webhooks). Newest-first. Panels that
+     *  want a single subsection filter client-side on entry.subsection. */
+    history: (params?: SettingsHistoryParams) =>
+      fetchAPI<SettingsHistoryResponse>(
+        `/api/v1/settings/nexrisk/history${historyQuery(params)}`),
 
     /** PUT /nexrisk/auth — token TTLs, issuer, password policy.
      *  All fields require a nexrisk_service restart to apply. */

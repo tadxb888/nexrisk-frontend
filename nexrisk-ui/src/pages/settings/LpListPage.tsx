@@ -26,6 +26,7 @@ import {
   type LpProfilesResponse,
   type LogServiceDescriptor,
 } from '@/services/api';
+import { useServiceHealth, ServiceHealthRows } from './SettingsSidePanels';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Access control — same set as the hub
@@ -53,6 +54,10 @@ export function LpListPage() {
   }
 
   const help = useHelp();
+
+  // ── live service health (§ G1). LP recent-changes is deferred until the
+  //    backend audits LP writes ("G2 LP tail"), so no history panel here. ──
+  const { health, loading: healthLoading, error: healthError } = useServiceHealth('fixbridge');
 
   const [data,    setData]    = useState<LpProfilesResponse | null>(null);
   const [draft,   setDraft]   = useState<string[]>([]);   // which lp_ids are checked in the UI
@@ -352,14 +357,12 @@ export function LpListPage() {
             <div className="px-5 pt-3.5 pb-2.5 border-b border-border">
               <h2 className="text-base font-medium text-text-primary m-0">Service</h2>
               <p className="text-xs text-text-muted leading-snug m-0 mt-0.5">
-                Process metadata. Status, uptime, and last-start require backend support.
+                Live process state (§ G1), refreshed periodically.
               </p>
             </div>
             <div className="px-5 py-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
               <ServiceField label="Process"     value="fixbridge_service" mono />
-              <ServiceField label="Status"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Uptime"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Last start"  value="—" mono tone="muted" note="awaiting backend" />
+              <ServiceHealthRows health={health} loading={healthLoading} error={healthError} />
               <ServiceField label="Config file" value="config/fixbridge/fixbridge_config.json" mono small />
               <ServiceField label="Profile dir" value="config/fixbridge/lp/" mono small />
               <ServiceField label="Log dir"     value={fixbridgeLogDir ?? '—'} mono small />

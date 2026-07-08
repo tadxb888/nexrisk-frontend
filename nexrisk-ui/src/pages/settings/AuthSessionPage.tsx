@@ -23,6 +23,7 @@ import {
   type AuthConfig,
   type LogServiceDescriptor,
 } from '@/services/api';
+import { useServiceHealth, ServiceHealthRows, RecentChangesPanel } from './SettingsSidePanels';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Access control — same set as the hub
@@ -92,6 +93,10 @@ export function AuthSessionPage() {
   }
 
   const help = useHelp();
+
+  // ── live service health (§ G1) + recent-changes refresh (§ G2) ──
+  const { health, loading: healthLoading, error: healthError } = useServiceHealth('nexrisk');
+  const [historyRefresh, setHistoryRefresh] = useState(0);
 
   // ── remote state ─────────────────────────────────────────────────
   const [initial,      setInitial]      = useState<AuthConfig | null>(null);
@@ -214,6 +219,7 @@ export function AuthSessionPage() {
       if (fresh.auth) {
         setInitial(fresh.auth);
         setDraft(draftFromConfig(fresh.auth));
+        setHistoryRefresh(k => k + 1);
       }
 
       setSavedMessage(
@@ -412,7 +418,7 @@ export function AuthSessionPage() {
             </div>
           </div>
 
-          {/* Recent changes — placeholder awaiting audit-log wiring */}
+          {/* Recent changes (§ G2) */}
           <div className="bg-surface border border-border rounded overflow-hidden">
             <div className="px-5 pt-3.5 pb-2.5 border-b border-border">
               <h2 className="text-base font-medium text-text-primary m-0">Recent changes</h2>
@@ -420,13 +426,7 @@ export function AuthSessionPage() {
                 Last edits to this subsection, drawn from the audit log
               </p>
             </div>
-            <div className="px-5 py-5">
-              <p className="text-xs text-text-muted m-0 text-center">
-                Audit log integration is scheduled for a follow-up ticket. This panel will
-                populate with the last five edits to the <span className="font-mono">nexrisk.auth</span>
-                {' '}subsection once wired.
-              </p>
-            </div>
+            <RecentChangesPanel section="nexrisk" subsections={['auth']} refreshKey={historyRefresh} />
           </div>
 
           {/* Service */}
@@ -434,14 +434,12 @@ export function AuthSessionPage() {
             <div className="px-5 pt-3.5 pb-2.5 border-b border-border">
               <h2 className="text-base font-medium text-text-primary m-0">Service</h2>
               <p className="text-xs text-text-muted leading-snug m-0 mt-0.5">
-                Process metadata. Status, uptime, and last-start require backend support.
+                Live process state (§ G1), refreshed periodically.
               </p>
             </div>
             <div className="px-5 py-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
               <ServiceField label="Process"     value="nexrisk_service" mono />
-              <ServiceField label="Status"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Uptime"      value="—" mono tone="muted" note="awaiting backend" />
-              <ServiceField label="Last start"  value="—" mono tone="muted" note="awaiting backend" />
+              <ServiceHealthRows health={health} loading={healthLoading} error={healthError} />
               <ServiceField label="Config file" value="config/nexrisk_config.json" mono small />
               <ServiceField label="Log dir"     value={nexriskLogDir ?? '—'} mono small />
             </div>
