@@ -2075,6 +2075,21 @@ export interface NexriskConfig {
   [key: string]: unknown;
 }
 
+// ── bot_token write-preserve guard ──────────────────────────────
+// A Telegram bot token is always "<digits>:<auth>" — it contains a colon and
+// real characters. A masked read-back ("***", "••••…") or a blank/whitespace
+// field has no colon and/or is nothing but mask glyphs. Treat those as "no
+// token supplied": on validate we omit it so the backend checks the stored
+// token; on save we drop the field so the stored secret is never overwritten.
+// Centralised here so the guard holds regardless of which caller sends it.
+function isBotTokenShaped(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const t = value.trim();
+  if (t === '') return false;
+  if (/^[*•·●\s]+$/.test(t)) return false;   // all mask glyphs / whitespace
+  return t.includes(':');                     // real tokens always contain ':'
+}
+
 // ── settingsApi surface ─────────────────────────────────────────
 
 export const settingsApi = {
@@ -2275,11 +2290,16 @@ export const settingsApi = {
     /** PUT /nexrisk/telegram — core Telegram config. Caller MUST omit
      *  bot_token (or send null) to keep existing. chats can be omitted;
      *  use the chat CRUD endpoints for chat-level changes. */
-    updateTelegram: (patch: TelegramUpdateBody) =>
-      fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/telegram', {
+    updateTelegram: (patch: TelegramUpdateBody) => {
+      // Write-preserve: only forward bot_token when it's a real token. A blank
+      // or masked value is dropped so it can never overwrite the stored secret.
+      const body: TelegramUpdateBody = { ...patch };
+      if (!isBotTokenShaped(body.bot_token)) delete body.bot_token;
+      return fetchAPI<SettingsManagerEnvelope>('/api/v1/settings/nexrisk/telegram', {
         method: 'PUT',
-        body:   JSON.stringify(patch),
-      }),
+        body:   JSON.stringify(body),
+      });
+    },
 
     /** PUT /nexrisk/webhooks — core webhook switches. Use the endpoint
      *  CRUD for endpoint-level changes. */
@@ -2295,11 +2315,16 @@ export const settingsApi = {
     /** POST /nexrisk/telegram/validate — verify a bot token works.
      *  501 today; returns a discriminated ApiResult so the UI can render
      *  a "not implemented yet" badge. */
-    validate: (bot_token: string) =>
-      fetchWithStub<TelegramValidateResponse>('/api/v1/settings/nexrisk/telegram/validate', {
+    validate: (bot_token: string) => {
+      // Send the typed value only when it's a real token; otherwise omit it so
+      // the backend validates the stored token. Defends against a masked/blank
+      // value reaching the wire regardless of the caller.
+      const body = isBotTokenShaped(bot_token) ? { bot_token } : {};
+      return fetchWithStub<TelegramValidateResponse>('/api/v1/settings/nexrisk/telegram/validate', {
         method: 'POST',
-        body:   JSON.stringify({ bot_token }),
-      }),
+        body:   JSON.stringify(body),
+      });
+    },
 
     /** POST /nexrisk/telegram/resolve-chat — convert @handle to numeric id.
      *  501 today; 200 returns { chat_id, title, type }. */
