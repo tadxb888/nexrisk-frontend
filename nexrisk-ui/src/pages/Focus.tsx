@@ -63,11 +63,13 @@ const CheckIcon = ({ className }: { className?: string }) => (
 );
 
 // Telegram Icon
+/* HIDDEN: TelegramIcon — unused while the share buttons are hidden; not removed
 const TelegramIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="currentColor" className={className} width="14" height="14">
     <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
   </svg>
 );
+*/
 
 // ============================================
 // MOCK DATA - Remove when API is connected
@@ -751,6 +753,7 @@ Model: CH-nexrisk-4.5
     setTimeout(() => setCopied(false), 2000);
   };
 
+  /* HIDDEN: Telegram share handler — hidden per request, not removed
   // Send to Telegram
   const handleSendTelegram = () => {
     const explanationText = hasExplanation ? claude_explanations[0].explanation : 'No AI analysis available.';
@@ -758,6 +761,7 @@ Model: CH-nexrisk-4.5
     const telegramUrl = `https://t.me/share/url?url=&text=${encodeURIComponent(message)}`;
     window.open(telegramUrl, '_blank', 'width=550,height=450');
   };
+  */
 
   return (
     <div className="h-full overflow-y-auto">
@@ -782,6 +786,7 @@ Model: CH-nexrisk-4.5
                   <CopyIcon className="w-3.5 h-3.5 text-text-muted group-hover:text-text-primary" />
                 )}
               </button>
+              {/* HIDDEN: Telegram share button — hidden per request, not removed
               <button
                 onClick={handleSendTelegram}
                 className="p-1 rounded hover:bg-surface-hover transition-colors group"
@@ -789,6 +794,7 @@ Model: CH-nexrisk-4.5
               >
                 <TelegramIcon className="w-3.5 h-3.5 text-text-muted group-hover:text-[#26A5E4]" />
               </button>
+              */}
             </div>
           </div>
         </div>
@@ -1104,6 +1110,7 @@ Model: CH-nexrisk-4.5
     setTimeout(() => setCopied(false), 2000);
   };
 
+  /* HIDDEN: Telegram share handler — hidden per request, not removed
   // Send to Telegram
   const handleSendTelegram = () => {
     const analysisText = explanation ? explanation.behavior_description : cluster.description || 'No analysis available.';
@@ -1111,6 +1118,7 @@ Model: CH-nexrisk-4.5
     const telegramUrl = `https://t.me/share/url?url=&text=${encodeURIComponent(message)}`;
     window.open(telegramUrl, '_blank', 'width=550,height=450');
   };
+  */
 
   const severity = cluster.risk_severity ?? 0.5;
 
@@ -1140,6 +1148,7 @@ Model: CH-nexrisk-4.5
                     <CopyIcon className="w-3.5 h-3.5 text-text-muted group-hover:text-text-primary" />
                   )}
                 </button>
+                {/* HIDDEN: Telegram share button — hidden per request, not removed
                 <button
                   onClick={handleSendTelegram}
                   className="p-1 rounded hover:bg-surface-hover transition-colors group"
@@ -1147,6 +1156,7 @@ Model: CH-nexrisk-4.5
                 >
                   <TelegramIcon className="w-3.5 h-3.5 text-text-muted group-hover:text-[#26A5E4]" />
                 </button>
+                */}
               </div>
             </div>
           </div>
