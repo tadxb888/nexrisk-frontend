@@ -1742,13 +1742,14 @@ export interface TelegramChatCreateResponse {
   pending_restart: boolean;
 }
 
-/** § 4 live-probe response shapes (501 today). Shape is a hypothesis for
- *  when the backend wires outbound HTTP — fields optional to tolerate
- *  partial responses. */
+/** § 4 validate response — confirmed against a live payload. `valid` is the
+ *  token-verdict flag (NOT `ok`); `success` reports whether the probe ran. */
 export interface TelegramValidateResponse {
-  ok:            boolean;
-  bot_username?: string;
+  success:       boolean;
+  valid:         boolean;
   bot_id?:       number;
+  bot_name?:     string;
+  bot_username?: string;
 }
 export interface TelegramResolveResponse {
   chat_id: string;

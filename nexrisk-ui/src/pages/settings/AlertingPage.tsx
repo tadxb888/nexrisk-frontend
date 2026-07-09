@@ -551,11 +551,14 @@ function ValidateResultBanner({ result }: { result: ApiResult<TelegramValidateRe
       </div>
     );
   }
-  const { ok, bot_username, bot_id } = result.data;
+  const { valid, bot_username, bot_id } = result.data;
+  const palette = valid
+    ? { bg: '#162a1c', br: '#2f6a3f', fg: '#66e07a' }   // valid — success green
+    : { bg: '#2c1417', br: '#7a2f36', fg: '#ff5c5c' };  // rejected — error red
   return (
-    <div className="rounded p-2.5 mt-1" style={{ background: '#162a1c', border: '1px solid #2f6a3f' }}>
-      <p className="text-[11.5px] m-0" style={{ color: '#66e07a' }}>
-        {ok ? (
+    <div className="rounded p-2.5 mt-1" style={{ background: palette.bg, border: `1px solid ${palette.br}` }}>
+      <p className="text-[11.5px] m-0" style={{ color: palette.fg }}>
+        {valid ? (
           <>Token valid · <span className="font-mono">@{bot_username}</span>{bot_id ? <> · id {bot_id}</> : null}</>
         ) : (
           'Token rejected by Telegram.'
