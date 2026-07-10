@@ -1799,12 +1799,15 @@ export interface WebhookEndpointCreateResponse {
   pending_restart: boolean;
 }
 
-/** § 5 test probe response — 501 today. */
+/** § 5 webhook test probe — confirmed against live payloads. HTTP is always
+ *  200; the outcome is in `delivered` (NOT `ok`). `status` is the target's HTTP
+ *  code (null when unreachable); `error` carries the reason on failure. */
 export interface WebhookTestResponse {
-  ok:           boolean;
-  status_code?: number;
-  duration_ms?: number;
-  message?:     string;
+  success:     boolean;
+  delivered?:  boolean;
+  status?:     number | null;
+  latency_ms?: number;
+  error?:      string;
 }
 
 // ── LP Management (§ 6) ─────────────────────────────────────────

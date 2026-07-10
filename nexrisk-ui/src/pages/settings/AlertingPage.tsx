@@ -1191,13 +1191,22 @@ function EndpointRow({
               <div className="rounded p-2 mt-1.5" style={{ background: '#2c1417', border: '1px solid #7a2f36' }}>
                 <p className="text-[11.5px] m-0" style={{ color: '#ff5c5c' }}>{testResult.message}</p>
               </div>
-            ) : (
+            ) : (testResult.data.delivered === true
+                 || (typeof testResult.data.status === 'number'
+                     && testResult.data.status >= 200 && testResult.data.status < 300)) ? (
               <div className="rounded p-2 mt-1.5" style={{ background: '#162a1c', border: '1px solid #2f6a3f' }}>
                 <p className="text-[11.5px] m-0" style={{ color: '#66e07a' }}>
-                  {testResult.data.ok ? 'OK' : 'Failed'}
-                  {testResult.data.status_code ? ` · HTTP ${testResult.data.status_code}` : ''}
-                  {testResult.data.duration_ms ? ` · ${testResult.data.duration_ms}ms` : ''}
-                  {testResult.data.message ? ` · ${testResult.data.message}` : ''}
+                  Delivered
+                  {testResult.data.status != null ? ` · HTTP ${testResult.data.status}` : ''}
+                  {testResult.data.latency_ms != null ? ` · ${testResult.data.latency_ms}ms` : ''}
+                </p>
+              </div>
+            ) : (
+              <div className="rounded p-2 mt-1.5" style={{ background: '#2c1417', border: '1px solid #7a2f36' }}>
+                <p className="text-[11.5px] m-0" style={{ color: '#ff5c5c' }}>
+                  Failed
+                  {testResult.data.status != null ? ` · HTTP ${testResult.data.status}` : ''}
+                  {testResult.data.error ? ` · ${testResult.data.error}` : ''}
                 </p>
               </div>
             )
