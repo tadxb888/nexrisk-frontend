@@ -1867,7 +1867,7 @@ export interface LpEnabledUpdateBody {
 
 // ── Secret rotation (§ 10) — root only ──────────────────────────
 
-/** POST /auth/rotate/internal-secret response. 96-hex `new_secret`,
+/** POST /settings/auth/rotate/internal-secret response. 96-hex `new_secret`,
  *  restarts both nexrisk_service AND the BFF (because the BFF's
  *  X-Internal-Secret must match the backend's env var). */
 export interface RotateInternalResponse {
@@ -1878,7 +1878,7 @@ export interface RotateInternalResponse {
   message:          string;
 }
 
-/** POST /auth/rotate/jwt-secret response. 128-hex `new_secret`,
+/** POST /settings/auth/rotate/jwt-secret response. 128-hex `new_secret`,
  *  restarts nexrisk_service only. `invalidates_sessions: true` means
  *  all access tokens die on restart; refresh tokens remain valid. */
 export interface RotateJwtResponse {
@@ -1890,7 +1890,7 @@ export interface RotateJwtResponse {
   message:               string;
 }
 
-/** GET /auth/rotate/encryption-key/preflight response. Read-only probe. */
+/** GET /settings/auth/rotate/encryption-key/preflight response. Read-only probe. */
 export interface EncryptionKeyPreflight {
   success:                 boolean;
   lp_accounts:             number;
@@ -1900,7 +1900,7 @@ export interface EncryptionKeyPreflight {
   blockers:                string[];
 }
 
-/** POST /auth/rotate/encryption-key response. Shape is a best-effort
+/** POST /settings/auth/rotate/encryption-key response. Shape is a best-effort
  *  hypothesis — endpoint returns 501 today; fields below are derived
  *  from the internal/JWT response shape. */
 export interface RotateEncryptionResponse {
@@ -2397,41 +2397,41 @@ export const settingsApi = {
       }),
   },
 
-  // ── Secret rotation (§ 10) — root only. Paths live under /auth/rotate/*
+  // ── Secret rotation (§ 10) — root only. Paths live under /settings/auth/rotate/*
   //    in the backend (not /settings/*), but registered from the same BFF
   //    routes file for thematic coherence in the System Administration surface.
   rotation: {
-    /** POST /auth/rotate/internal-secret — rotates NEXRISK_INTERNAL_SECRET.
+    /** POST /settings/auth/rotate/internal-secret — rotates NEXRISK_INTERNAL_SECRET.
      *  Restarts BOTH nexrisk_service AND the BFF. Update the env var in
      *  BOTH places before restarting nexrisk, or the BFF→backend link
      *  breaks. new_secret is returned exactly once. */
     rotateInternalSecret: () =>
-      fetchAPI<RotateInternalResponse>('/api/v1/auth/rotate/internal-secret', {
+      fetchAPI<RotateInternalResponse>('/api/v1/settings/auth/rotate/internal-secret', {
         method: 'POST',
         body:   JSON.stringify({ confirm: true }),
       }),
 
-    /** POST /auth/rotate/jwt-secret — rotates NEXRISK_JWT_SECRET.
+    /** POST /settings/auth/rotate/jwt-secret — rotates NEXRISK_JWT_SECRET.
      *  Restarts nexrisk_service. All access tokens become invalid on
      *  restart; refresh tokens remain valid until their own expiry. */
     rotateJwtSecret: () =>
-      fetchAPI<RotateJwtResponse>('/api/v1/auth/rotate/jwt-secret', {
+      fetchAPI<RotateJwtResponse>('/api/v1/settings/auth/rotate/jwt-secret', {
         method: 'POST',
         body:   JSON.stringify({ confirm: true }),
       }),
 
-    /** GET /auth/rotate/encryption-key/preflight — read-only probe.
+    /** GET /settings/auth/rotate/encryption-key/preflight — read-only probe.
      *  Returns counts of LP accounts and TOTP-enrolled users, plus
      *  ok_to_proceed and any blockers. Shown before the destructive
      *  rotation so the operator sees scope and duration up front. */
     encryptionKeyPreflight: () =>
-      fetchAPI<EncryptionKeyPreflight>('/api/v1/auth/rotate/encryption-key/preflight'),
+      fetchAPI<EncryptionKeyPreflight>('/api/v1/settings/auth/rotate/encryption-key/preflight'),
 
-    /** POST /auth/rotate/encryption-key — 501 today. When wired, body
+    /** POST /settings/auth/rotate/encryption-key — 501 today. When wired, body
      *  is { confirm: true, confirmation_phrase: "ROTATE ENCRYPTION KEY" }.
      *  Re-encrypts all LP credentials and TOTP secrets with the new key. */
     rotateEncryptionKey: () =>
-      fetchAPI<RotateEncryptionResponse>('/api/v1/auth/rotate/encryption-key', {
+      fetchAPI<RotateEncryptionResponse>('/api/v1/settings/auth/rotate/encryption-key', {
         method: 'POST',
         body:   JSON.stringify({
           confirm:              true,
