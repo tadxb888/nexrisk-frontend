@@ -1668,7 +1668,7 @@ const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: 'classifier', label: 'Classifier', hint: 'EA · Scalper · Arbitrage · Rebate · News detector weights' },
   { id: 'detection',  label: 'Detection',  hint: 'MONITOR → WARN → RESTRICT → ESCALATE ladders' },
   { id: 'clustering', label: 'Clustering', hint: 'HDBSCAN config · run history · cluster archetype mapping' },
-  { id: 'llm',        label: 'LLM',        hint: 'Provider routing · cost controls · caching' },
+  { id: 'llm',        label: 'AI Model',   hint: 'Provider routing · cost controls · caching' },
   { id: 'history',    label: 'Change History', hint: 'Audit trail for all settings changes' },
 ];
 
@@ -2337,7 +2337,7 @@ function ChangeHistoryTab() {
                 : 'text-white/40 hover:text-white'
             )}
           >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
+            {s === 'llm' ? 'AI Model' : s.charAt(0).toUpperCase() + s.slice(1)}
           </button>
         ))}
       </div>
