@@ -3,21 +3,24 @@
 // Route: /settings/rotation
 // Root role only.
 //
-// Three rotatable secrets, each with its own modal:
+// Two in-app rotatable secrets, each with its own modal:
 //   Internal secret   — POST /auth/rotate/internal-secret   (live)
 //   JWT secret        — POST /auth/rotate/jwt-secret        (live)
-//   Encryption key    — POST /auth/rotate/encryption-key    (501 today)
-//                       with GET /encryption-key/preflight  (live)
 //
-// Layout: 60/40. Left column stacks three rotation cards.
+// Two at-rest encryption keys are NOT rotated in-app. Rotating either re-encrypts
+// every stored ciphertext (an O(n) DB migration) and is performed OFFLINE with the
+// controlled nxr_secret_rotation tool during a maintenance window, after a full DB
+// backup. This page only shows guidance + "contact Taiga Support" for those:
+//   NEXRISK_ENCRYPTION_KEY  — user TOTP secrets + MT5 node passwords
+//   NEXRISK_LP_MASTER_KEY   — LP credentials (trading / market-data passwords)
+//
+// Layout: 60/40. Left column stacks the two rotation cards + two offline-key cards.
 // Right column: hard-copy rotation policy + service panel.
 //
 // Rotation UX (the hard part):
 //   1. Click "Rotate" → modal opens with warning + typed-confirmation input
-//   2. For encryption-key: preflight runs first, counts shown, rotate
-//      disabled if ok_to_proceed is false
-//   3. User types the exact confirmation phrase → rotate button enables
-//   4. POST fires, response returns once — new_secret is shown in a
+//   2. User types the exact confirmation phrase → rotate button enables
+//   3. POST fires, response returns once — new_secret is shown in a
 //      copy-once display. Closing the modal discards the plaintext.
 //      There is no retrieve-again endpoint.
 // ============================================
@@ -31,8 +34,6 @@ import {
   settingsApi,
   type RotateInternalResponse,
   type RotateJwtResponse,
-  type RotateEncryptionResponse,
-  type EncryptionKeyPreflight,
 } from '@/services/api';
 
 // Help content for the operator manual — rendered in the help drawer
@@ -43,7 +44,7 @@ import { HelpIcon, HelpDrawer, useHelp } from './help';
 // Hard-copy policy strings — single source of truth
 // ─────────────────────────────────────────────────────────────────────────────
 
-type SecretKind = 'internal' | 'jwt' | 'encryption';
+type SecretKind = 'internal' | 'jwt';
 
 interface SecretSpec {
   kind:             SecretKind;
@@ -54,7 +55,6 @@ interface SecretSpec {
   summary:          string;       // one-line "what is it"
   consequences:     string[];     // bullets shown in the modal warning box
   available:        boolean;      // false for endpoints that return 501
-  notAvailableNote?: string;      // explanation shown when !available
 }
 
 const SECRETS: Record<SecretKind, SecretSpec> = {
@@ -92,26 +92,45 @@ const SECRETS: Record<SecretKind, SecretSpec> = {
     ],
     available: true,
   },
-  encryption: {
-    kind:          'encryption',
-    title:         'Encryption key',
-    envVar:        'NEXRISK_ENCRYPTION_KEY',
-    confirmPhrase: 'ROTATE ENCRYPTION KEY',
-    restartTag:    'nexrisk_service',
-    summary:
-      'At-rest encryption key for LP credentials and user TOTP secrets. Rotating re-encrypts ' +
-      'every stored ciphertext with a new key — an O(n) migration, not a config change.',
-    consequences: [
-      'A fresh encryption key will be generated and shown once.',
-      'Every LP credential record and every TOTP-enrolled user will be re-encrypted with the new key during the call.',
-      'Settings writes and new user enrolments are blocked for the duration of the migration.',
-      'The preflight below shows an estimate of how long the migration will take.',
-    ],
-    available: false,
-    notAvailableNote:
-      'Endpoint is not yet implemented in the backend (501 NOT_IMPLEMENTED). The preflight call works; the destructive rotation is pending.',
-  },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// At-rest encryption keys — NOT rotated in-app. These re-encrypt every stored
+// ciphertext (O(n) DB migration) and are rotated OFFLINE with the controlled
+// nxr_secret_rotation tool during a maintenance window, after a full DB backup.
+// The two keys are independent, with different scopes and formats.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface OfflineKeySpec {
+  title:  string;
+  envVar: string;
+  format: string;   // key format the operator supplies
+  scope:  string;   // what it encrypts (corrected copy)
+  note?:  string;   // extra operational caveat
+}
+
+const OFFLINE_KEYS: OfflineKeySpec[] = [
+  {
+    title:  'Encryption key',
+    envVar: 'NEXRISK_ENCRYPTION_KEY',
+    format: 'passphrase',
+    scope:
+      'At-rest key for user TOTP secrets and MT5 node passwords. Rotating re-encrypts ' +
+      'every stored ciphertext with a new key — an O(n) migration over the database, ' +
+      'not a config change.',
+  },
+  {
+    title:  'LP master key',
+    envVar: 'NEXRISK_LP_MASTER_KEY',
+    format: 'raw 64-hex key',
+    scope:
+      'At-rest key for LP credentials (trading and market-data passwords). Rotating ' +
+      're-encrypts every LP credential record — an O(n) migration, not a config change.',
+    note:
+      'This key must be set for LP encryption to work at all — there is no default. ' +
+      'If it is unset, LP credentials cannot be stored.',
+  },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
@@ -149,11 +168,12 @@ export function SecretRotationPage() {
             Secret rotation
           </h1>
           <p className="text-[13px] text-text-secondary mt-1 leading-snug max-w-[720px]">
-            Generate fresh cryptographic material for the BFF→backend internal link, the JWT
-            signing key, and the at-rest encryption key. Values are returned{' '}
-            <span className="text-text-primary font-medium">exactly once</span> — not saved
-            to disk, not retrievable again. Every rotation ends with you updating an
-            environment variable and restarting a service.
+            Generate fresh cryptographic material for the BFF→backend internal link and the JWT
+            signing key. Values are returned{' '}
+            <span className="text-text-primary font-medium">exactly once</span> — not saved to
+            disk, not retrievable again — and every rotation ends with you updating an environment
+            variable and restarting a service. The at-rest encryption keys are handled differently:
+            they are rotated offline during a maintenance window (see below).
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -171,12 +191,15 @@ export function SecretRotationPage() {
 
         {/* ─── LEFT: ROTATION CARDS ─── */}
         <div className="flex flex-col gap-3.5">
-          {(['internal', 'jwt', 'encryption'] as const).map(kind => (
+          {(['internal', 'jwt'] as const).map(kind => (
             <RotationCard
               key={kind}
               spec={SECRETS[kind]}
               onRotate={() => setOpenModal({ kind })}
             />
+          ))}
+          {OFFLINE_KEYS.map(spec => (
+            <OfflineKeyCard key={spec.envVar} spec={spec} />
           ))}
         </div>
 
@@ -197,6 +220,8 @@ export function SecretRotationPage() {
                   'You have SSH access to the host and can edit the service environment files.',
                   'The service restart has been coordinated with anyone on the desk — rotating the JWT secret mid-session forces re-auth.',
                   'The previous secret is archived in case a roll-back is needed (within the same service lifecycle, before restart).',
+                  'For an encryption-key rotation: a full database backup has been taken beforehand.',
+                  'For an encryption-key rotation: the affected service will be stopped during the migration (nexrisk_service for core, fixbridge_service for LP).',
                 ].map((item, i) => (
                   <li key={i} className="flex items-start gap-2.5 text-[12.5px] text-text-secondary leading-snug">
                     <span
@@ -220,7 +245,8 @@ export function SecretRotationPage() {
             <div className="px-5 py-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
               <ServiceField label="Internal secret"  value="—" mono tone="muted" note="no GET endpoint" />
               <ServiceField label="JWT secret"       value="—" mono tone="muted" note="no GET endpoint" />
-              <ServiceField label="Encryption key"   value="—" mono tone="muted" note="no GET endpoint" />
+              <ServiceField label="Encryption key"   value="—" mono tone="muted" note="offline / vendor tool" />
+              <ServiceField label="LP master key"    value="—" mono tone="muted" note="offline / vendor tool" />
               <ServiceField label="Audit log"        value="—" mono tone="muted" note="pending integration" />
             </div>
           </div>
@@ -308,39 +334,81 @@ function RotationCard({ spec, onRotate }: { spec: SecretSpec; onRotate: () => vo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// OfflineKeyCard — at-rest encryption keys. NOT a click-to-run action: these are
+// rotated offline with the controlled nxr_secret_rotation tool during a
+// maintenance window. The card is purely informational + guidance to support.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OfflineKeyCard({ spec }: { spec: OfflineKeySpec }) {
+  return (
+    <div className="bg-surface border border-border rounded overflow-hidden">
+      <div className="px-5 pt-3.5 pb-2.5 border-b border-border flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-medium text-text-primary m-0">{spec.title}</h2>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <span
+              className="font-mono text-[11px] px-1.5 py-0.5 rounded"
+              style={{ background: '#1a1a1d', color: '#b6babf', border: '1px solid #44454f' }}
+            >
+              {spec.envVar}
+            </span>
+            <span
+              className="font-mono text-[11px] px-1.5 py-0.5 rounded"
+              style={{ background: '#1a1a1d', color: '#b6babf', border: '1px solid #44454f' }}
+            >
+              {spec.format}
+            </span>
+            <span
+              className="font-mono text-[11px] px-1.5 py-0.5 rounded"
+              style={{ background: '#18202a', color: '#5b86b8', border: '1px solid #2b3e57' }}
+            >
+              offline rotation
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-5 py-3.5 flex flex-col gap-2.5">
+        <p className="text-[13px] text-text-secondary leading-snug m-0">{spec.scope}</p>
+        {spec.note && (
+          <div className="rounded p-2.5" style={{ background: '#2a2016', border: '1px solid #6a4a2f' }}>
+            <p className="text-[12px] m-0 leading-snug" style={{ color: '#e09a55' }}>{spec.note}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Guidance — not a click-to-run action */}
+      <div className="px-5 py-3 border-t border-border">
+        <div className="rounded p-3" style={{ background: '#18202a', border: '1px solid #2b3e57' }}>
+          <p className="text-[12.5px] m-0 leading-snug" style={{ color: '#9fb8d8' }}>
+            This rotation is an offline, maintenance-window operation — not a click-to-run
+            action. It is performed with the controlled{' '}
+            <span className="font-mono">nxr_secret_rotation</span> tool, after a full database
+            backup, with the affected service stopped. The tool is not shipped to the deployment.
+            Contact <span className="text-text-primary font-medium">Taiga Support</span> to obtain
+            it and coordinate the rotation.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RotationModal — shared shell, four internal phases.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type Phase =
-  | { t: 'preflight_loading' }                                    // encryption only
-  | { t: 'preflight_error'; error: string }                        // encryption only
-  | { t: 'confirm'; preflight?: EncryptionKeyPreflight }           // main state
+  | { t: 'confirm' }
   | { t: 'rotating' }
-  | { t: 'rotate_error'; error: string; preflight?: EncryptionKeyPreflight }
+  | { t: 'rotate_error'; error: string }
   | { t: 'reveal'; newSecret: string;
       restart: string[]; message: string; invalidatesSessions?: boolean };
 
 function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => void }) {
-  const [phase,   setPhase]   = useState<Phase>(
-    spec.kind === 'encryption' ? { t: 'preflight_loading' } : { t: 'confirm' },
-  );
+  const [phase,   setPhase]   = useState<Phase>({ t: 'confirm' });
   const [typed,   setTyped]   = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Preflight on mount for encryption-key only
-  useEffect(() => {
-    if (spec.kind !== 'encryption') return;
-    let cancelled = false;
-    settingsApi.rotation.encryptionKeyPreflight()
-      .then(p => { if (!cancelled) setPhase({ t: 'confirm', preflight: p }); })
-      .catch(err => {
-        if (!cancelled) setPhase({
-          t: 'preflight_error',
-          error: err instanceof Error ? err.message : 'Preflight failed',
-        });
-      });
-    return () => { cancelled = true; };
-  }, [spec.kind]);
 
   // Focus the typed-confirmation input when confirm phase renders
   useEffect(() => {
@@ -364,11 +432,9 @@ function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => voi
   const canRotate =
     phase.t === 'confirm' &&
     typed === spec.confirmPhrase &&
-    spec.available &&
-    (spec.kind !== 'encryption' || phase.preflight?.ok_to_proceed === true);
+    spec.available;
 
   async function handleRotate() {
-    const preflight = phase.t === 'confirm' ? phase.preflight : undefined;
     setPhase({ t: 'rotating' });
     try {
       if (spec.kind === 'internal') {
@@ -379,7 +445,7 @@ function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => voi
           restart:   r.restart_required ?? [],
           message:   r.message,
         });
-      } else if (spec.kind === 'jwt') {
+      } else {
         const r: RotateJwtResponse = await settingsApi.rotation.rotateJwtSecret();
         setPhase({
           t: 'reveal',
@@ -388,20 +454,11 @@ function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => voi
           message:              r.message,
           invalidatesSessions:  r.invalidates_sessions,
         });
-      } else {
-        const r: RotateEncryptionResponse = await settingsApi.rotation.rotateEncryptionKey();
-        setPhase({
-          t: 'reveal',
-          newSecret: r.new_secret,
-          restart:   r.restart_required ?? [],
-          message:   r.message,
-        });
       }
     } catch (err) {
       setPhase({
         t: 'rotate_error',
         error: err instanceof Error ? err.message : 'Rotation failed',
-        preflight,
       });
     }
   }
@@ -438,27 +495,6 @@ function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => voi
         {/* Body */}
         <div className="overflow-auto" style={{ maxHeight: 'calc(90vh - 120px)' }}>
 
-          {phase.t === 'preflight_loading' && (
-            <div className="px-5 py-6 text-center">
-              <p className="text-sm text-text-secondary m-0">Running preflight…</p>
-              <p className="text-[11.5px] text-text-muted mt-1 m-0">
-                Counting encrypted rows that will need re-encryption.
-              </p>
-            </div>
-          )}
-
-          {phase.t === 'preflight_error' && (
-            <div className="px-5 py-4">
-              <div
-                className="rounded p-3"
-                style={{ background: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}
-              >
-                <p className="text-sm font-medium m-0">Preflight failed</p>
-                <p className="text-xs mt-1 text-text-secondary">{phase.error}</p>
-              </div>
-            </div>
-          )}
-
           {phase.t === 'confirm' && (
             <>
               {/* Consequences */}
@@ -477,53 +513,6 @@ function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => voi
                   </ul>
                 </div>
               </div>
-
-              {/* 501 stub notice */}
-              {!spec.available && spec.notAvailableNote && (
-                <div className="px-5 pb-3">
-                  <div
-                    className="rounded p-3"
-                    style={{ background: '#18202a', border: '1px solid #2b3e57' }}
-                  >
-                    <p className="text-[12.5px] m-0" style={{ color: '#5b86b8' }}>
-                      {spec.notAvailableNote}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Preflight counts (encryption only) */}
-              {spec.kind === 'encryption' && phase.preflight && (
-                <div className="px-5 pb-3">
-                  <div
-                    className="rounded overflow-hidden"
-                    style={{ background: '#1a1a1d', border: '1px solid #2a292c' }}
-                  >
-                    <div className="px-3 py-2 border-b border-border text-[11px] uppercase tracking-wide text-text-muted">
-                      Preflight
-                    </div>
-                    <div className="px-3 py-2 grid grid-cols-3 gap-2">
-                      <PreflightStat label="LP accounts"      value={String(phase.preflight.lp_accounts)} />
-                      <PreflightStat label="TOTP users"       value={String(phase.preflight.users_with_totp)} />
-                      <PreflightStat label="Est. duration"    value={`~${phase.preflight.estimated_duration_sec}s`} />
-                    </div>
-                    {phase.preflight.blockers.length > 0 && (
-                      <div className="px-3 py-2 border-t border-border">
-                        <p className="text-[11.5px] m-0" style={{ color: '#ff5c5c' }}>
-                          Blockers: {phase.preflight.blockers.join(', ')}
-                        </p>
-                      </div>
-                    )}
-                    {!phase.preflight.ok_to_proceed && phase.preflight.blockers.length === 0 && (
-                      <div className="px-3 py-2 border-t border-border">
-                        <p className="text-[11.5px] m-0" style={{ color: '#ff5c5c' }}>
-                          Backend signalled ok_to_proceed: false. Rotation disabled.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
 
               {/* Typed confirmation */}
               <div className="px-5 pb-4">
@@ -619,21 +608,10 @@ function RotationModal({ spec, onClose }: { spec: SecretSpec; onClose: () => voi
               </button>
               <button
                 type="button"
-                onClick={() => setPhase({ t: 'confirm', preflight: phase.preflight })}
+                onClick={() => setPhase({ t: 'confirm' })}
                 className="px-3.5 py-1.5 rounded border text-sm font-medium bg-accent border-accent text-[#0b0c0e] hover:bg-accent-hover cursor-pointer"
               >
                 Back
-              </button>
-            </>
-          ) : phase.t === 'preflight_error' ? (
-            <>
-              <span />
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3.5 py-1.5 rounded border border-border text-sm text-text-secondary hover:bg-surface-hover cursor-pointer"
-              >
-                Close
               </button>
             </>
           ) : (
@@ -775,15 +753,6 @@ function RevealPanel({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function PreflightStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10.5px] text-text-muted uppercase tracking-wide">{label}</span>
-      <span className="font-mono text-[13px] text-text-primary">{value}</span>
     </div>
   );
 }
