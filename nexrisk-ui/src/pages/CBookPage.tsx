@@ -3288,24 +3288,16 @@ export function CBookPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => cancelWorkingOrder(w)}
-                      disabled={inFlight}
-                      className={clsx(
-                        'flex-1 py-2.5 rounded text-xs font-bold transition-colors',
-                        inFlight ? 'bg-[#352222] text-[#7a4a4a] cursor-not-allowed'
-                                 : 'bg-[#ff5c5c] hover:bg-[#e04c4c] text-black'
-                      )}>
-                      {inFlight ? 'Cancelling…' : 'Cancel Order'}
-                    </button>
-                    <button
-                      disabled
-                      title="Modify ships once the backend adds ord_type + quantity to /orders/active"
-                      className="flex-1 py-2.5 rounded text-xs font-bold bg-[#2a2a2c] text-[#555] cursor-not-allowed border border-[#444]">
-                      Modify
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => cancelWorkingOrder(w)}
+                    disabled={inFlight}
+                    className={clsx(
+                      'w-full py-2.5 rounded text-xs font-bold transition-colors',
+                      inFlight ? 'bg-[#352222] text-[#7a4a4a] cursor-not-allowed'
+                               : 'bg-[#ff5c5c] hover:bg-[#e04c4c] text-black'
+                    )}>
+                    {inFlight ? 'Cancelling…' : 'Cancel Order'}
+                  </button>
                   <button
                     onClick={exitCloseMode}
                     className="w-full mt-2 py-1.5 rounded text-[10px] text-[#888] hover:text-white border border-[#444] transition-colors">
@@ -3327,7 +3319,8 @@ export function CBookPage() {
                     (!isConnected || submitting) && 'opacity-50 cursor-not-allowed'
                   )}
                 >
-                  {effectiveCaps.order_types.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {/* STOP intentionally excluded — DOM supports Market and Limit only. */}
+                  {effectiveCaps.order_types.filter((t) => t !== 'STOP').map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
                 <select
                   value={domTif}
