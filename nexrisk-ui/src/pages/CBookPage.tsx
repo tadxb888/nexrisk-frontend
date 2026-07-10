@@ -636,6 +636,11 @@ export function CBookPage() {
 
   // ── Close-mode ────────────────────────────────────────────────────────────
   const [closeRow, setCloseRow] = useState<CBookOrder | null>(null);
+  // Pending (working) order selected in the grid — drives the Cancel/Modify panel.
+  const [selectedWorking, setSelectedWorking] = useState<CBookOrder | null>(null);
+  // clord_ids with a cancel request in flight — disables the button until the WS
+  // confirms (ord_status "4" → row removed) or rejects (ORDER_CANCEL_REJECT → cleared).
+  const [cancellingIds, setCancellingIds] = useState<string[]>([]);
 
   // ── DOM state ─────────────────────────────────────────────────────────────
   // DOM Trader drawer — collapsed by default, opens on row-select (see
@@ -1376,6 +1381,9 @@ export function CBookPage() {
                 const next = prev.filter((w) => w.id !== workId);
                 workingOrdersRef.current = next; return next;
               });
+              setCancellingIds((prev) => prev.filter((id) => id !== clordId));
+              // If this row was the one selected in the Cancel/Modify panel, close it.
+              setSelectedWorking((prev) => (prev && prev.id === workId ? null : prev));
             };
             if (ordStatus === 'A' || ordStatus === '0') {
               const leaves = Number(fill.leaves_qty ?? 0);
@@ -1444,6 +1452,23 @@ export function CBookPage() {
               syncPositionsAfterFill(wsLpIdRef.current, 600);
               syncPositionsAfterFill(wsLpIdRef.current, 2500);
             }
+          }
+
+          // ── CANCEL / REPLACE REJECT (same `execution` topic) ──────────────────
+          // Cancel was refused by the LP — keep the working row, clear the in-flight
+          // state so the button re-enables, and surface the reason to the exec log.
+          if (msg.type === 'ORDER_CANCEL_REJECT') {
+            const rej = msg.data ?? msg;
+            const rejClord = rej.orig_cl_ord_id ?? rej.cl_ord_id ?? rej.clord_id ?? '';
+            if (rejClord) setCancellingIds((prev) => prev.filter((id) => id !== rejClord));
+            setExecLog((prev) => [{
+              clord_id: String(rejClord || rej.cl_ord_id || '—'),
+              ts: msg.timestamp_ms ?? Date.now(),
+              symbol: rej.symbol ?? '', side: 'BUY', qty: 0, orderType: '', tif: '',
+              lpId: msg.lp_id ?? wsLpIdRef.current,
+              status: 'REJECTED',
+              rejectReason: rej.text || rej.cxl_rej_reason || 'Cancel rejected',
+            }, ...prev].slice(0, 20));
           }
 
           // ── MARKET DATA — Brief Section 7.2
@@ -2199,19 +2224,59 @@ export function CBookPage() {
     const sel = e.api.getSelectedRows();
     if (sel.length === 1 && sel[0]._isOpen) {
       setCloseRow(sel[0]);
+      setSelectedWorking(null);
       // Selecting a row is the user's signal to operate on it via DOM Trader.
       // Auto-opening the drawer here saves a click. If the drawer is already
       // open this is a no-op; if the user manually closed it, re-selecting
       // another row re-opens it — which is the right affordance.
       setDomDrawerOpen(true);
     }
-    else setCloseRow(null);
+    else if (sel.length === 1 && sel[0]._isWorking) {
+      // Pending order selected → show the Cancel / Modify panel.
+      setSelectedWorking(sel[0]);
+      setCloseRow(null);
+      setDomDrawerOpen(true);
+    }
+    else { setCloseRow(null); setSelectedWorking(null); }
   }, []);
 
   const exitCloseMode = useCallback(() => {
     setCloseRow(null);
+    setSelectedWorking(null);
     setDomQtyLots('');
     gridRef.current?.api?.deselectAll();
+  }, []);
+
+  // Cancel a working (pending) order. Async-confirm: the row is NOT removed here —
+  // it stays (button disabled) until the WS delivers ord_status "4" (Canceled),
+  // which removes it; an ORDER_CANCEL_REJECT keeps the row and surfaces the reason.
+  const cancelWorkingOrder = useCallback(async (row: CBookOrder) => {
+    const clId = row.origClOrdId;
+    if (!row._isWorking || !clId) return;
+    setCancellingIds((prev) => (prev.includes(clId) ? prev : [...prev, clId]));
+    try {
+      const r = await bff<{ success: boolean; error?: string }>('/api/v1/fix/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ lp_id: row._lpId, orig_clord_id: clId, symbol: row.symbol }),
+      });
+      if (!r.success) {
+        setCancellingIds((prev) => prev.filter((id) => id !== clId));
+        setExecLog((prev) => [{
+          clord_id: clId, ts: Date.now(), symbol: row.symbol,
+          side: row.side === 'SELL' ? 'SELL' : 'BUY', qty: 0, orderType: '', tif: '',
+          lpId: row._lpId, status: 'REJECTED', rejectReason: r.error ?? 'Cancel request failed',
+        }, ...prev].slice(0, 20));
+      }
+      // On success the request is queued; wait for the WS ord_status "4" to remove the row.
+    } catch (err: unknown) {
+      setCancellingIds((prev) => prev.filter((id) => id !== clId));
+      setExecLog((prev) => [{
+        clord_id: clId, ts: Date.now(), symbol: row.symbol,
+        side: row.side === 'SELL' ? 'SELL' : 'BUY', qty: 0, orderType: '', tif: '',
+        lpId: row._lpId, status: 'REJECTED',
+        rejectReason: err instanceof Error ? err.message : 'Cancel request failed',
+      }, ...prev].slice(0, 20));
+    }
   }, []);
 
   const fetchFixMessages = useCallback(async (entry: ExecEntry) => {
@@ -2676,7 +2741,7 @@ export function CBookPage() {
           {lpsLoading ? <span className="text-[#555]">…</span> : (
             <select
               value={gridLpId}
-              onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); }}
+              onChange={(e) => { setGridLpId(e.target.value); setCloseRow(null); setSelectedWorking(null); setCancellingIds([]); }}
               className="bg-[#232225] border border-[#555] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
             >
               <option value="">— All LPs —</option>
@@ -2908,6 +2973,12 @@ export function CBookPage() {
                 <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
                   style={{ backgroundColor: '#231a38', color: '#a78bfa', border: '1px solid #a78bfa44' }}>
                   CLOSE MODE
+                </span>
+              )}
+              {selectedWorking && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
+                  style={{ backgroundColor: '#3a2c0a', color: '#e0a020', border: '1px solid #e0a02044' }}>
+                  PENDING ORDER
                 </span>
               )}
             </div>
@@ -3151,8 +3222,55 @@ export function CBookPage() {
               </div>
             )}
 
+            {/* Pending (working) order — Cancel / Modify panel */}
+            {selectedWorking && (() => {
+              const w = selectedWorking;
+              const inFlight = !!w.origClOrdId && cancellingIds.includes(w.origClOrdId);
+              return (
+                <div className="mb-2">
+                  <div className="px-2 py-1.5 rounded text-[10px] mb-2"
+                    style={{ backgroundColor: '#3a2c0a', border: '1px solid #e0a02033', color: '#e0a020' }}>
+                    Pending <span className="font-mono text-white">{w.symbol}</span>
+                    {' '}<span className="font-mono">{w.side}</span>
+                    {' @ '}<span className="font-mono text-white">{w.limitPrice != null ? w.limitPrice : '—'}</span>
+                    {w.orderType && <span className="ml-1 text-[#888]">· {w.orderType}</span>}
+                    <div className="text-[#888] mt-0.5">
+                      Qty <span className="font-mono">{w.workingQty != null ? w.workingQty.toLocaleString() : '—'}</span>
+                      {(w.stopLoss != null || w.takeProfit != null) && (
+                        <> · SL <span className="font-mono">{w.stopLoss ?? '—'}</span>
+                        {' '}· TP <span className="font-mono">{w.takeProfit ?? '—'}</span></>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => cancelWorkingOrder(w)}
+                      disabled={inFlight}
+                      className={clsx(
+                        'flex-1 py-2.5 rounded text-xs font-bold transition-colors',
+                        inFlight ? 'bg-[#352222] text-[#7a4a4a] cursor-not-allowed'
+                                 : 'bg-[#ff5c5c] hover:bg-[#e04c4c] text-black'
+                      )}>
+                      {inFlight ? 'Cancelling…' : 'Cancel Order'}
+                    </button>
+                    <button
+                      disabled
+                      title="Modify ships once the backend adds ord_type + quantity to /orders/active"
+                      className="flex-1 py-2.5 rounded text-xs font-bold bg-[#2a2a2c] text-[#555] cursor-not-allowed border border-[#444]">
+                      Modify
+                    </button>
+                  </div>
+                  <button
+                    onClick={exitCloseMode}
+                    className="w-full mt-2 py-1.5 rounded text-[10px] text-[#888] hover:text-white border border-[#444] transition-colors">
+                    Deselect
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* Order Type + TIF (new orders only) */}
-            {!closeRow && (
+            {!closeRow && !selectedWorking && (
               <div className="flex gap-2 mb-2">
                 <select
                   value={domOrderType}
@@ -3180,7 +3298,7 @@ export function CBookPage() {
             )}
 
             {/* Limit / Stop price */}
-            {!closeRow && (domOrderType === 'LIMIT' || domOrderType === 'STOP') && (
+            {!closeRow && !selectedWorking && (domOrderType === 'LIMIT' || domOrderType === 'STOP') && (
               <div className="mb-2">
                 <input type="text" value={limitPrice}
                   onChange={(e) => setLimitPrice(e.target.value.replace(/[^0-9.]/g, ''))}
@@ -3192,6 +3310,7 @@ export function CBookPage() {
             )}
 
             {/* Quantity */}
+            {!selectedWorking && (
             <div className="mb-2">
               <div className="text-[10px] text-white mb-1">Quantity (Units)</div>
               <input type="text" value={domQtyLots}
@@ -3210,9 +3329,10 @@ export function CBookPage() {
                 </div>
               )}
             </div>
+            )}
 
             {/* SL / TP — not available on MARKET orders */}
-            {!closeRow && slTpSupported && (
+            {!closeRow && !selectedWorking && slTpSupported && (
               <div className="mb-2">
                 <div className="flex gap-2 mb-1">
                   <div className="flex-1 min-w-0">
@@ -3238,7 +3358,7 @@ export function CBookPage() {
             )}
 
             {/* Comment (optional, 50 chars, DOM Trader orders only) */}
-            {!closeRow && (
+            {!closeRow && !selectedWorking && (
               <div className="mb-2">
                 <div className="text-[10px] text-white mb-1">Comment <span className="text-[#555]">(optional)</span></div>
                 <input
@@ -3254,6 +3374,7 @@ export function CBookPage() {
             )}
 
             {/* Buy / Sell */}
+            {!selectedWorking && (
             <div className="flex gap-2">
               <button onClick={() => placeOrder('BUY')} disabled={!canBuy}
                 className={clsx(
@@ -3270,6 +3391,7 @@ export function CBookPage() {
                 {submitting ? '…' : closeRow ? 'SELL (close) →' : 'SELL'}
               </button>
             </div>
+            )}
           </div>
 
         </div>
