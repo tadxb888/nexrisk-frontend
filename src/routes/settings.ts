@@ -23,6 +23,33 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { moduleGate } from '../middleware/auth.js';
 import { nexriskApi, snakeToCamel } from '../services/nexrisk-api.js';
+import { sessionStore } from '../services/session-store.js';
+
+// Session cookie name — mirrors SESSION_COOKIE in auth middleware / auth routes.
+// Kept local to avoid pulling those modules into this file's dependency graph.
+const SESSION_COOKIE = 'nexrisk_session';
+
+/**
+ * Build an Authorization header from the caller's server-side session.
+ *
+ * Most BFF→C++ calls authenticate with X-Internal-Secret alone (injected by
+ * nexriskApi). The root-only secret-rotation endpoints additionally require the
+ * user's own JWT (C++ re-verifies role == "root"), which the browser never
+ * holds — it lives in sessionStore keyed by the opaque session cookie. This
+ * lifts that token onto an Authorization: Bearer header for those calls.
+ *
+ * Returns {} when unavailable; C++ then 401s, which is correct for an
+ * unauthenticated caller.
+ */
+function bearerFromSession(request: FastifyRequest): Record<string, string> {
+  const sessionId = (request.cookies as Record<string, string | undefined>)?.[SESSION_COOKIE];
+  if (!sessionId) return {};
+  const session = sessionStore.get(sessionId) as
+    | { accessToken?: string; access_token?: string }
+    | undefined;
+  const token = session?.accessToken ?? session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 // ── helpers ──────────────────────────────────────────────────
 
 /**
@@ -74,9 +101,10 @@ async function proxyWrite(
 async function proxyGetRaw(
   path: string,
   reply: FastifyReply,
-  params?: Record<string, unknown>
+  params?: Record<string, unknown>,
+  headers?: Record<string, string>
 ) {
-  const response = await nexriskApi.get(path, params);
+  const response = await nexriskApi.get(path, params, headers);
   if (!response.ok) {
     return reply.code(response.status).send(response.error);
   }
@@ -87,15 +115,16 @@ async function proxyWriteRaw(
   method: 'PUT' | 'POST' | 'DELETE',
   path: string,
   body: unknown,
-  reply: FastifyReply
+  reply: FastifyReply,
+  headers?: Record<string, string>
 ) {
   let response;
   if (method === 'DELETE') {
-    response = await nexriskApi.delete(path);
+    response = await nexriskApi.delete(path, headers);
   } else if (method === 'PUT') {
-    response = await nexriskApi.put(path, body);
+    response = await nexriskApi.put(path, body, headers);
   } else {
-    response = await nexriskApi.post(path, body);
+    response = await nexriskApi.post(path, body, headers);
   }
   if (!response.ok) {
     return reply.code(response.status).send(response.error);
@@ -869,7 +898,7 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     '/settings/auth/rotate/internal-secret',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/internal-secret', request.body, reply);
+      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/internal-secret', request.body, reply, bearerFromSession(request));
     }
   );
 
@@ -886,7 +915,7 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     '/settings/auth/rotate/jwt-secret',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/jwt-secret', request.body, reply);
+      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/jwt-secret', request.body, reply, bearerFromSession(request));
     }
   );
 
@@ -902,8 +931,8 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get(
     '/settings/auth/rotate/encryption-key/preflight',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
-    async (_request: FastifyRequest, reply: FastifyReply) => {
-      return proxyGetRaw('/api/v1/settings/auth/rotate/encryption-key/preflight', reply);
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/auth/rotate/encryption-key/preflight', reply, undefined, bearerFromSession(request));
     }
   );
 
@@ -921,7 +950,7 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     '/settings/auth/rotate/encryption-key',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/encryption-key', request.body, reply);
+      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/encryption-key', request.body, reply, bearerFromSession(request));
     }
   );
 
