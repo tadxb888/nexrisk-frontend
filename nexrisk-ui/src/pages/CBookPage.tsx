@@ -1129,6 +1129,17 @@ export function CBookPage() {
           if (toRemove.length) api.applyTransaction({ remove: toRemove });
           for (const w of rows) if (existing.has(w.id)) api.getRowNode(w.id)?.setData(w);
         }
+        // Subscribe MD for each working-order symbol so Cur. Price resolves even when
+        // the DOM panel is showing a different symbol (mirrors the positions path).
+        const syms = [...new Set(rows.map((w) => w.symbol).filter(Boolean))];
+        for (const sym of syms) {
+          if (!posSubscribedRef.current.has(sym)) {
+            posSubscribedRef.current.add(sym);
+            bff('/api/v1/fix/md/subscribe', {
+              method: 'POST', body: JSON.stringify({ lp_id: gridLpId, symbol: sym, depth: 1 }),
+            }).catch(() => {});
+          }
+        }
       } catch { /* leave prior working rows in place on transient error */ }
     };
     loadWorkingRef.current = () => { void load(); };
@@ -2244,7 +2255,7 @@ export function CBookPage() {
     {
       colId: 'currentPrice', headerName: 'Cur. Price', filter: 'agNumberColumnFilter', width: 120, sortable: false, suppressCellFlash: true,
       valueGetter: (p: { data?: CBookOrder }) => {
-        if (!p.data?._isOpen || !p.data.symbol) return null;
+        if ((!p.data?._isOpen && !p.data?._isWorking) || !p.data.symbol) return null;
         const key = p.data.side === 'BUY' ? p.data.symbol + ':bid' : p.data.symbol + ':ask';
         return currentPricesRef.current.get(key) ?? p.data.currentPrice ?? null;
       },
