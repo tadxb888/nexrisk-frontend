@@ -268,7 +268,60 @@ export interface CBookOrder {
   instrumentGroup: string;  // 'FX' | 'Metals' | etc — for vol display
   _lpId: string;
   _isOpen: boolean;
+  // ── Working (pending/resting) order fields — set only when _isWorking = true.
+  // A resting LIMIT/STOP is neither an open position nor a session fill row, so it
+  // carries its own metadata used for display and (Stage 2) cancel/replace.
+  _isWorking?: boolean;
+  origClOrdId?: string;   // clord_id — the cancel/replace handle
+  orderId?: string;       // TE order_id (FIX tag 37)
+  orderType?: string;     // 'LIMIT' | 'STOP' — known for in-session orders; may be undefined from bootstrap
+  limitPrice?: number;    // resting price (REST `price`)
+  workingQty?: number;    // units still working (WS leaves_qty; bootstrap `quantity` currently unreliable)
+  ordState?: string;      // raw LP state e.g. 'NEW' / 'PENDING_NEW'
+  _cancelInFlight?: boolean;
 }
+
+// FIX side values arrive as "1"/"2" on the WS and "BUY"/"SELL" on REST — normalise both.
+const normSide = (s: unknown): CBookSide | 'FLAT' => {
+  const v = String(s ?? '').toUpperCase();
+  if (v === '1' || v === 'BUY')  return 'BUY';
+  if (v === '2' || v === 'SELL') return 'SELL';
+  return 'FLAT';
+};
+
+// Map a REST /orders/{lp}/active per-order object → a CBookOrder working row.
+// Confirmed live keys: clord_id, order_id, symbol, side, price, state, created_ts, quantity.
+// NOTE (backend gaps in the active-orders snapshot): `quantity` currently returns 0 for
+// resting orders, and there is no order-type or SL/TP key — so workingQty/orderType/SL/TP
+// stay undefined for bootstrapped orders until the snapshot carries them.
+const mapActiveOrder = (o: Record<string, unknown>, lpId: string): CBookOrder => {
+  const clId = String(o.clord_id ?? '');
+  const px   = Number(o.price ?? 0);
+  const qty  = Number(o.quantity ?? 0);
+  const ts   = Number(o.created_ts ?? Date.now());
+  const iso  = new Date(ts).toISOString();
+  return {
+    id: `work-${clId}`,
+    date: iso, time: iso,
+    dealerId: lpId, symbol: String(o.symbol ?? ''), positionId: '',
+    side: normSide(o.side),
+    volume: 0, rawQty: 0, displayQty: qty,
+    lpName: lpId, lpAccount: lpId,
+    fillPrice: px,                 // resting price shown in the price column
+    stopLoss: null, takeProfit: null,
+    unrealizedPnl: null, currentPrice: null,
+    type: 'Pending', comments: '',
+    instrumentGroup: 'FX',
+    _lpId: lpId, _isOpen: false,
+    _isWorking: true,
+    origClOrdId: clId,
+    orderId: o.order_id != null ? String(o.order_id) : undefined,
+    orderType: o.order_type != null ? String(o.order_type) : undefined,
+    limitPrice: px,
+    workingQty: qty || undefined,
+    ordState: o.state != null ? String(o.state) : undefined,
+  };
+};
 
 interface ExecEntry {
   clord_id: string;
@@ -315,6 +368,7 @@ interface StrategyDayStat {
 const TYPE_COLORS: Record<string, string> = {
   Terminal:     '#FFFF00',
   'DOM Trader': '#76DEDE',
+  Pending:      '#e0a020',
   // Hedge strategy names are not listed here; the cell renderer falls back to HEDGE_STRATEGY_COLOR.
 };
 
@@ -573,6 +627,10 @@ export function CBookPage() {
   const [fixMessagesLoading, setFixMessagesLoading] = useState(false);
   const [sessionOrders, setSessionOrders] = useState<CBookOrder[]>([]);
   const [posLoading, setPosLoading]       = useState(false);
+  // Working (pending/resting) orders — kept as a SEPARATE row set from positions.
+  const [workingOrders, setWorkingOrders] = useState<CBookOrder[]>([]);
+  const workingOrdersRef = useRef<CBookOrder[]>([]);        // mirror for WS-handler reads
+  const loadWorkingRef   = useRef<null | (() => void)>(null); // stable refetch handle for WS
 
   const instrCacheRef = useRef<Record<string, Record<string, FIXInstrument>>>({});
 
@@ -1044,6 +1102,40 @@ export function CBookPage() {
     return () => { cancelled = true; };
   }, [gridLpId]);
 
+  // ── Working (pending) orders bootstrap ──────────────────────────────────────
+  // Seeds resting LIMIT/STOP orders on mount / LP change from GET /orders/{lp}/active,
+  // then kept live by the EXECUTION_REPORT ord_status switch on the WS. Exposes a
+  // stable refetch handle (loadWorkingRef) the WS uses when it sees an accepted order
+  // it has no local row for (the ER carries no price, so we refetch to get it).
+  useEffect(() => {
+    if (!gridLpId) { setWorkingOrders([]); workingOrdersRef.current = []; loadWorkingRef.current = null; return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await bff<{ success: boolean; data: { orders: Record<string, unknown>[] } }>(`/api/v1/fix/orders/${gridLpId}/active`);
+        if (cancelled || !r.success) return;
+        const rows = (r.data?.orders ?? []).map((o) => mapActiveOrder(o, gridLpId));
+        setWorkingOrders(rows);
+        workingOrdersRef.current = rows;
+        // Grid is transaction-driven (rowData is a stable empty sentinel) — reconcile work- rows.
+        const api = gridRef.current?.api;
+        if (api) {
+          const existing = new Set<string>();
+          api.forEachNode((n) => { if (n.data?._isWorking) existing.add(n.data.id); });
+          const incomingIds = new Set(rows.map((w) => w.id));
+          const toAdd    = rows.filter((w) => !existing.has(w.id));
+          const toRemove = [...existing].filter((id) => !incomingIds.has(id)).map((id) => ({ id } as CBookOrder));
+          if (toAdd.length)    api.applyTransaction({ add: toAdd });
+          if (toRemove.length) api.applyTransaction({ remove: toRemove });
+          for (const w of rows) if (existing.has(w.id)) api.getRowNode(w.id)?.setData(w);
+        }
+      } catch { /* leave prior working rows in place on transient error */ }
+    };
+    loadWorkingRef.current = () => { void load(); };
+    load();
+    return () => { cancelled = true; loadWorkingRef.current = null; };
+  }, [gridLpId]);
+
   // ── Market data startup — Section 8 of brief, implemented exactly ───────────
   // 1. GET  /status/{lp_id}         — verify sessions logged on
   // 2. POST /md/subscribe            — tell backend to start publishing symbol
@@ -1258,6 +1350,69 @@ export function CBookPage() {
             // Brief Section 9.5: fields may be at event.data.* or event.* level
             const fill = msg.data ?? msg;
             const clordId = fill.cl_ord_id ?? fill.clord_id ?? `ws-${Date.now()}`;
+
+            // ── Working-order lifecycle (resting LIMIT/STOP) ────────────────────
+            // ord_status is a single FIX char sent as a string. Switch on the raw char:
+            //   A=PendingNew, 0=New, 1=PartiallyFilled → working row upsert
+            //   2=Filled, 4=Canceled, 8=Rejected, C=Expired → working row removed
+            // The ER carries no price/SL/TP, so an accepted order with no local row
+            // triggers a /active refetch (bootstrap) to pick those up.
+            const ordStatus = String(fill.ord_status ?? msg.ord_status ?? '');
+            const workId    = `work-${clordId}`;
+            const removeWorking = () => {
+              gridRef.current?.api?.applyTransaction({ remove: [{ id: workId } as CBookOrder] });
+              setWorkingOrders((prev) => {
+                const next = prev.filter((w) => w.id !== workId);
+                workingOrdersRef.current = next; return next;
+              });
+            };
+            if (ordStatus === 'A' || ordStatus === '0') {
+              const leaves = Number(fill.leaves_qty ?? 0);
+              const node = gridRef.current?.api?.getRowNode(workId);
+              if (node?.data) {
+                const upd: CBookOrder = {
+                  ...node.data,
+                  ordState: ordStatus === 'A' ? 'PENDING_NEW' : 'NEW',
+                  workingQty: leaves || node.data.workingQty,
+                  displayQty: leaves || node.data.displayQty,
+                };
+                node.setData(upd);
+                setWorkingOrders((prev) => {
+                  const next = prev.map((w) => (w.id === workId ? upd : w));
+                  workingOrdersRef.current = next; return next;
+                });
+              } else {
+                // Accepted order we have no row for (placed elsewhere / pre-load) — refetch
+                // to obtain its price + qty, which the ER does not carry.
+                loadWorkingRef.current?.();
+              }
+              return; // not a fill — do not run the exec-log / position-sync path
+            }
+            if (ordStatus === '4' || ordStatus === '8' || ordStatus === 'C') {
+              removeWorking();
+              if (ordStatus === '8') {
+                setExecLog((prev) => [{
+                  clord_id: clordId, ts: msg.timestamp_ms ?? Date.now(),
+                  symbol: fill.symbol ?? msg.symbol ?? '',
+                  side: normSide(fill.side ?? msg.side) === 'SELL' ? 'SELL' : 'BUY',
+                  qty: 0, orderType: '', tif: '',
+                  lpId: msg.lp_id ?? wsLpIdRef.current,
+                  status: 'REJECTED', rejectReason: fill.text || 'Rejected',
+                }, ...prev].slice(0, 20));
+              }
+              return; // terminal non-fill states
+            }
+            if (ordStatus === '1') {
+              // Partial fill — update the working row's leaves, then fall through so the
+              // fill path runs (a position opens for the filled portion).
+              const leaves = Number(fill.leaves_qty ?? 0);
+              const node = gridRef.current?.api?.getRowNode(workId);
+              if (node?.data) node.setData({ ...node.data, workingQty: leaves, displayQty: leaves || node.data.displayQty });
+            } else if (ordStatus === '2') {
+              // Fully filled — remove the working row; the position appears via the sync below.
+              removeWorking();
+            }
+
             const entry: ExecEntry = {
               clord_id:  clordId,
               ts:        msg.timestamp_ms ?? Date.now(),
@@ -1621,7 +1776,7 @@ export function CBookPage() {
     return src.slice(0, 60);
   }, [instruments, symbolSearch]);
 
-  const gridRows = useMemo<CBookOrder[]>(() => [...livePositions, ...sessionOrders], [livePositions, sessionOrders]);
+  const gridRows = useMemo<CBookOrder[]>(() => [...workingOrders, ...livePositions, ...sessionOrders], [workingOrders, livePositions, sessionOrders]);
 
   // Coverage-book aggregates — one pass over gridRows producing:
   //   • per-strategy stats (drives the Strategy card selector + the old Row-3 strip)
@@ -1961,25 +2116,55 @@ export function CBookPage() {
             comment: domComment.trim(),
             ts:      Date.now(),
           });
+          const noteComment = domComment.trim();
           setDomComment('');
-          // Optimistic session row — grid shows immediately, fill confirmed by WS EXECUTION_REPORT
-          const newRow: CBookOrder = {
-            id: `sess-${r.clord_id ?? Date.now()}`,
-            date: new Date().toISOString(), time: new Date().toISOString(),
-            dealerId: domLpId, symbol: domSymbol,
-            positionId: r.clord_id ?? '', side,
-            volume: qty, rawQty: qty, displayQty: qty,
-            lpName: domLpId,
-            lpAccount: domLpInfo?.lp_name ?? domLpId,
-            fillPrice: liveBookRef.current
-              ? (side === 'BUY' ? (liveBookRef.current.best_ask ?? 0) : (liveBookRef.current.best_bid ?? 0))
-              : parseFloat(limitPrice) || 0,
-            type: 'DOM Trader', comments: domComment.trim(),
-            instrumentGroup: activeInstrument?.instrument_group ?? 'FX',
-            stopLoss: null, takeProfit: null, unrealizedPnl: null, currentPrice: null,
-            _lpId: domLpId, _isOpen: false,
-          };
-          setSessionOrders((prev) => [newRow, ...prev]);
+          if (domOrderType === 'LIMIT' || domOrderType === 'STOP') {
+            // Resting order — show immediately as a Pending working row. Unlike the
+            // bootstrap path, an in-session order carries its full price/qty/type and
+            // (if supported) SL/TP, so those columns populate right away.
+            const clId = r.clord_id ?? `local-${Date.now()}`;
+            const px   = parseFloat(limitPrice) || 0;
+            const slV  = slTpSupported ? (parseFloat(stopLoss)  || null) : null;
+            const tpV  = slTpSupported ? (parseFloat(takeProfit) || null) : null;
+            const workRow: CBookOrder = {
+              id: `work-${clId}`,
+              date: new Date().toISOString(), time: new Date().toISOString(),
+              dealerId: domLpId, symbol: domSymbol, positionId: '',
+              side, volume: 0, rawQty: 0, displayQty: qty,
+              lpName: domLpId, lpAccount: domLpInfo?.lp_name ?? domLpId,
+              fillPrice: px, stopLoss: slV, takeProfit: tpV,
+              unrealizedPnl: null, currentPrice: null,
+              type: 'Pending', comments: noteComment,
+              instrumentGroup: activeInstrument?.instrument_group ?? 'FX',
+              _lpId: domLpId, _isOpen: false,
+              _isWorking: true, origClOrdId: clId, orderType: domOrderType,
+              limitPrice: px, workingQty: qty, ordState: 'PENDING_NEW',
+            };
+            setWorkingOrders((prev) => {
+              const next = [workRow, ...prev.filter((w) => w.id !== workRow.id)];
+              workingOrdersRef.current = next; return next;
+            });
+            gridRef.current?.api?.applyTransaction({ add: [workRow] });
+          } else {
+            // Optimistic session row — grid shows immediately, fill confirmed by WS EXECUTION_REPORT
+            const newRow: CBookOrder = {
+              id: `sess-${r.clord_id ?? Date.now()}`,
+              date: new Date().toISOString(), time: new Date().toISOString(),
+              dealerId: domLpId, symbol: domSymbol,
+              positionId: r.clord_id ?? '', side,
+              volume: qty, rawQty: qty, displayQty: qty,
+              lpName: domLpId,
+              lpAccount: domLpInfo?.lp_name ?? domLpId,
+              fillPrice: liveBookRef.current
+                ? (side === 'BUY' ? (liveBookRef.current.best_ask ?? 0) : (liveBookRef.current.best_bid ?? 0))
+                : parseFloat(limitPrice) || 0,
+              type: 'DOM Trader', comments: noteComment,
+              instrumentGroup: activeInstrument?.instrument_group ?? 'FX',
+              stopLoss: null, takeProfit: null, unrealizedPnl: null, currentPrice: null,
+              _lpId: domLpId, _isOpen: false,
+            };
+            setSessionOrders((prev) => [newRow, ...prev]);
+          }
         } else {
           entry.status = 'REJECTED'; entry.rejectReason = r.error ?? 'Rejected';
           setExecLog((prev) => [entry, ...prev].slice(0, 20));
@@ -2091,6 +2276,8 @@ export function CBookPage() {
       headerName: 'Status', width: 90, suppressSizeToFit: true, hide: true,
       cellRenderer: (p: { data?: CBookOrder }) => {
         if (!p.data) return null;
+        if (p.data._isWorking)
+          return <span style={{ color: '#e0a020', fontSize: '10px' }}>○ PENDING</span>;
         return p.data._isOpen
           ? <span style={{ color: '#49b3b3', fontSize: '10px' }}>● OPEN</span>
           : <span style={{ color: '#888', fontSize: '10px' }}>○ FILLED</span>;
