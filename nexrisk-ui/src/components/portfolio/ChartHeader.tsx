@@ -69,24 +69,31 @@ export function ChartHeader({
         <PeriodSelector value={period} onChange={onPeriod} options={entry.periodOptions} />
 
         {/* ── Get Insight toggle ────────────────────────────────────
+            HIDDEN (Phase — feature parked): button suppressed via a
+            `false &&` guard. All wiring below is intact — insightOn /
+            onToggleInsight remain referenced so the toggle logic and
+            AI panel plumbing are untouched. Re-enable by flipping the
+            guard to `true`.
             On:  button with the yellow accent; the workspace auto-
                  collapses the breakdown pane and ChartPanel renders
                  ChartExplanation as a side panel beside the chart.
             Off: muted button; chart fills the container. */}
-        <button
-          onClick={onToggleInsight}
-          title={insightOn ? 'Hide AI Insight panel' : 'Open AI Insight panel for this chart'}
-          aria-pressed={insightOn}
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded transition-colors font-medium"
-          style={
-            insightOn
-              ? { backgroundColor: '#c9b87c', color: '#1e1e20' }
-              : { backgroundColor: 'transparent', color: '#c9b87c', border: '1px solid #c9b87c66' }
-          }
-        >
-          <Sparkles className="w-3 h-3" />
-          Get Insight
-        </button>
+        {false && (
+          <button
+            onClick={onToggleInsight}
+            title={insightOn ? 'Hide AI Insight panel' : 'Open AI Insight panel for this chart'}
+            aria-pressed={insightOn}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded transition-colors font-medium"
+            style={
+              insightOn
+                ? { backgroundColor: '#c9b87c', color: '#1e1e20' }
+                : { backgroundColor: 'transparent', color: '#c9b87c', border: '1px solid #c9b87c66' }
+            }
+          >
+            <Sparkles className="w-3 h-3" />
+            Get Insight
+          </button>
+        )}
       </div>
     </div>
   );
