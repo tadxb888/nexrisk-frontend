@@ -1119,7 +1119,26 @@ export function CBookPage() {
       try {
         const r = await bff<{ success: boolean; data: { orders: Record<string, unknown>[] } }>(`/api/v1/fix/orders/${gridLpId}/active`);
         if (cancelled || !r.success) return;
-        const rows = (r.data?.orders ?? []).map((o) => mapActiveOrder(o, gridLpId));
+        console.debug('[CBook] /active raw orders', r.data?.orders);
+        // The /active snapshot currently omits SL/TP (and returns quantity 0 / no order_type)
+        // — so a refetch must NOT clobber the richer data an in-session order already has.
+        // Merge: prefer REST values, but fall back to the prior working row for the gaps.
+        const rows = (r.data?.orders ?? []).map((o) => {
+          const mapped = mapActiveOrder(o, gridLpId);
+          const prior  = workingOrdersRef.current.find((w) => w.id === mapped.id);
+          if (!prior) return mapped;
+          return {
+            ...mapped,
+            stopLoss:   mapped.stopLoss   ?? prior.stopLoss,
+            takeProfit: mapped.takeProfit ?? prior.takeProfit,
+            orderType:  mapped.orderType  ?? prior.orderType,
+            limitPrice: mapped.limitPrice || prior.limitPrice,
+            fillPrice:  mapped.fillPrice  || prior.fillPrice,
+            workingQty: mapped.workingQty ?? prior.workingQty,
+            displayQty: mapped.displayQty || prior.displayQty,
+            comments:   mapped.comments   || prior.comments,
+          };
+        });
         setWorkingOrders(rows);
         workingOrdersRef.current = rows;
         // Grid is transaction-driven (rowData is a stable empty sentinel) — reconcile work- rows.
@@ -1365,23 +1384,34 @@ export function CBookPage() {
           if (msg.type === 'EXECUTION_REPORT') {
             // Brief Section 9.5: fields may be at event.data.* or event.* level
             const fill = msg.data ?? msg;
-            const clordId = fill.cl_ord_id ?? fill.clord_id ?? `ws-${Date.now()}`;
+            const evtClord  = String(fill.cl_ord_id ?? fill.clord_id ?? `ws-${Date.now()}`);
+            const origClord = (fill.orig_cl_ord_id ?? fill.orig_clord_id) != null
+              ? String(fill.orig_cl_ord_id ?? fill.orig_clord_id) : '';
+            const clordId   = evtClord; // used by the exec-log entry below (unchanged)
 
             // ── Working-order lifecycle (resting LIMIT/STOP) ────────────────────
             // ord_status is a single FIX char sent as a string. Switch on the raw char:
             //   A=PendingNew, 0=New, 1=PartiallyFilled → working row upsert
             //   2=Filled, 4=Canceled, 8=Rejected, C=Expired → working row removed
-            // The ER carries no price/SL/TP, so an accepted order with no local row
-            // triggers a /active refetch (bootstrap) to pick those up.
+            // A cancel/replace ack carries the REQUEST id in cl_ord_id (tag 11) and the
+            // ORIGINAL order in orig_cl_ord_id (tag 41). Resolve against the ids we track
+            // so the correct row is matched regardless of which the bridge populates.
             const ordStatus = String(fill.ord_status ?? msg.ord_status ?? '');
-            const workId    = `work-${clordId}`;
+            const knownWorkIds = new Set(workingOrdersRef.current.map((w) => w.origClOrdId).filter(Boolean));
+            const targetClord = knownWorkIds.has(origClord) ? origClord
+                              : knownWorkIds.has(evtClord)  ? evtClord
+                              : (origClord || evtClord);
+            const workId = `work-${targetClord}`;
+            if (ordStatus === '4' || ordStatus === '6' || ordStatus === '8' || ordStatus === 'C' || origClord) {
+              console.debug('[CBook] cancel/lifecycle ER', { ordStatus, evtClord, origClord, targetClord, text: fill.text });
+            }
             const removeWorking = () => {
               gridRef.current?.api?.applyTransaction({ remove: [{ id: workId } as CBookOrder] });
               setWorkingOrders((prev) => {
                 const next = prev.filter((w) => w.id !== workId);
                 workingOrdersRef.current = next; return next;
               });
-              setCancellingIds((prev) => prev.filter((id) => id !== clordId));
+              setCancellingIds((prev) => prev.filter((id) => id !== targetClord && id !== evtClord && id !== origClord));
               // If this row was the one selected in the Cancel/Modify panel, close it.
               setSelectedWorking((prev) => (prev && prev.id === workId ? null : prev));
             };
@@ -1459,10 +1489,12 @@ export function CBookPage() {
           // state so the button re-enables, and surface the reason to the exec log.
           if (msg.type === 'ORDER_CANCEL_REJECT') {
             const rej = msg.data ?? msg;
-            const rejClord = rej.orig_cl_ord_id ?? rej.cl_ord_id ?? rej.clord_id ?? '';
-            if (rejClord) setCancellingIds((prev) => prev.filter((id) => id !== rejClord));
+            const rejOrig = String(rej.orig_cl_ord_id ?? rej.orig_clord_id ?? '');
+            const rejEvt  = String(rej.cl_ord_id ?? rej.clord_id ?? '');
+            console.debug('[CBook] ORDER_CANCEL_REJECT', { rejOrig, rejEvt, text: rej.text, reason: rej.cxl_rej_reason });
+            setCancellingIds((prev) => prev.filter((id) => id !== rejOrig && id !== rejEvt));
             setExecLog((prev) => [{
-              clord_id: String(rejClord || rej.cl_ord_id || '—'),
+              clord_id: String(rejOrig || rejEvt || '—'),
               ts: msg.timestamp_ms ?? Date.now(),
               symbol: rej.symbol ?? '', side: 'BUY', qty: 0, orderType: '', tif: '',
               lpId: msg.lp_id ?? wsLpIdRef.current,
@@ -2254,6 +2286,20 @@ export function CBookPage() {
     const clId = row.origClOrdId;
     if (!row._isWorking || !clId) return;
     setCancellingIds((prev) => (prev.includes(clId) ? prev : [...prev, clId]));
+    console.debug('[CBook] cancel →', { lp_id: row._lpId, orig_clord_id: clId, symbol: row.symbol, order_id: row.orderId });
+    // Safety net: if the LP never sends a "4" (Canceled) or a reject, re-enable the
+    // button after 8s so the panel can never hang. The row stays until confirmed.
+    window.setTimeout(() => {
+      setCancellingIds((prev) => {
+        if (!prev.includes(clId)) return prev;
+        setExecLog((log) => [{
+          clord_id: clId, ts: Date.now(), symbol: row.symbol,
+          side: row.side === 'SELL' ? 'SELL' : 'BUY', qty: 0, orderType: '', tif: '',
+          lpId: row._lpId, status: 'REJECTED', rejectReason: 'No cancel confirmation from LP (timed out)',
+        }, ...log].slice(0, 20));
+        return prev.filter((id) => id !== clId);
+      });
+    }, 8000);
     try {
       const r = await bff<{ success: boolean; error?: string }>('/api/v1/fix/cancel', {
         method: 'POST',
