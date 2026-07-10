@@ -65,7 +65,7 @@ async function proxyWrite(
 //
 // The nexrisk/classifier/detection/llm handlers above apply snakeToCamel to
 // GET responses as a historical convention. The System Administration API
-// (/gateway, /fixbridge, /lp, /logs, /auth/rotate, /nexrisk/*) is documented
+// (/gateway, /fixbridge, /lp, /logs, /settings/auth/rotate, /nexrisk/*) is documented
 // in snake_case in settings_api.md and the frontend expects shapes to match
 // that spec 1:1 — so these helpers pass bodies through verbatim in both
 // directions. Error envelopes ({ success:false, error|errors, warnings })
@@ -848,33 +848,33 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── Secret rotation (§ 10) — root-only at the C++ layer ─────────────
   //
-  // These paths live under /auth/rotate/* in the backend, not /settings/*.
-  // Registered here to keep all System Administration routes in one file;
-  // the BFF route namespace matches the backend for clarity. The C++
-  // service re-checks role == "root" on receipt — config.write is a
-  // coarse gate that keeps non-admins out before they hit the backend.
+  // Registered under /settings/auth/rotate/* — with the plugin's /api/v1
+  // prefix that resolves to /api/v1/settings/auth/rotate/*, matching the C++
+  // backend, which serves these under /api/v1/settings/auth/rotate/*. The C++
+  // service re-checks role == "root" on receipt — config.write is a coarse
+  // gate that keeps non-admins out before they hit the backend.
   //
   // Generated secrets are returned exactly once and are NOT persisted
   // anywhere Claude or the BFF can retrieve them later. The frontend's
   // copy-once modal is the only opportunity to capture the value.
 
   /**
-   * 🔑 POST /api/v1/auth/rotate/internal-secret
+   * 🔑 POST /api/v1/settings/auth/rotate/internal-secret
    * Body:    { confirm: true }
    * Returns: { success, status:"rotated", new_secret, restart_required:[nexrisk_service,bff], message }
    * Secret:  96-hex-char string. Used for BFF→C++ internal auth
    *          (X-Internal-Secret header). Both sides must be updated.
    */
   fastify.post(
-    '/auth/rotate/internal-secret',
+    '/settings/auth/rotate/internal-secret',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return proxyWriteRaw('POST', '/api/v1/auth/rotate/internal-secret', request.body, reply);
+      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/internal-secret', request.body, reply);
     }
   );
 
   /**
-   * 🔑 POST /api/v1/auth/rotate/jwt-secret
+   * 🔑 POST /api/v1/settings/auth/rotate/jwt-secret
    * Body:    { confirm: true }
    * Returns: { success, status:"rotated", new_secret, invalidates_sessions:true,
    *            restart_required:[nexrisk_service], message }
@@ -883,15 +883,15 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
    *          remain usable until they expire.
    */
   fastify.post(
-    '/auth/rotate/jwt-secret',
+    '/settings/auth/rotate/jwt-secret',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return proxyWriteRaw('POST', '/api/v1/auth/rotate/jwt-secret', request.body, reply);
+      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/jwt-secret', request.body, reply);
     }
   );
 
   /**
-   * 🔑 GET /api/v1/auth/rotate/encryption-key/preflight
+   * 🔑 GET /api/v1/settings/auth/rotate/encryption-key/preflight
    * Returns: { success, lp_accounts, users_with_totp, estimated_duration_sec,
    *            ok_to_proceed, blockers:[] }
    *
@@ -900,28 +900,28 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
    * into scope and duration. Not 501 — this endpoint is live today.
    */
   fastify.get(
-    '/auth/rotate/encryption-key/preflight',
+    '/settings/auth/rotate/encryption-key/preflight',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      return proxyGetRaw('/api/v1/auth/rotate/encryption-key/preflight', reply);
+      return proxyGetRaw('/api/v1/settings/auth/rotate/encryption-key/preflight', reply);
     }
   );
 
   /**
-   * 🔑 POST /api/v1/auth/rotate/encryption-key
+   * 🔑 POST /api/v1/settings/auth/rotate/encryption-key
    * Body:    { confirm: true, confirmation_phrase: "ROTATE ENCRYPTION KEY" }
    * Returns: 501 NOT_IMPLEMENTED today. Once wired, re-encrypts LP credentials
    *          and user TOTP secrets with a freshly generated key.
    *
-   * Frontend MUST call /preflight first and display counts before offering
-   * the destructive action. During the operation (once implemented), settings
-   * writes and user enrolments will be blocked — the UI should surface this.
+   * NOTE: in-app encryption-key rotation is deprecated — the frontend no longer
+   * offers it (rotation is an offline maintenance-window operation). This route
+   * is retained so the namespace stays complete, but is not driven by the UI.
    */
   fastify.post(
-    '/auth/rotate/encryption-key',
+    '/settings/auth/rotate/encryption-key',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return proxyWriteRaw('POST', '/api/v1/auth/rotate/encryption-key', request.body, reply);
+      return proxyWriteRaw('POST', '/api/v1/settings/auth/rotate/encryption-key', request.body, reply);
     }
   );
 
