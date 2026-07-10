@@ -1941,7 +1941,7 @@ export function CBookPage() {
           }
           body.price = p;
         }
-        if (slTpSupported) {
+        if (slTpSupported && domOrderType !== 'MARKET') {
           const sl = parseFloat(stopLoss);  if (sl)  body.stop_loss   = sl;
           const tp = parseFloat(takeProfit); if (tp) body.take_profit = tp;
         }
@@ -3013,24 +3013,26 @@ export function CBookPage() {
               )}
             </div>
 
-            {/* SL / TP */}
+            {/* SL / TP — not available on MARKET orders */}
             {!closeRow && slTpSupported && (
               <div className="mb-2">
                 <div className="flex gap-2 mb-1">
                   <div className="flex-1 min-w-0">
-                  <div className="text-[10px] text-white mb-1">Stop Loss</div>
+                  <div className={`text-[10px] mb-1 ${domOrderType === 'MARKET' ? 'text-[#666]' : 'text-white'}`}>Stop Loss</div>
                     <input type="text" value={stopLoss}
                       onChange={(e) => setStopLoss(e.target.value.replace(/[^0-9.]/g, ''))}
-                      disabled={!isConnected || submitting} placeholder="0.00000"
-                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#ff5c5c] placeholder-[#555]"
+                      disabled={!isConnected || submitting || domOrderType === 'MARKET'}
+                      placeholder={domOrderType === 'MARKET' ? 'N/A on Market' : '0.00000'}
+                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#ff5c5c] placeholder-[#555] disabled:opacity-40 disabled:cursor-not-allowed"
                     />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[10px] text-white mb-1">Take Profit</div>
+                    <div className={`text-[10px] mb-1 ${domOrderType === 'MARKET' ? 'text-[#666]' : 'text-white'}`}>Take Profit</div>
                     <input type="text" value={takeProfit}
                       onChange={(e) => setTakeProfit(e.target.value.replace(/[^0-9.]/g, ''))}
-                      disabled={!isConnected || submitting} placeholder="0.00000"
-                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#49b3b3] placeholder-[#555]"
+                      disabled={!isConnected || submitting || domOrderType === 'MARKET'}
+                      placeholder={domOrderType === 'MARKET' ? 'N/A on Market' : '0.00000'}
+                      className="w-full bg-[#2a2a2c] border border-[#555] rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-[#49b3b3] placeholder-[#555] disabled:opacity-40 disabled:cursor-not-allowed"
                     />
                   </div>
                 </div>
