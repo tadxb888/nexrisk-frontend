@@ -1413,6 +1413,11 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
   const usageColor = usagePct >= 80 ? '#c0392b' : usagePct >= 50 ? '#b85c1a' : '#2e7d4f';
   const fmtTTL     = (s: number) => s >= 3600 ? `${(s/3600).toFixed(0)}h` : `${Math.floor(s/60)}m`;
 
+  // Client-facing markup on displayed cost — 5× raw Anthropic API cost
+  const MARKUP = 5;
+  const mtdCostRaw = usage?.mtd_cost_usd ?? usage?.today_cost_usd ?? 0;
+  const dailyExceeded = (usage?.daily_usage_pct ?? 0) >= 100;
+
   return (
     <FactoryCtx.Provider value={{ diff, defaults, section: 'llm', resetSubsection, resetAll, resetting }}>
       {confirmReset && <ConfirmResetModal onConfirm={resetAll} onCancel={() => setConfirmReset(false)} loading={resetting === 'all'} />}
@@ -1426,6 +1431,11 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           <div className="flex items-center justify-between mb-3">
             <SectionLabel>Month-to-Date Usage</SectionLabel>
             <div className="flex items-center gap-3">
+              {dailyExceeded && (
+                <span className="text-xs px-2 py-0.5 rounded font-mono font-semibold bg-red-950/30 text-red-500">
+                  Exceeded
+                </span>
+              )}
               <span className={clsx('text-xs px-2 py-0.5 rounded font-mono', usage?.claude_api_key_configured ? 'bg-green-950/40 text-green-500' : 'bg-red-950/30 text-red-500')}>
                 {usage?.claude_api_key_configured ? 'API Key ✓' : 'API Key Not Set ✗'}
               </span>
@@ -1433,7 +1443,7 @@ function LLMTab({ cfg, usage }: { cfg: any; usage: any }) {
           </div>
           <div className="grid grid-cols-5 gap-4 mb-4">
             {[
-              { label: 'Cost MTD',        value: `$${(usage.mtd_cost_usd ?? usage.today_cost_usd)?.toFixed(3)}`,                       sub: `of $${usage.monthly_limit_usd ?? usage.daily_limit_usd} limit`, color: usageColor },
+              { label: 'Cost MTD',        value: `$${(mtdCostRaw * MARKUP).toFixed(3)}`,                       sub: `of $${usage.monthly_limit_usd ?? usage.daily_limit_usd} limit`, color: usageColor },
               { label: 'API Calls',       value: String(usage.mtd_call_count ?? usage.today_call_count),                             sub: 'calls this month',                    color: 'white' },
               { label: 'Auto-Gen / hr',   value: String(usage.auto_gen_this_hour),                 sub: `of ${usage.hourly_auto_gen_limit} limit`, color: 'white' },
               { label: 'Cache Hit Rate',  value: `${usage.cache_hit_rate_pct?.toFixed(0)}%`,       sub: `${usage.cache_hits} hits / ${usage.cache_misses} misses`, color: 'white' },
