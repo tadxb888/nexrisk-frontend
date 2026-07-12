@@ -1021,6 +1021,17 @@ export async function getPortfolioSummary(
 }
 
 /**
+ * One-shot REST snapshot of the per-symbol exposure breakdown — the seed
+ * source for Card 3 (Where Is My Risk) on mount and when the WS is quiet
+ * (weekends/holidays). Same payload shape as the portfolio.exposure.symbols
+ * WS SNAPSHOT, so one parser handles both. Current open-position state — not
+ * period-based. Returned unwrapped (no { success, data } envelope).
+ */
+export async function getPortfolioExposureSymbols(): Promise<PortfolioExposureSymbolsData> {
+  return fetchAPI<PortfolioExposureSymbolsData>('/api/v1/portfolio/exposure/symbols');
+}
+
+/**
  * Open a managed WebSocket to the Portfolio Summary feed for a given period.
  * Switching periods closes and re-opens this connection (caller responsibility).
  */
@@ -1083,6 +1094,14 @@ export interface PortfolioExposureSymbolRow {
   /** C-Book net (long − short) for this symbol, broker view.
    *  NEW: previously absent from the legacy REST shape. */
   c_book_lots:       number;
+  // Per-symbol B-Book P&L (Card 3 Row 1). Broker view: a symbol that cost the
+  // broker money is negative. Optional — a symbol whose USD-conversion path is
+  // unavailable may ship 0.0 or omit these.
+  realized_pnl_mtd?:    number;
+  unrealized_pnl?:      number;
+  pnl_total_mtd?:       number;
+  // Per-symbol B-Book USD notional (Card 3 Rows 2 & 3).
+  b_book_notional_usd?: number;
 }
 
 /** Push payload for topic "portfolio.exposure.symbols". */

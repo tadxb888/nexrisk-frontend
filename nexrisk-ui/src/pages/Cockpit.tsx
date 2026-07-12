@@ -11,6 +11,7 @@ import { clsx } from 'clsx';
 import {
   connectCockpitWebSocket,
   getPortfolioSummary,
+  getPortfolioExposureSymbols,
   type CockpitWsEvent,
   cockpitApi,
   type CockpitTraderRisk,
@@ -134,6 +135,7 @@ function useCockpitPortfolio() {
   // overwrite it (live wins, regardless of arrival order).
   const liveToday  = useRef(false);
   const liveMonth  = useRef(false);
+  const liveSymbols = useRef(false);
   const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
 
@@ -150,6 +152,7 @@ function useCockpitPortfolio() {
           liveMonth.current = true;
           setMonth(ev.data as PortfolioSummary);
         } else if (ev.topic === 'portfolio.exposure.symbols' && ev.type === 'SNAPSHOT') {
+          liveSymbols.current = true;
           setSymbols(ev.data as SymbolsPayload);
         }
         // additional topics for other cards wired here as they come online
@@ -185,7 +188,9 @@ function useCockpitPortfolio() {
 
   // One-shot REST seed for both periods — populates the cards immediately on
   // mount and, crucially, on weekends/holidays when the WS pushes nothing.
-  // Applied only if no live SNAPSHOT has landed for that period yet.
+  // Applied only if no live SNAPSHOT has landed for that period yet. The
+  // per-symbol exposure seed does the same for Card 3, whose only live source
+  // is the WS portfolio.exposure.symbols topic (silent when the market is shut).
   useEffect(() => {
     let cancelled = false;
     getPortfolioSummary('today')
@@ -193,6 +198,9 @@ function useCockpitPortfolio() {
       .catch(() => { /* best-effort; WS remains primary */ });
     getPortfolioSummary('month')
       .then((d) => { if (!cancelled && !liveMonth.current) setMonth(d as unknown as PortfolioSummary); })
+      .catch(() => { /* best-effort; WS remains primary */ });
+    getPortfolioExposureSymbols()
+      .then((d) => { if (!cancelled && !liveSymbols.current) setSymbols(d as unknown as SymbolsPayload); })
       .catch(() => { /* best-effort; WS remains primary */ });
     return () => { cancelled = true; };
   }, []);
