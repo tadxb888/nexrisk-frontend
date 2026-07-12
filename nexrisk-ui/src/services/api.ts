@@ -1307,6 +1307,13 @@ export const cockpitApi = {
     fetchAPI<CockpitTraderRisk>('/api/v1/cockpit/trader-risk'),
   getPredictions: () =>
     fetchAPI<CockpitPredictions>('/api/v1/cockpit/predictions'),
+  // Card 3 Row 3 — worst 1-day range % per MT5 symbol as a flat map
+  // (mt5_symbol -> worst_range_fraction; fraction, NOT percent). Historical
+  // stress input: worst of the last 100 daily bars, changes ≤ once/day.
+  // Returned unwrapped (no { success, data } envelope). Fetched on-mount +
+  // hourly by useCockpitLargest1Day — never fast-polled.
+  getLargest1Day: () =>
+    fetchAPI<Record<string, number>>('/api/v1/risk/largest-1day'),
 };
 
 /** REST endpoint that mirrors WebSocketManager::GetStatsJSON() */

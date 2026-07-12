@@ -52,4 +52,33 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(data);
     }
   );
+
+  /**
+   * GET /api/v1/risk/largest-1day
+   * Card 3 Row 3 backing data — worst 1-day range fraction per MT5 symbol
+   * (flat map: mt5_symbol -> worst_range_fraction; fraction, NOT percent).
+   * Worst of the last 100 daily bars; changes at most once/day. Fetched
+   * on-mount + hourly by the cockpit page — not fast-polled.
+   *
+   * NOTE: deliberately does NOT run snakeToCamel. The keys are raw MT5
+   * symbols (EURUSD, XAUUSD, and any with underscores), which the frontend
+   * looks up verbatim against WS by_symbol[].symbol. Camel-casing the keys
+   * would corrupt them and break the lookup. C++ returns this unwrapped
+   * (no { success, data } envelope), so forward response.data as-is.
+   */
+  fastify.get(
+    '/risk/largest-1day',
+    {
+      preHandler: [fastify.authenticate, fastify.requireCapability('alerts.read')],
+    },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get('/api/v1/risk/largest-1day');
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      return reply.send(response.data);
+    }
+  );
 }

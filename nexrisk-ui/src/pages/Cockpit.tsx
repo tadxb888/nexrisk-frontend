@@ -265,6 +265,39 @@ function useCockpitPredictions() {
   return data;
 }
 // ═══════════════════════════════════════════════════════════════════════════
+// useCockpitLargest1Day — Card 3 Row 3 worst-1-day range map (on-mount fetch)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// GET /api/v1/risk/largest-1day → flat map mt5_symbol -> worst_range_fraction
+// (fraction, not percent). This is NOT live data: worst of the last 100 daily
+// bars, changes at most once a day. Fetch once on mount, slow hourly refresh —
+// never fast-poll it. Silent on errors: Row 3 falls back to "—" (never $0).
+function useCockpitLargest1Day() {
+  const [data, setData] = useState<Record<string, number> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchOnce = async () => {
+      try {
+        const result = await cockpitApi.getLargest1Day();
+        if (!cancelled) setData(result);
+      } catch {
+        // Silent — Row 3 renders "—" until a response arrives.
+      }
+    };
+
+    fetchOnce();
+    const interval = setInterval(fetchOnce, 3_600_000); // hourly, not live
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  return data;
+}
+// ═══════════════════════════════════════════════════════════════════════════
 // FORMATTERS / SIGN HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -532,14 +565,33 @@ function Card2TakeHome({ today, month }: Card2Props) {
 // Row 1 — Top losing symbol MTD: min(pnl_total_mtd) across by_symbol[].
 //         Scope is B-Book by definition; A/C books are hedged and don't
 //         represent broker risk. Display: "SYMBOL  −$XXXK".
-// Row 2 — 1% adverse move: pending notional-USD per symbol (follow-up PR).
-// Row 3 — ES: pending ES engine (per spec).
+// Row 2 — 1% adverse move: Σ b_book_notional_usd × 1%, displayed as a loss.
+// Row 3 — Largest 1-day risk: worst historical daily range (last 100 bars) ×
+//         current B-Book notional, max across held symbols. Historical stress
+//         number — NOT a prediction, NOT live-ticking. Display: "−$XX,XXX · SYM".
+
+// Row 3 sanitisation guards. The largest-1day endpoint ships RAW ranges from
+// nexday.predictions_daily; some bars are corrupt (XAGUSD 60%, USOIL 47%,
+// XAUUSD 16.6%). We skip absurd/invalid ranges rather than clamp — a clamped
+// 10% is still invented. Excluding keeps Row 3 truthful.
+const MAX_DAILY_RANGE = 0.10; // >10% one-day range = bad bar, not a scenario
+
+// De-dupe symbols that are the same instrument via duplicate LP mapping
+// (e.g. GOLD and XAUUSD are one metal). Canonicalise before the max so we
+// never double-count. Unknown symbols map to themselves.
+const INSTRUMENT_ALIASES: Record<string, string> = {
+  GOLD:   'XAUUSD',
+  XAUUSD: 'XAUUSD',
+};
+const canonicalInstrument = (sym: string): string =>
+  INSTRUMENT_ALIASES[sym] ?? sym;
 
 interface Card3Props {
-  symbols: SymbolsPayload | null;
+  symbols:     SymbolsPayload | null;
+  largest1Day: Record<string, number> | null;
 }
 
-function Card3SymbolRisk({ symbols }: Card3Props) {
+function Card3SymbolRisk({ symbols, largest1Day }: Card3Props) {
   const rows = useMemo<Array<[string, { display: string; status?: RowStatus } | null]>>(() => {
     // ── Row 1 — Top losing symbol MTD ────────────────────────────────────
     let row1: { display: string; status?: RowStatus } | null = null;
@@ -580,12 +632,48 @@ function Card3SymbolRisk({ symbols }: Card3Props) {
       };
     }
 
+    // ── Row 3 — Largest 1-day risk ───────────────────────────────────────
+    // range × |notional| = worst historical single-day move × how much we hold
+    // now = worst-case 1-day loss. Max across held symbols = our largest single-
+    // day risk. Driven from the WS by_symbol[] (our live book), looking each up
+    // in the largest-1day map — NOT the reverse (the map contains symbols we may
+    // not trade). Rules: skip range ≤ 0, skip range > 10% (corrupt bar),
+    // de-dupe same instrument. worstSym === null → "—", never $0.
+    let row3: { display: string; status?: RowStatus } | null = null;
+    if (largest1Day && symbols?.by_symbol) {
+      let worstUsd = 0;
+      let worstSym: string | null = null;
+      const seenInstrument = new Set<string>();
+
+      for (const r of symbols.by_symbol) {                      // Rule 4: held symbols
+        const notional = Math.abs(r.b_book_notional_usd ?? 0);
+        if (notional <= 0) continue;
+
+        const range = largest1Day[r.symbol];
+        if (!(range > 0)) continue;                             // Rule 2: floor (null/0/NaN/neg)
+        if (range > MAX_DAILY_RANGE) continue;                  // Rule 1: 10% ceiling (skip, don't clamp)
+
+        const instrument = canonicalInstrument(r.symbol);       // Rule 3: de-dupe same metal
+        if (seenInstrument.has(instrument)) continue;
+        seenInstrument.add(instrument);
+
+        const riskUsd = range * notional;
+        if (riskUsd > worstUsd) { worstUsd = riskUsd; worstSym = r.symbol; }
+      }
+
+      row3 = worstSym
+        ? { display: `${fmtHdrMoney(-worstUsd)} · ${worstSym}`, status: 'warning' }
+        : { display: '—' };                                     // no qualifying symbol → em dash, not $0
+    }
+    // largest1Day === null (not yet fetched / endpoint 404-500) → row3 stays
+    // null → CockpitCard renders its own "Collecting data…" placeholder.
+
     return [
       ['Top losing symbol',  row1],
       ['1% move impact',     row2],
-      ['Largest 1-day risk', null],  // placeholder — ES engine pending
+      ['Largest 1-day risk', row3],
     ];
-  }, [symbols]);
+  }, [symbols, largest1Day]);
 
   return (
     <CockpitCard
@@ -1192,6 +1280,7 @@ export function CockpitPage() {
   const { today, month, symbols, wsStatus } = useCockpitPortfolio();
   const traderRisk = useCockpitTraderRisk();
   const predictions = useCockpitPredictions();
+  const largest1Day = useCockpitLargest1Day();
 
   // When WS is not live, dim the grid uniformly. Live state has no decoration.
   const gridOpacity = wsStatus === 'live' ? 1 : 0.5;
@@ -1242,7 +1331,7 @@ export function CockpitPage() {
         {/* Row 2 — Who Is My Risk / Risk Manager Performance / Where Is My Risk */}
         <Card4TraderRisk    data={traderRisk} />
         <Card5RiskMgrPerf   month={month} />
-        <Card3SymbolRisk    symbols={symbols} />
+        <Card3SymbolRisk    symbols={symbols} largest1Day={largest1Day} />
 
         {/* Row 3 — NexDay predictions */}
         <Card7NexDayDaily    data={predictions} />
