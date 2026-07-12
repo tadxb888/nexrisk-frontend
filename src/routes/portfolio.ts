@@ -76,4 +76,26 @@ export async function portfolioRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(res.data);
     },
   );
+
+  // ── GET /portfolio/exposure/symbols ───────────────────────────
+  // Per-symbol exposure snapshot — seed source for Cockpit Card 3 on
+  // mount / when the WS portfolio.exposure.symbols topic is quiet
+  // (weekends/holidays). Current open-position state; no query params.
+  // Sent raw (no snakeToCamel): by_symbol[] fields are already snake_case
+  // and consumed verbatim by the frontend.
+  fastify.get(
+    '/portfolio/exposure/symbols',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('portfolio')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const res = await nexriskApi.get<unknown>(
+        '/api/v1/portfolio/exposure/symbols',
+      );
+
+      if (!res.ok) {
+        return reply.code(res.status).send(res.error);
+      }
+
+      return reply.send(res.data);
+    },
+  );
 }
