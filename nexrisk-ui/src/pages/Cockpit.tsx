@@ -150,7 +150,15 @@ function useCockpitPortfolio() {
           setToday(ev.data as PortfolioSummary);
         } else if (ev.topic === 'portfolio.summary.month' && ev.type === 'SNAPSHOT') {
           liveMonth.current = true;
-          setMonth(ev.data as PortfolioSummary);
+          // The WS month frame carries live totals but NOT vs_prior_month.
+          // Preserve the prior comparator (from the REST seed) so MTM Δ doesn't
+          // blank when a live frame overwrites the seeded month.
+          const incoming = ev.data as PortfolioSummary;
+          setMonth((prev) =>
+            incoming.vs_prior_month
+              ? incoming
+              : { ...incoming, vs_prior_month: prev?.vs_prior_month },
+          );
         } else if (ev.topic === 'portfolio.exposure.symbols' && ev.type === 'SNAPSHOT') {
           liveSymbols.current = true;
           setSymbols(ev.data as SymbolsPayload);
@@ -197,7 +205,21 @@ function useCockpitPortfolio() {
       .then((d) => { if (!cancelled && !liveToday.current) setToday(d as unknown as PortfolioSummary); })
       .catch(() => { /* best-effort; WS remains primary */ });
     getPortfolioSummary('month')
-      .then((d) => { if (!cancelled && !liveMonth.current) setMonth(d as unknown as PortfolioSummary); })
+      .then((d) => {
+        if (cancelled) return;
+        const seed = d as unknown as PortfolioSummary;
+        if (!liveMonth.current) {
+          setMonth(seed);
+        } else {
+          // Live totals already won the race; only backfill the prior
+          // comparator if that live frame lacked it (WS omits vs_prior_month).
+          setMonth((prev) =>
+            prev && !prev.vs_prior_month && seed.vs_prior_month
+              ? { ...prev, vs_prior_month: seed.vs_prior_month }
+              : prev,
+          );
+        }
+      })
       .catch(() => { /* best-effort; WS remains primary */ });
     getPortfolioExposureSymbols()
       .then((d) => { if (!cancelled && !liveSymbols.current) setSymbols(d as unknown as SymbolsPayload); })
@@ -322,12 +344,6 @@ const moneyStatus = (v: number): RowStatus => {
   return undefined;
 };
 
-const pctStatus = (v: number): RowStatus => {
-  if (v > 0.1)  return 'ok';
-  if (v < -0.1) return 'critical';
-  return undefined;
-};
-
 // ═══════════════════════════════════════════════════════════════════════════
 // COCKPIT CARD COMPONENTS — use platform design tokens
 // ═══════════════════════════════════════════════════════════════════════════
@@ -393,12 +409,13 @@ function CockpitCard({ title, question, rows, helpCardId }: CockpitCardProps) {
 // Wire-source contract:
 //   today.total.realized + today.total.unrealized  → Today Net P&L
 //   month.total.realized + month.total.unrealized  → MTD  Net P&L
-//   month.vs_prior_month.total                     → prior comparator (must be
-//                                                   realized+unrealized to match)
+//   month.vs_prior_month.net_pnl                   → prior comparator (prior
+//                                                   month at the same day-of-
+//                                                   month, realized+unrealized)
 //
-// MTM Performance %: (current MTD − prior) / |prior| × 100.
-// |denominator| guards against sign inversion when prior was a losing month;
-// matches the audit Section "Edge case 1" decision.
+// MTM Δ: current MTD − prior. A signed dollar delta, not a ratio — sturdier
+// than the old percentage, which exploded when the prior base was near zero
+// (e.g. a −$1,021 prior turned a +$34K month into +3466%).
 
 interface Card1Props {
   today: PortfolioSummary | null;
@@ -421,12 +438,13 @@ function Card1Money({ today, month }: Card1Props) {
       row2 = { display: fmtHdrMoney(v), status: moneyStatus(v) };
     }
 
-    // Row 3 — MTM Performance %
+    // Row 3 — MTM Δ (current MTD − prior-month same-DOM), signed dollars.
     // Honest fallbacks:
-    //   - no MTD snapshot yet                  → "Collecting data…"
-    //   - prior month available=false           → "Collecting data…"
-    //   - prior month net_pnl is null           → "Collecting data…"
-    //   - prior |net_pnl| below floor ($1K)     → render "—" (too small to ratio)
+    //   - no MTD snapshot yet          → "Collecting data…"
+    //   - prior month available=false  → "Collecting data…"
+    //   - prior month net_pnl is null  → "Collecting data…"
+    // No division → no floor guard needed; a delta is well-defined for any
+    // prior, including a near-zero or negative one.
     //
     // Prior basis: vs_prior_month.net_pnl is realized + unrealized EOD at the
     // window end (same DOM as today, prior month). Apples-to-apples with the
@@ -436,24 +454,20 @@ function Card1Money({ today, month }: Card1Props) {
       const vsPrior = month.vs_prior_month;
       if (vsPrior.available && vsPrior.net_pnl !== null) {
         const current = month.total.realized + month.total.unrealized;
-        const prior   = vsPrior.net_pnl;
-        // Prior-month net P&L is a real, rankable figure that routinely sits
-        // below $50K — a $50K floor wrongly suppressed it. Guard only against a
-        // near-zero denominator (volatile %). Tunable.
-        const FLOOR   = 1_000;
-        if (Math.abs(prior) < FLOOR) {
-          row3 = { display: '—', status: undefined };
-        } else {
-          const pct = ((current - prior) / Math.abs(prior)) * 100;
-          row3 = { display: fmtPct(pct), status: pctStatus(pct) };
-        }
+        const delta   = current - vsPrior.net_pnl;
+        // Explicit + on gains: this is a change vs last month, so the sign is
+        // the point. fmtHdrMoney already prefixes − on losses.
+        row3 = {
+          display: `${delta > 0 ? '+' : ''}${fmtHdrMoney(delta)}`,
+          status:  moneyStatus(delta),
+        };
       }
     }
 
     return [
       ['Today: Net P&L',   row1],
       ['MTD: Net P&L',     row2],
-      ['MTM Performance',  row3],
+      ['MTM Δ',            row3],
     ];
   }, [today, month]);
 

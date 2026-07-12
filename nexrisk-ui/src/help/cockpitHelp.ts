@@ -54,17 +54,17 @@ export const COCKPIT_HELP: Record<string, CardHelp> = {
         whatToDo:        'This is the headline number for the month. It drives the comparison in Row 3.',
       },
       {
-        label:           'MTM Performance %',
-        whatItShows:     'How current MTD stacks up against the same point last month — month-of-month performance.',
-        howCalculated:   'This month\'s total so far, minus last month\'s total at the same day of the month, divided by that prior figure, times 100. Using the absolute value keeps the sign correct when last month was a loss.',
-        colorThresholds: 'Green if better than last month; red if worse.',
-        whatToDo:        'A positive number on a negative MTD = losing less than last month (still good news). A negative number on a positive MTD = earning less than last month (worth a look).',
+        label:           'MTM Δ',
+        whatItShows:     'How this month\'s P&L compares to the same point last month, as a signed dollar figure — this month minus last month at the same day-of-month.',
+        howCalculated:   'Current MTD (realized + unrealized, all books) minus last month\'s P&L at the same day-of-month. A positive number means we\'re ahead of where we were a month ago; negative means behind. Shown as dollars, not a percentage.',
+        colorThresholds: 'Green when ahead of last month (positive Δ); red when behind (negative Δ).',
+        whatToDo:        'A large positive Δ = strong month-on-month improvement. A large negative Δ on an otherwise positive MTD means we\'re earning less than we were last month — worth a look at coverage and flow.',
       },
     ],
     gotchas: [
       'Net P&L here is "gross of costs". Take-Home (net of costs) is on Card 2.',
       'The MTD comparison is "day-of-month aligned" — comparing day 15 of this month to day 15 of last month, not full month vs partial.',
-      'If the prior month\'s same-point P&L was effectively zero, Row 3 shows "—".',
+      'MTM Δ shows "Collecting data…" until the prior-month comparator is available; once it is, it always renders a dollar figure (a delta is well-defined even when last month was near zero or a loss).',
     ],
   },
 
