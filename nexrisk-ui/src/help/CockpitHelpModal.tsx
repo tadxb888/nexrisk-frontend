@@ -92,26 +92,6 @@ export function CockpitHelpModal({ cardId, onClose }: CockpitHelpModalProps) {
           </div>
         ))}
 
-        {/* Scope + Refresh */}
-        <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
-          <div>
-            <h3 className="text-xs uppercase tracking-wider text-text-muted mb-1">Scope</h3>
-            <p className="text-text-primary">{help.scope}</p>
-          </div>
-          <div>
-            <h3 className="text-xs uppercase tracking-wider text-text-muted mb-1">Refresh</h3>
-            <p className="text-text-primary">{help.refresh}</p>
-          </div>
-        </div>
-
-        {/* Gotchas */}
-        <div className="mb-4">
-          <h3 className="text-xs uppercase tracking-wider text-text-muted mb-1">Worth knowing</h3>
-          <ul className="text-sm text-text-primary space-y-1 list-disc list-inside">
-            {help.gotchas.map((g, i) => <li key={i}>{g}</li>)}
-          </ul>
-        </div>
-
         {/* Footer — link to full help */}
         <div className="pt-3 border-t border-text-muted/20 flex items-center justify-between text-sm">
           <Link to="/cockpit/help" className="text-text-secondary hover:text-text-primary underline">

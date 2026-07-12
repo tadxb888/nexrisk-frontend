@@ -75,24 +75,6 @@ export function CockpitHelpPage() {
                 <pre className="text-xs text-text-primary whitespace-pre-wrap font-mono">{extra.bodyMarkdown}</pre>
               </div>
             ))}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 text-sm">
-              <div>
-                <h3 className="text-xs uppercase tracking-wider text-text-muted mb-1">Scope</h3>
-                <p className="text-text-primary">{help.scope}</p>
-              </div>
-              <div>
-                <h3 className="text-xs uppercase tracking-wider text-text-muted mb-1">Refresh</h3>
-                <p className="text-text-primary">{help.refresh}</p>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-xs uppercase tracking-wider text-text-muted mb-1">Worth knowing</h3>
-              <ul className="text-sm text-text-primary space-y-1 list-disc list-inside">
-                {help.gotchas.map((g, i) => <li key={i}>{g}</li>)}
-              </ul>
-            </div>
           </section>
         ))}
       </div>
