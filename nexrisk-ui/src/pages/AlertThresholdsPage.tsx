@@ -618,6 +618,7 @@ export function AlertThresholdsPage() {
   }
 
   const tunableCount = editableRows.length;
+  const isStandby    = config.node.role === 'standby';
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -636,10 +637,38 @@ export function AlertThresholdsPage() {
           <div className="text-right">
             <span className="text-xs text-text-muted font-mono">{config.config_path}</span>
             <div className="text-xs text-text-muted mt-0.5">
-              node <span className="font-mono text-text-secondary">{config.node.role}</span>
+              node{' '}
+              <span
+                className="font-mono"
+                style={isStandby
+                  ? { color: AMBER_TEXT, fontWeight: 500 }
+                  : { color: 'var(--text-secondary, #d2d6e2)' }}
+              >
+                {config.node.role}
+              </span>
             </div>
           </div>
         </div>
+
+        {/* Master and Standby each hold their own copy of this file and each
+            answer this endpoint independently — a change saved here is not a
+            change on the other node. Editing the backup is rarely intended,
+            so it gets the first banner on the page. */}
+        {isStandby ? (
+          <div
+            className="rounded p-3 mb-4"
+            style={{ background: AMBER_BG, border: `1px solid ${AMBER_BORDER}` }}
+          >
+            <p className="font-medium m-0 text-sm" style={{ color: AMBER_TEXT }}>
+              You are editing the Standby server
+            </p>
+            <p className="text-text-secondary mt-1 mb-0 text-[13px] leading-snug">
+              The Master keeps its own copy of this file. Saving here changes the
+              backup server only — the two will then disagree, which is what row
+              I5 alerts on.
+            </p>
+          </div>
+        ) : null}
 
         {/* Config file problems come before anything else — if the file is
             missing or unparseable, every value below is a compiled default. */}
