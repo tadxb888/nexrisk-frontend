@@ -93,6 +93,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/settings',    label: 'System Settings', module: 'settings' },
       { path: '/users',       label: 'Users & Roles',   module: 'users' },
       { path: '/mt5-servers', label: 'MT5 Servers',     module: 'mt5_servers' },
+      { path: '/alert-thresholds', label: 'Alert Thresholds', module: 'alert_thresholds' },
     ],
   },
 ];

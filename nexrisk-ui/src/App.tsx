@@ -55,6 +55,7 @@ import { PredictionsPage } from '@/pages/PredictionsPage';
 
 // Network Cluster — infra world map (provisioned /infra route).
 import { NetworkClusterPage } from '@/pages/NetworkClusterPage';
+import { AlertThresholdsPage } from '@/pages/AlertThresholdsPage';
 
 // Settings sub-pages (not in @/pages barrel — direct import)
 import { GatewayPage }           from '@/pages/settings/GatewayPage';
@@ -134,6 +135,7 @@ function App() {
               {/* ─── System ───────────────────────────── */}
               <Route path="/mt5-servers"   element={<NodeManagementPage />} />
               <Route path="/infra"         element={<NetworkClusterPage />} />
+              <Route path="/alert-thresholds" element={<AlertThresholdsPage />} />
 
               {/* ─── Cockpit─────────────────────── */}
               <Route path="/cockpit"      element={<CockpitPage />} />

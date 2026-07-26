@@ -34,6 +34,7 @@ import { alertsBarRoutes } from './routes/alerts-bar.js';
 import { alertsBarNotificationsRoutes } from './routes/alerts-bar-notifications.js';
 import { alertsBarWsRoutes } from './routes/alerts-bar-ws.js';
 import { helpRoutes } from './routes/helpRoutes.js';
+import { monitoringRoutes } from './routes/monitoring.js';
 /**
  * Create and configure Fastify server
  */
@@ -178,6 +179,7 @@ async function buildServer() {
       await api.register(alertsBarRoutes);
       await api.register(alertsBarNotificationsRoutes);
       await api.register(helpRoutes);
+      await api.register(monitoringRoutes);
     },
     { prefix: '/api/v1' }
   );

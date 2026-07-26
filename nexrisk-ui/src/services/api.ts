@@ -2724,3 +2724,170 @@ export function connectSystemHealthWebSocket(
     }
   };
 }
+// ============================================
+// Alert Thresholds (§ system_health.json)
+//
+// Append to src/services/api.ts. Two reasons this does not simply reuse
+// fetchAPI for both calls:
+//
+//   1. fetchAPI throws `new Error(body.error ?? 'HTTP n')` on any non-2xx.
+//      That is right for the GET — a failed load is a failed load — but it
+//      discards the 422 `errors[]` array, which is the entire mechanism for
+//      putting a validation message next to the field that caused it.
+//   2. fetchWithStub keeps `status` but still flattens the body to a single
+//      `message` string, so it loses errors[] too.
+//
+// So the GET uses fetchAPI and the PUT uses a local helper returning a
+// discriminated union, following the precedent fetchWithStub already set for
+// 501s. Neither existing helper is modified.
+//
+// Do NOT run snakeToCamel over these responses: `rows` is keyed by row code
+// (D3_stale_ticks) and each row's `fields` are keyed by field name
+// (stale_secs). Those keys are the write-request keys — camel-casing them
+// breaks the PUT round trip.
+// ============================================
+
+export type ThresholdFieldType = 'integer' | 'number' | 'boolean' | 'string';
+
+export interface ConfigField {
+  key:      string;
+  label:    string;
+  type:     ThresholdFieldType;
+  unit?:    string;
+  running:  number | boolean | string;
+  file:     number | boolean | string | null;
+  default:  number | boolean | string;
+  min?:     number;
+  max?:     number;
+  help?:    string;
+  /** Enum members, served rather than hardcoded (telegram_severity). */
+  options?: string[];
+  readonly?: boolean;
+  /** Served warning shown beside the input. Not emitted by the master yet. */
+  caution?: string;
+}
+
+export type RowSource     = 'config' | 'db' | 'witness';
+export type RowStatus     = 'built' | 'parked' | 'dropped';
+export type TunableClass  = 1 | 2 | 3;
+
+export interface ConfigRow {
+  row:          string;
+  group:        string;
+  label:        string;
+  description?: string;
+  source:       RowSource;
+  status:       RowStatus;
+  tunable_class: TunableClass;
+  editable:     boolean;
+  supports_enable_toggle?: boolean;
+  /** Where a non-editable row is actually changed, in words. */
+  edit_location?: string;
+  /** In-app route for edit_location, when there is one. */
+  edit_href?:     string;
+  // No row-level `enabled` — the switch reads the field of that name:
+  //   row.fields.find(f => f.key === 'enabled')
+  fields:       ConfigField[];
+}
+
+export interface AlertThresholdsConfig {
+  node:             { role: string };
+  config_path:      string;
+  config_present:   boolean;
+  config_parseable: boolean;
+  restart_required: boolean;
+  rows:             ConfigRow[];
+  alerting:         Record<string, ConfigField>;
+  /** Not returned by the master today. Optional so the section can be absent. */
+  sampler?:         Record<string, ConfigField>;
+}
+
+/** Field value as sent on the wire. */
+export type ThresholdValue = number | boolean | string;
+
+export interface AlertThresholdsWrite {
+  rows?:     Record<string, Record<string, ThresholdValue>>;
+  alerting?: Record<string, ThresholdValue>;
+}
+
+export interface AppliedChange {
+  from: ThresholdValue;
+  to:   ThresholdValue;
+}
+
+export interface AlertThresholdsSaveResponse {
+  applied:          Record<string, Record<string, AppliedChange>>;
+  unchanged:        string[];
+  restart_required: boolean;
+  message:          string;
+}
+
+export interface ThresholdFieldError {
+  row:     string;
+  field:   string;
+  value:   ThresholdValue;
+  reason:  string;
+  /** Written to be shown to a user verbatim. Branch on `reason`, never this. */
+  message: string;
+}
+
+export type SaveThresholdsResult =
+  | { kind: 'ok';         data: AlertThresholdsSaveResponse }
+  /** 422 — per-field validation. Render each message next to its field. */
+  | { kind: 'invalid';    errors: ThresholdFieldError[] }
+  /** 403 — below EDIT on alert_thresholds. */
+  | { kind: 'forbidden';  message: string }
+  /** 400 / 409 / 500 / network. */
+  | { kind: 'error';      status: number; message: string };
+
+export const alertThresholdsApi = {
+  get: () => fetchAPI<AlertThresholdsConfig>('/api/v1/monitoring/config'),
+
+  /**
+   * Send only what changed. Omitted rows and fields are left untouched, and
+   * the write is all-or-nothing — there is no partial save to reconcile.
+   * Refetch afterwards rather than patching local state from the request body.
+   */
+  save: async (payload: AlertThresholdsWrite): Promise<SaveThresholdsResult> => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/api/v1/monitoring/config`, {
+        method:      'PUT',
+        cache:       'no-store',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify(payload),
+      });
+    } catch (e) {
+      return {
+        kind:    'error',
+        status:  0,
+        message: e instanceof Error ? e.message : 'Network error',
+      };
+    }
+
+    const body = await res.json().catch(() => ({} as Record<string, unknown>));
+
+    if (res.ok) return { kind: 'ok', data: body as AlertThresholdsSaveResponse };
+
+    if (res.status === 422 && Array.isArray((body as { errors?: unknown }).errors)) {
+      return { kind: 'invalid', errors: (body as { errors: ThresholdFieldError[] }).errors };
+    }
+
+    if (res.status === 403) {
+      return {
+        kind:    'forbidden',
+        message: (body as { error?: string }).error ?? 'You do not have permission to change thresholds.',
+      };
+    }
+
+    return {
+      kind:    'error',
+      status:  res.status,
+      message:
+        (body as { message?: string; error?: string }).message ??
+        (body as { error?: string }).error ??
+        `HTTP ${res.status}`,
+    };
+  },
+};
