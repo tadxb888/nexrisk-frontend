@@ -561,18 +561,23 @@ export function AlertThresholdsPage() {
           </div>
         ) : (
           <div className="mt-3">
-            <table className="text-xs w-full">
-              <tbody>
-                {row.fields.map(f => (
-                  <tr key={f.key}>
-                    <td className="py-1 pr-4 text-text-muted">{f.label}</td>
-                    <td className="py-1 font-mono text-text-secondary">
-                      {formatValue(f, savedValue(f))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {/* Not a w-full table: auto layout distributes the spare width
+                between two columns, so the value column started in a
+                different place on every card. Same 190px label gutter as the
+                editable rows, so read-only values line up with the inputs
+                above them. */}
+            <div className="space-y-1">
+              {row.fields.map(f => (
+                <div key={f.key} className="flex items-baseline gap-3">
+                  <span className="text-xs text-text-muted shrink-0" style={{ minWidth: 190 }}>
+                    {f.label}
+                  </span>
+                  <span className="text-xs font-mono text-text-secondary">
+                    {formatValue(f, savedValue(f))}
+                  </span>
+                </div>
+              ))}
+            </div>
             {row.edit_location ? (
               <p className="text-xs text-text-muted mt-2">
                 {row.edit_href ? (
