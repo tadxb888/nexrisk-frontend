@@ -1284,8 +1284,22 @@ export function CBookPage() {
           // ── Shared helper: fetch positions and reconcile grid ─────────────────
           // Called after EXECUTION_REPORT — once at 600ms (C++ cache window) and
           // again at 2500ms (TE sandbox external close may take 1-2s to clear).
+          //
+          // Coalesced per (lp, horizon). Previously every fill scheduled its own pair,
+          // so 100 fills/sec meant 200 timers and 200 full position fetches per second,
+          // each followed by a forEachNode diff over the whole grid. A burst would have
+          // saturated the Fastify server and the main thread before the test finished.
+          // Collapsing to one in-flight sync per horizon reduces a 5s/500-order burst
+          // from ~1000 fetches to roughly a dozen. Coverage is preserved: the horizon is
+          // measured from the first uncovered fill, and any fill landing after a sync
+          // fires schedules the next one.
+          const pendingSyncKeys = new Set<string>();
           const syncPositionsAfterFill = (lpSnap: string, delayMs: number) => {
+            const syncKey = `${lpSnap}:${delayMs}`;
+            if (pendingSyncKeys.has(syncKey)) return;
+            pendingSyncKeys.add(syncKey);
             setTimeout(() => {
+              pendingSyncKeys.delete(syncKey);
               if (cancelled) return;
               const instrMap = instrCacheRef.current[lpSnap] ?? {};
               bff<{ success: boolean; data: { positions: FIXPosition[] } }>(`/api/v1/fix/positions/${lpSnap}`)

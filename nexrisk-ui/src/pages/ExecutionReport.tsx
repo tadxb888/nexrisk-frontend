@@ -805,6 +805,18 @@ export function ExecutionReportPage() {
   const retryRef    = useRef(0);
   const mountedRef  = useRef(true);
   const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror of selectedRow.trade_report_id. The WS handlers called setSelectedRow on
+  // every single execution frame; the updater returned `prev` unchanged when nothing
+  // matched, so React bailed out of re-rendering, but each call still queued and was
+  // processed. At ~100 orders/sec across several frames per order that is a few
+  // hundred needless setState calls per second in separate WS callbacks, which React
+  // cannot batch. Reading this ref first makes the no-op case free.
+  const selectedIdRef = useRef<string | null>(null);
+
+  // Keep selectedIdRef in sync with the selected row
+  useEffect(() => {
+    selectedIdRef.current = selectedRow?.trade_report_id ?? null;
+  }, [selectedRow]);
 
   // Keep rowMapRef and clordIdMapRef in sync whenever rows state changes
   useEffect(() => {
@@ -978,8 +990,22 @@ export function ExecutionReportPage() {
           const lp_id   = msg.lp_id as string ?? '';
           const inner   = msg.data as Record<string, unknown> ?? {};
 
+          // Distinguish a NexRisk NOS_SENT notification from a FIX ExecutionReport.
+          // Both carry cl_ord_id, so gating on that alone made EVERY ExecutionReport
+          // build a phantom `pending_<clord>` row. For opens the AE cleared it; for
+          // closes nothing ever did — the close AE carries no cl_ord_id, so the
+          // pending-row cleanup never matched and the row sat at PENDING with a zero
+          // fill price until a manual refresh dropped it.
+          // Only the ER carries exec_type / ord_status. Prefer the explicit
+          // discriminator when C++ sends it (backend brief item 7).
+          const innerType   = inner.type as string | undefined;
+          const hasErFields = inner.exec_type !== undefined || inner.ord_status !== undefined;
+          const isNosSent   = innerType === 'NOS_SENT'
+            || (!hasErFields && !!inner.cl_ord_id && !inner.trade_report_id);
+
           // ── NOS sent outbound ──────────────────────────────────
-          if (inner.cl_ord_id) {
+          if (isNosSent) {
+            if (!inner.cl_ord_id) return;   // no key — cannot build or correlate a row
             const nosRecord: NosRecord = {
               clord_id:  inner.cl_ord_id  as string,
               symbol:    inner.symbol     as string,
@@ -1008,9 +1034,9 @@ export function ExecutionReportPage() {
             }
             // Refresh the detail panel if this row is currently selected —
             // AG Grid mutations don't trigger React re-renders on their own.
-            setSelectedRow((prev) =>
-              prev && prev.trade_report_id === pendingRow.trade_report_id ? pendingRow : prev
-            );
+            if (selectedIdRef.current === pendingRow.trade_report_id) {
+              setSelectedRow(pendingRow);
+            }
 
           // ── AE fill from TE ────────────────────────────────────
           } else if (inner.trade_report_id) {
@@ -1056,12 +1082,11 @@ export function ExecutionReportPage() {
             }
             // Refresh the detail panel if this row — or the pending row it
             // replaced — is currently selected.
-            setSelectedRow((prev) => {
-              if (!prev) return prev;
-              if (prev.trade_report_id === row.trade_report_id) return row;
-              if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
-              return prev;
-            });
+            const selId = selectedIdRef.current;
+            if (selId && (selId === row.trade_report_id
+                || (row.clord_id && selId === `pending_${row.clord_id}`))) {
+              setSelectedRow(row);
+            }
           }
 
         // ── TRADE_CAPTURE_REPORT — TE fill (35=AE) ───────────
@@ -1113,12 +1138,11 @@ export function ExecutionReportPage() {
           }
           // Refresh the detail panel if this row — or the pending row it
           // replaced — is currently selected.
-          setSelectedRow((prev) => {
-            if (!prev) return prev;
-            if (prev.trade_report_id === row.trade_report_id) return row;
-            if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
-            return prev;
-          });
+          const selIdTcr = selectedIdRef.current;
+          if (selIdTcr && (selIdTcr === row.trade_report_id
+              || (row.clord_id && selIdTcr === `pending_${row.clord_id}`))) {
+            setSelectedRow(row);
+          }
         } else if (msg.type === 'SESSION_STATE_CHANGE' || msg.type === 'SESSION_LOGON' || msg.type === 'SESSION_LOGOUT') {
           const lp_id    = msg.lp_id as string | undefined;
           const newState = (msg.session_state ?? msg.state ?? (msg.type === 'SESSION_LOGON' ? 'LOGGED_ON' : 'DISCONNECTED')) as string;
@@ -1223,7 +1247,12 @@ export function ExecutionReportPage() {
   useEffect(() => {
     let lastCount = -1;
     let lastTopId = '';
-    const MAX_GRID_ROWS = 500;  // cap live grid size so AG-Grid teardown stays fast
+    // Cap live grid size so AG-Grid teardown stays fast. Raised from 500: the burst
+    // test fires 100 orders/sec for 5s, so 500 orders arrive inside the window and the
+    // old cap evicted the earlier half of the run before it could be read. Phantom-row
+    // removal (see the EXECUTION_REPORT handler) roughly halves rows per order, so
+    // 2000 leaves comfortable headroom without returning to unbounded growth.
+    const MAX_GRID_ROWS = 2000;
     const sync = () => {
       const map = rowMapRef.current;
       let snapshot = Array.from(map.values());
@@ -1240,7 +1269,17 @@ export function ExecutionReportPage() {
         const drop = snapshot.slice(MAX_GRID_ROWS);
         if (drop.length > 0) {
           try { gridRef.current?.api?.applyTransactionAsync({ remove: drop }); } catch { /* grid not ready */ }
-          for (const r of drop) map.delete(r.trade_report_id);
+          for (const r of drop) {
+            map.delete(r.trade_report_id);
+            // Purge the secondary indexes too. Without this, clordIdMapRef and
+            // pendingHedgeFillsRef retain an entry per evicted row for the lifetime
+            // of the page — unbounded growth over a sustained run, and stale clord_id
+            // entries that resolve hedge.fill events to rows that no longer exist.
+            if (r.clord_id) {
+              clordIdMapRef.current.delete(r.clord_id);
+              pendingHedgeFillsRef.current.delete(r.clord_id);
+            }
+          }
         }
         snapshot = keep;
       }
@@ -1637,14 +1676,22 @@ export function ExecutionReportPage() {
   
 
   const onRowClicked = useCallback((params: { data?: ExecutionReportRow }) => {
-    if (params.data) setSelectedRow(params.data);
+    if (params.data) {
+      // Set the ref eagerly as well as via the effect. The effect only commits after
+      // the next render, so a WS frame for this row arriving in that window would miss
+      // the guard and leave the detail panel stale until the following frame.
+      selectedIdRef.current = params.data.trade_report_id;
+      setSelectedRow(params.data);
+    }
   }, []);
 
   const getContextMenuItems = useCallback(
     (params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
       const rowData = params.node?.data as ExecutionReportRow | undefined;
       return [
-        { name: 'View Order Details', action: () => { if (rowData) setSelectedRow(rowData); } },
+        { name: 'View Order Details', action: () => {
+          if (rowData) { selectedIdRef.current = rowData.trade_report_id; setSelectedRow(rowData); }
+        } },
         'separator',
         'copy',
         'copyWithHeaders',
