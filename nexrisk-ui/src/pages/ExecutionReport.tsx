@@ -900,20 +900,27 @@ export function ExecutionReportPage() {
 
         await Promise.allSettled(lps.map(async (lp) => {
           try {
-            // Retry on ANY failure, not just 503. The C++ read can time out on the
-            // heavy query after a burst leaves a large hedge_records table, and it
-            // surfaces as 400 with "Receive failed: Resource temporarily unavailable"
-            // — which the old 503-only retry ignored, silently seeding zero rows.
-            // Each attempt asks for less, since the failure mode is volume-driven.
-            const limits = [500, 250, 100];
+            // Retry on ANY failure, not just 503 — a 400 from the BFF's error
+            // mapping was previously ignored, silently seeding zero rows.
+            // Each attempt is hard-bounded: if the upstream does not reply, the
+            // BFF blocks until its own receive timeout, and waiting that out three
+            // times leaves the page empty for tens of seconds. Fail fast instead —
+            // the grid fills from the WS regardless.
+            const limits = [500, 200];
             let res: Response | null = null;
             for (let attempt = 0; attempt < limits.length; attempt++) {
               if (cancelled) return;
-              if (attempt > 0) await new Promise(r => setTimeout(r, 2000 * attempt));
+              if (attempt > 0) await new Promise(r => setTimeout(r, 750));
               if (cancelled) return;
+              const ac = new AbortController();
+              const killer = setTimeout(() => ac.abort(), 5000);
               try {
-                res = await fetch(`/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=${limits[attempt]}`);
+                res = await fetch(
+                  `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=${limits[attempt]}`,
+                  { signal: ac.signal },
+                );
               } catch { res = null; }
+              finally { clearTimeout(killer); }
               if (res?.ok) break;
             }
             if (!res?.ok || cancelled) { seedFailed = true; return; }
