@@ -806,11 +806,13 @@ export function ExecutionReportPage() {
   // from a close back to its open: the close carries a different ClOrdID, and the
   // close AE carries no ClOrdID at all.
   //
-  // The open ER and the open AE share tag 37 (order_id), so the ER's position_id is
-  // bridged onto the AE-built row through it. Both arrival orders are handled.
-  const hedgePosMapRef        = useRef<Map<string, string>>(new Map());  // position_id → trade_report_id
-  const orderIdMapRef         = useRef<Map<string, string>>(new Map());  // tag 37    → trade_report_id
-  const openPosByOrderIdRef   = useRef<Map<string, string>>(new Map());  // tag 37    → position_id (ER seen before AE)
+  // The open ER and its AE share cl_ord_id, and clordIdMapRef already tracks
+  // clord_id → trade_report_id on both fill paths. tag 37 is NOT usable here: TE
+  // returns the same OrderID across every fill aggregated into one position (200
+  // hedge orders into one USDCAD position all reported 37=3217791), so keying on
+  // it collapses every order onto a single entry.
+  const hedgePosMapRef        = useRef<Map<string, string>>(new Map());  // position_id → trade_report_id (seed)
+  const hedgePosToClordRef    = useRef<Map<string, string>>(new Map());  // position_id → clord_id (live open ER)
   const pendingCloseStatusRef = useRef<Map<string, 'CLOSING' | 'CLOSED'>>(new Map()); // close seen before its row
   // NOS correlation: symbol|side → most recent NOS within 500ms window
   const nosMapRef   = useRef<Map<string, NosRecord>>(new Map());
@@ -943,7 +945,13 @@ export function ExecutionReportPage() {
   // Apply a close status to the row owning this hedge position_id. If the row isn't
   // known yet the status is parked and replayed once the mapping appears.
   const applyHedgeStatus = useCallback((posId: string, status: 'CLOSING' | 'CLOSED') => {
-    const tradeId = hedgePosMapRef.current.get(posId);
+    // Seed rows are indexed directly; live rows resolve position_id → clord_id →
+    // trade_report_id, since clord_id is the only per-order key on the wire.
+    let tradeId = hedgePosMapRef.current.get(posId);
+    if (!tradeId) {
+      const clordId = hedgePosToClordRef.current.get(posId);
+      if (clordId) tradeId = clordIdMapRef.current.get(clordId);
+    }
     const existing = tradeId ? rowMapRef.current.get(tradeId) : undefined;
     if (!tradeId || !existing) {
       pendingCloseStatusRef.current.set(posId, status);
@@ -959,17 +967,15 @@ export function ExecutionReportPage() {
     if (selectedIdRef.current === tradeId) setSelectedRow(updated);
   }, []);
 
-  // Index a freshly built fill row for close correlation, and replay any close that
-  // arrived before it.
+  // Replay any close that arrived before its fill row existed. pendingCloseStatusRef
+  // is normally empty, so the scan costs nothing on the hot path.
   const indexFillRow = useCallback((row: ExecutionReportRow) => {
-    if (!row.order_id) return;
-    orderIdMapRef.current.set(row.order_id, row.trade_report_id);
-    const posId = openPosByOrderIdRef.current.get(row.order_id);
-    if (!posId) return;
-    openPosByOrderIdRef.current.delete(row.order_id);
-    hedgePosMapRef.current.set(posId, row.trade_report_id);
-    const parked = pendingCloseStatusRef.current.get(posId);
-    if (parked) applyHedgeStatus(posId, parked);
+    if (!row.clord_id || pendingCloseStatusRef.current.size === 0) return;
+    for (const [posId, status] of pendingCloseStatusRef.current) {
+      if (hedgePosToClordRef.current.get(posId) === row.clord_id) {
+        applyHedgeStatus(posId, status);
+      }
+    }
   }, [applyHedgeStatus]);
 
   const connectWs = useCallback(() => {
@@ -1151,7 +1157,7 @@ export function ExecutionReportPage() {
           } else {
             const text      = String(inner.text ?? '');
             const ordStatus = String(inner.ord_status ?? '');
-            const orderId   = inner.order_id != null ? String(inner.order_id) : '';
+            const erClordId = inner.cl_ord_id != null ? String(inner.cl_ord_id) : '';
 
             const closeM = /^NEXRISK_HEDGE_CLOSE:(\d+)/.exec(text);
             if (closeM) {
@@ -1159,18 +1165,13 @@ export function ExecutionReportPage() {
               applyHedgeStatus(closeM[1], ordStatus === '2' ? 'CLOSED' : 'CLOSING');
             } else {
               const openM = /^NEXRISK_HEDGE:(\d+)/.exec(text);
-              if (openM && orderId) {
+              if (openM && erClordId) {
+                // Record the link; the AE for this same clord_id builds the row and
+                // clordIdMapRef resolves it. Order of arrival does not matter.
                 const posId = openM[1];
-                // The open ER and its AE share tag 37. Whichever lands first, the
-                // other completes the position_id → trade_report_id mapping.
-                const tradeId = orderIdMapRef.current.get(orderId);
-                if (tradeId) {
-                  hedgePosMapRef.current.set(posId, tradeId);
-                  const parked = pendingCloseStatusRef.current.get(posId);
-                  if (parked) applyHedgeStatus(posId, parked);
-                } else {
-                  openPosByOrderIdRef.current.set(orderId, posId);
-                }
+                hedgePosToClordRef.current.set(posId, erClordId);
+                const parked = pendingCloseStatusRef.current.get(posId);
+                if (parked) applyHedgeStatus(posId, parked);
               }
             }
           }
@@ -1357,6 +1358,7 @@ export function ExecutionReportPage() {
         if (drop.length > 0) {
           try { gridRef.current?.api?.applyTransactionAsync({ remove: drop }); } catch { /* grid not ready */ }
           const droppedIds = new Set(drop.map((r) => r.trade_report_id));
+          const droppedClords = new Set<string>();
           for (const r of drop) {
             map.delete(r.trade_report_id);
             // Purge the secondary indexes too. Without this, clordIdMapRef and
@@ -1366,13 +1368,17 @@ export function ExecutionReportPage() {
             if (r.clord_id) {
               clordIdMapRef.current.delete(r.clord_id);
               pendingHedgeFillsRef.current.delete(r.clord_id);
+              droppedClords.add(r.clord_id);
             }
-            if (r.order_id) orderIdMapRef.current.delete(r.order_id);
           }
-          // hedgePosMapRef is keyed by position_id, so it needs a reverse sweep.
-          // Eviction is rare (only past the cap) so the scan cost is acceptable.
+          // hedgePosMapRef / hedgePosToClordRef are keyed by position_id, so both
+          // need a reverse sweep. Eviction only happens past the cap, so the scan
+          // cost is acceptable.
           for (const [posId, tradeId] of hedgePosMapRef.current) {
             if (droppedIds.has(tradeId)) hedgePosMapRef.current.delete(posId);
+          }
+          for (const [posId, clordId] of hedgePosToClordRef.current) {
+            if (droppedClords.has(clordId)) hedgePosToClordRef.current.delete(posId);
           }
         }
         snapshot = keep;
