@@ -782,6 +782,7 @@ export function ExecutionReportPage() {
   const [lpStatuses,     setLpStatuses]     = useState<LPStatus[]>([]);
   const [wsStatus,       setWsStatus]       = useState<WsStatus>('connecting');
   const [wsError,        setWsError]        = useState<string | null>(null);
+  const [seedError,      setSeedError]      = useState<string | null>(null);
   const [selectedRow,    setSelectedRow]    = useState<ExecutionReportRow | null>(null);
   const [copied,         setCopied]         = useState(false);
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
@@ -895,17 +896,27 @@ export function ExecutionReportPage() {
 
         // 2. For each LP fetch correlated fills (AE + NOS joined in DB)
         const seedRows: ExecutionReportRow[] = [];
+        let seedFailed = false;
 
         await Promise.allSettled(lps.map(async (lp) => {
           try {
-            const url = `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=500`;
-            let res = await fetch(url);
-            if (res.status === 503) {
-              await new Promise(r => setTimeout(r, 3000));
+            // Retry on ANY failure, not just 503. The C++ read can time out on the
+            // heavy query after a burst leaves a large hedge_records table, and it
+            // surfaces as 400 with "Receive failed: Resource temporarily unavailable"
+            // — which the old 503-only retry ignored, silently seeding zero rows.
+            // Each attempt asks for less, since the failure mode is volume-driven.
+            const limits = [500, 250, 100];
+            let res: Response | null = null;
+            for (let attempt = 0; attempt < limits.length; attempt++) {
               if (cancelled) return;
-              res = await fetch(url);
+              if (attempt > 0) await new Promise(r => setTimeout(r, 2000 * attempt));
+              if (cancelled) return;
+              try {
+                res = await fetch(`/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=${limits[attempt]}`);
+              } catch { res = null; }
+              if (res?.ok) break;
             }
-            if (!res.ok || cancelled) return;
+            if (!res?.ok || cancelled) { seedFailed = true; return; }
             const data = await res.json();
             const rows: HedgeExecutionRow[] = data?.data ?? [];
             for (const h of rows) {
@@ -918,8 +929,14 @@ export function ExecutionReportPage() {
                 hedgePosMapRef.current.set(String(h.position_id), seeded.trade_report_id);
               }
             }
-          } catch { /* per-LP non-fatal */ }
+          } catch { seedFailed = true; }
         }));
+
+        if (!cancelled && seedRows.length === 0 && seedFailed) {
+          // Do not leave the page showing "Waiting for orders" — that reads as
+          // "no orders yet" when in fact history could not be loaded.
+          setSeedError('Could not load order history from the FIX Bridge. Live orders will still appear as they arrive.');
+        }
 
         if (!cancelled && seedRows.length > 0) {
           seedRows.sort((a, b) =>
@@ -1991,9 +2008,9 @@ export function ExecutionReportPage() {
             {/* Live but no orders yet */}
             {wsStatus === 'live' && rows.length === 0 && (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
-                <p className="text-[#999] text-sm">Waiting for orders</p>
+                <p className="text-[#999] text-sm">{seedError ? 'Order history unavailable' : 'Waiting for orders'}</p>
                 <p className="text-[#666] text-xs">
-                  Orders will appear here as the FIX Bridge submits them to an LP.
+                  {seedError ?? 'Orders will appear here as the FIX Bridge submits them to an LP.'}
                 </p>
               </div>
             )}
