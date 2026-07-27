@@ -782,7 +782,6 @@ export function ExecutionReportPage() {
   const [lpStatuses,     setLpStatuses]     = useState<LPStatus[]>([]);
   const [wsStatus,       setWsStatus]       = useState<WsStatus>('connecting');
   const [wsError,        setWsError]        = useState<string | null>(null);
-  const [seedError,      setSeedError]      = useState<string | null>(null);
   const [selectedRow,    setSelectedRow]    = useState<ExecutionReportRow | null>(null);
   const [copied,         setCopied]         = useState(false);
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
@@ -800,21 +799,6 @@ export function ExecutionReportPage() {
   // Pending hedge.fill payloads that arrived before the fill row was added.
   // Keyed by clord_id — applied when the matching fill row is stored.
   const pendingHedgeFillsRef = useRef<Map<string, { rule_id: number; rule_name: string | null }>>(new Map());
-  // ── Hedge close correlation ────────────────────────────────────────────────
-  // The execution event stamps `text` with NEXRISK_HEDGE:<position_id> on the open
-  // and NEXRISK_HEDGE_CLOSE:<position_id> on the close, where <position_id> is
-  // hedge_records.position_id (confirmed by C++). This is the only reliable link
-  // from a close back to its open: the close carries a different ClOrdID, and the
-  // close AE carries no ClOrdID at all.
-  //
-  // The open ER and its AE share cl_ord_id, and clordIdMapRef already tracks
-  // clord_id → trade_report_id on both fill paths. tag 37 is NOT usable here: TE
-  // returns the same OrderID across every fill aggregated into one position (200
-  // hedge orders into one USDCAD position all reported 37=3217791), so keying on
-  // it collapses every order onto a single entry.
-  const hedgePosMapRef        = useRef<Map<string, string>>(new Map());  // position_id → trade_report_id (seed)
-  const hedgePosToClordRef    = useRef<Map<string, string>>(new Map());  // position_id → clord_id (live open ER)
-  const pendingCloseStatusRef = useRef<Map<string, 'CLOSING' | 'CLOSED'>>(new Map()); // close seen before its row
   // NOS correlation: symbol|side → most recent NOS within 500ms window
   const nosMapRef   = useRef<Map<string, NosRecord>>(new Map());
   const wsRef       = useRef<WebSocket | null>(null);
@@ -896,54 +880,24 @@ export function ExecutionReportPage() {
 
         // 2. For each LP fetch correlated fills (AE + NOS joined in DB)
         const seedRows: ExecutionReportRow[] = [];
-        let seedFailed = false;
 
         await Promise.allSettled(lps.map(async (lp) => {
           try {
-            // Retry on ANY failure, not just 503 — a 400 from the BFF's error
-            // mapping was previously ignored, silently seeding zero rows.
-            // Each attempt is hard-bounded: if the upstream does not reply, the
-            // BFF blocks until its own receive timeout, and waiting that out three
-            // times leaves the page empty for tens of seconds. Fail fast instead —
-            // the grid fills from the WS regardless.
-            const limits = [500, 200];
-            let res: Response | null = null;
-            for (let attempt = 0; attempt < limits.length; attempt++) {
+            const url = `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=500`;
+            let res = await fetch(url);
+            if (res.status === 503) {
+              await new Promise(r => setTimeout(r, 3000));
               if (cancelled) return;
-              if (attempt > 0) await new Promise(r => setTimeout(r, 750));
-              if (cancelled) return;
-              const ac = new AbortController();
-              const killer = setTimeout(() => ac.abort(), 5000);
-              try {
-                res = await fetch(
-                  `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=${limits[attempt]}`,
-                  { signal: ac.signal },
-                );
-              } catch { res = null; }
-              finally { clearTimeout(killer); }
-              if (res?.ok) break;
+              res = await fetch(url);
             }
-            if (!res?.ok || cancelled) { seedFailed = true; return; }
+            if (!res.ok || cancelled) return;
             const data = await res.json();
             const rows: HedgeExecutionRow[] = data?.data ?? [];
             for (const h of rows) {
-              const seeded = buildRowFromHedge(h, lp.lp_id);
-              seedRows.push(seeded);
-              // Index by hedge_records.position_id — the same value the execution
-              // event carries in its NEXRISK text. Without this a close arriving
-              // after a page reload has no row to correlate to.
-              if (h.position_id != null) {
-                hedgePosMapRef.current.set(String(h.position_id), seeded.trade_report_id);
-              }
+              seedRows.push(buildRowFromHedge(h, lp.lp_id));
             }
-          } catch { seedFailed = true; }
+          } catch { /* per-LP non-fatal */ }
         }));
-
-        if (!cancelled && seedRows.length === 0 && seedFailed) {
-          // Do not leave the page showing "Waiting for orders" — that reads as
-          // "no orders yet" when in fact history could not be loaded.
-          setSeedError('Could not load order history from the FIX Bridge. Live orders will still appear as they arrive.');
-        }
 
         if (!cancelled && seedRows.length > 0) {
           seedRows.sort((a, b) =>
@@ -966,42 +920,6 @@ export function ExecutionReportPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── WebSocket ───────────────────────────────────────────────
-  // Apply a close status to the row owning this hedge position_id. If the row isn't
-  // known yet the status is parked and replayed once the mapping appears.
-  const applyHedgeStatus = useCallback((posId: string, status: 'CLOSING' | 'CLOSED') => {
-    // Seed rows are indexed directly; live rows resolve position_id → clord_id →
-    // trade_report_id, since clord_id is the only per-order key on the wire.
-    let tradeId = hedgePosMapRef.current.get(posId);
-    if (!tradeId) {
-      const clordId = hedgePosToClordRef.current.get(posId);
-      if (clordId) tradeId = clordIdMapRef.current.get(clordId);
-    }
-    const existing = tradeId ? rowMapRef.current.get(tradeId) : undefined;
-    if (!tradeId || !existing) {
-      pendingCloseStatusRef.current.set(posId, status);
-      return;
-    }
-    pendingCloseStatusRef.current.delete(posId);
-    // Never walk backwards. The close sequence is 150=A → 150=P → 150=2 and frames
-    // can be delivered out of order; a late CLOSING must not undo a CLOSED.
-    if (existing.te_status === 'CLOSED' || existing.te_status === status) return;
-    const updated: ExecutionReportRow = { ...existing, te_status: status };
-    rowMapRef.current.set(tradeId, updated);
-    gridRef.current?.api?.applyTransactionAsync({ update: [updated] });
-    if (selectedIdRef.current === tradeId) setSelectedRow(updated);
-  }, []);
-
-  // Replay any close that arrived before its fill row existed. pendingCloseStatusRef
-  // is normally empty, so the scan costs nothing on the hot path.
-  const indexFillRow = useCallback((row: ExecutionReportRow) => {
-    if (!row.clord_id || pendingCloseStatusRef.current.size === 0) return;
-    for (const [posId, status] of pendingCloseStatusRef.current) {
-      if (hedgePosToClordRef.current.get(posId) === row.clord_id) {
-        applyHedgeStatus(posId, status);
-      }
-    }
-  }, [applyHedgeStatus]);
-
   const connectWs = useCallback(() => {
     if (!mountedRef.current) return;
     setWsStatus('connecting');
@@ -1078,16 +996,12 @@ export function ExecutionReportPage() {
           // closes nothing ever did — the close AE carries no cl_ord_id, so the
           // pending-row cleanup never matched and the row sat at PENDING with a zero
           // fill price until a manual refresh dropped it.
-          //
-          // TradingSession.cpp:1346 stamps type="NOS_SENT" on the NOS event, so when
-          // the discriminator is present it is authoritative. The field-presence
-          // inference below is retained only for legacy frames that predate it —
-          // ExecutionReports always carry exec_type and ord_status, NOS events do not.
+          // Only the ER carries exec_type / ord_status. Prefer the explicit
+          // discriminator when C++ sends it (backend brief item 7).
           const innerType   = inner.type as string | undefined;
           const hasErFields = inner.exec_type !== undefined || inner.ord_status !== undefined;
-          const isNosSent   = innerType !== undefined
-            ? innerType === 'NOS_SENT'
-            : (!hasErFields && !!inner.cl_ord_id && !inner.trade_report_id);
+          const isNosSent   = innerType === 'NOS_SENT'
+            || (!hasErFields && !!inner.cl_ord_id && !inner.trade_report_id);
 
           // ── NOS sent outbound ──────────────────────────────────
           if (isNosSent) {
@@ -1161,7 +1075,6 @@ export function ExecutionReportPage() {
             }
 
             rowMapRef.current.set(row.trade_report_id, row);
-            indexFillRow(row);
             if (existing) {
               gridRef.current?.api?.applyTransactionAsync({ update: [row] });
             } else {
@@ -1173,30 +1086,6 @@ export function ExecutionReportPage() {
             if (selId && (selId === row.trade_report_id
                 || (row.clord_id && selId === `pending_${row.clord_id}`))) {
               setSelectedRow(row);
-            }
-
-          // ── FIX ExecutionReport ────────────────────────────────
-          // Builds no row of its own — the AE does that. It carries the NEXRISK text
-          // that links a close back to its open, which nothing else on the wire does.
-          } else {
-            const text      = String(inner.text ?? '');
-            const ordStatus = String(inner.ord_status ?? '');
-            const erClordId = inner.cl_ord_id != null ? String(inner.cl_ord_id) : '';
-
-            const closeM = /^NEXRISK_HEDGE_CLOSE:(\d+)/.exec(text);
-            if (closeM) {
-              // Sequence is 150=A → 150=P → 150=2; only 39=2 is terminal.
-              applyHedgeStatus(closeM[1], ordStatus === '2' ? 'CLOSED' : 'CLOSING');
-            } else {
-              const openM = /^NEXRISK_HEDGE:(\d+)/.exec(text);
-              if (openM && erClordId) {
-                // Record the link; the AE for this same clord_id builds the row and
-                // clordIdMapRef resolves it. Order of arrival does not matter.
-                const posId = openM[1];
-                hedgePosToClordRef.current.set(posId, erClordId);
-                const parked = pendingCloseStatusRef.current.get(posId);
-                if (parked) applyHedgeStatus(posId, parked);
-              }
             }
           }
 
@@ -1242,7 +1131,6 @@ export function ExecutionReportPage() {
           }
 
           rowMapRef.current.set(row.trade_report_id, row);
-          indexFillRow(row);
           if (existing) {
             gridRef.current?.api?.applyTransactionAsync({ update: [row] });
           } else {
@@ -1381,8 +1269,6 @@ export function ExecutionReportPage() {
         const drop = snapshot.slice(MAX_GRID_ROWS);
         if (drop.length > 0) {
           try { gridRef.current?.api?.applyTransactionAsync({ remove: drop }); } catch { /* grid not ready */ }
-          const droppedIds = new Set(drop.map((r) => r.trade_report_id));
-          const droppedClords = new Set<string>();
           for (const r of drop) {
             map.delete(r.trade_report_id);
             // Purge the secondary indexes too. Without this, clordIdMapRef and
@@ -1392,17 +1278,7 @@ export function ExecutionReportPage() {
             if (r.clord_id) {
               clordIdMapRef.current.delete(r.clord_id);
               pendingHedgeFillsRef.current.delete(r.clord_id);
-              droppedClords.add(r.clord_id);
             }
-          }
-          // hedgePosMapRef / hedgePosToClordRef are keyed by position_id, so both
-          // need a reverse sweep. Eviction only happens past the cap, so the scan
-          // cost is acceptable.
-          for (const [posId, tradeId] of hedgePosMapRef.current) {
-            if (droppedIds.has(tradeId)) hedgePosMapRef.current.delete(posId);
-          }
-          for (const [posId, clordId] of hedgePosToClordRef.current) {
-            if (droppedClords.has(clordId)) hedgePosToClordRef.current.delete(posId);
           }
         }
         snapshot = keep;
@@ -2015,9 +1891,9 @@ export function ExecutionReportPage() {
             {/* Live but no orders yet */}
             {wsStatus === 'live' && rows.length === 0 && (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
-                <p className="text-[#999] text-sm">{seedError ? 'Order history unavailable' : 'Waiting for orders'}</p>
+                <p className="text-[#999] text-sm">Waiting for orders</p>
                 <p className="text-[#666] text-xs">
-                  {seedError ?? 'Orders will appear here as the FIX Bridge submits them to an LP.'}
+                  Orders will appear here as the FIX Bridge submits them to an LP.
                 </p>
               </div>
             )}
