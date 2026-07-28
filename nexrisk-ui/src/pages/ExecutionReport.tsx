@@ -41,6 +41,10 @@ const gridTheme = themeQuartz.withParams({
 // arrived before C++ started stamping `submitted_by`. Orders placed through
 // the DOM Trader / hedge engine carry submitted_by on the NOS_SENT event.
 const UNKNOWN_SUBMITTER = '—';
+
+// Live grid row cap. The seed pages up to this and the 3s sync evicts past it,
+// so both ends of the pipeline agree on one number instead of drifting apart.
+const SEED_ROW_CAP = 2000;
 const WS_MAX_RETRIES = 8;
 
 // ── Icons ──────────────────────────────────────────────────────
@@ -324,6 +328,58 @@ function buildRowFromAE(
 // hedge_records is the order-lifecycle source of truth: it includes orders TE
 // never confirmed (FAILED), rejected, errored, or b-booked — states the AE-only
 // path could not represent. status is already mapped server-side.
+// Map a /api/v1/hedge/records entry onto the HedgeExecutionRow shape that
+// buildRowFromHedge expects. The two endpoints read the same table but use
+// different field names, and hedge/records returns ISO timestamps rather than ms.
+// Fields hedge/records does not carry (execution_source, submitted_by, account,
+// route, security_*) fall back to empty — the WS fills them for live rows.
+const asStr = (v: unknown): string => (v == null ? '' : String(v));
+const isoToMs = (v: unknown): number => {
+  if (v == null) return 0;
+  const t = Date.parse(String(v));
+  return Number.isNaN(t) ? 0 : t;
+};
+
+function hedgeRecordToExecutionRow(r: Record<string, unknown>): HedgeExecutionRow {
+  const state = asStr(r.hedge_state);
+  return {
+    record_id:         Number(r.record_id ?? 0),
+    clord_id:          asStr(r.clord_id),
+    symbol:            asStr(r.mt5_symbol),
+    direction:         (r.direction === 'LONG' || r.direction === 'SHORT') ? r.direction : '',
+    status:            state,
+    hedge_state:       state,
+    hedge_volume_lp:   asStr(r.hedge_volume_lp),
+    hedge_volume_mt5:  asStr(r.hedge_volume_mt5),
+    lp_fill_volume_lp: asStr(r.lp_fill_volume_lp),
+    lp_fill_volume_mt5: asStr(r.lp_fill_volume_mt5),
+    client_fill_price: asStr(r.client_fill_price),
+    lp_fill_price:     asStr(r.lp_hedge_fill_price_lp ?? r.lp_fill_price),
+    raw_feed_price:    asStr(r.raw_feed_price),
+    net_revenue_pips:  asStr(r.net_revenue_pips),
+    net_revenue_usd:   asStr(r.net_revenue_usd),
+    lp_position_id:    asStr(r.lp_position_id),
+    position_id:       Number(r.position_id ?? 0),
+    login_id:          Number(r.login_id ?? 0),
+    feed_lp_id:        asStr(r.feed_lp_id),
+    hedging_lp_id:     asStr(r.hedging_lp_id),
+    rule_name:         asStr(r.rule_name),
+    rule_id:           r.rule_id == null ? null : Number(r.rule_id),
+    escalation_reason: asStr(r.escalation_reason),
+    rejection_code:    asStr(r.rejection_code),
+    execution_source:  asStr(r.execution_source),
+    submitted_by:      r.submitted_by == null ? null : String(r.submitted_by),
+    account:           asStr(r.account),
+    route:             asStr(r.route),
+    security_exchange: asStr(r.security_exchange),
+    security_id:       asStr(r.security_id),
+    dispatched_ms:     isoToMs(r.dispatched_at),
+    confirmed_ms:      isoToMs(r.confirmed_at),
+    escalated_ms:      isoToMs(r.escalated_at),
+    closed_ms:         isoToMs(r.closed_at),
+  };
+}
+
 function buildRowFromHedge(
   h: HedgeExecutionRow,
   lp_id: string
@@ -782,6 +838,7 @@ export function ExecutionReportPage() {
   const [lpStatuses,     setLpStatuses]     = useState<LPStatus[]>([]);
   const [wsStatus,       setWsStatus]       = useState<WsStatus>('connecting');
   const [wsError,        setWsError]        = useState<string | null>(null);
+  const [seedError,      setSeedError]      = useState<string | null>(null);
   const [selectedRow,    setSelectedRow]    = useState<ExecutionReportRow | null>(null);
   const [copied,         setCopied]         = useState(false);
   const [chartsCollapsed, setChartsCollapsed] = useState(false);
@@ -878,26 +935,56 @@ export function ExecutionReportPage() {
           if (lps.length === 1) setSelectedLp(lps[0].lp_id);
         }
 
-        // 2. For each LP fetch correlated fills (AE + NOS joined in DB)
+        // 2. Seed history from /api/v1/hedge/records, paged.
+        //
+        // The previous source, /api/v1/fix/lp/{lp}/hedge-executions, has no route in
+        // the C++ endpoint layer (the BFF proxies it verbatim at fix-bridge.ts:748).
+        // Nothing replies, the BFF's receive times out, and it surfaces as a 400 —
+        // so every refresh emptied the page.
+        //
+        // hedge/records reads the same table and is known good: it already backs the
+        // strategy-name map refreshed every 30s on this page. It is not LP-scoped, so
+        // each record carries its own hedging_lp_id.
+        //
+        // Single page for now — 200 most recent records. Pagination is written and
+        // ready (page 1 returns `total`, remaining pages fetched in parallel up to
+        // SEED_ROW_CAP) but deliberately held back so the burst test runs against
+        // the smallest possible change.
+        const PAGE_SIZE = 200;
         const seedRows: ExecutionReportRow[] = [];
+        let seedFailed = false;
 
-        await Promise.allSettled(lps.map(async (lp) => {
+        try {
+          const ac = new AbortController();
+          const killer = setTimeout(() => ac.abort(), 8000);
+          let res: Response | null = null;
           try {
-            const url = `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=500`;
-            let res = await fetch(url);
-            if (res.status === 503) {
-              await new Promise(r => setTimeout(r, 3000));
-              if (cancelled) return;
-              res = await fetch(url);
+            res = await fetch(
+              `/api/v1/hedge/records?page=1&page_size=${PAGE_SIZE}`,
+              { signal: ac.signal },
+            );
+          } catch { res = null; }
+          finally { clearTimeout(killer); }
+
+          if (!res?.ok) {
+            seedFailed = true;
+          } else if (!cancelled) {
+            const json = await res.json();
+            const recs = (json?.data ?? []) as Record<string, unknown>[];
+            for (const r of recs) {
+              seedRows.push(buildRowFromHedge(
+                hedgeRecordToExecutionRow(r),
+                String(r.hedging_lp_id ?? ''),
+              ));
             }
-            if (!res.ok || cancelled) return;
-            const data = await res.json();
-            const rows: HedgeExecutionRow[] = data?.data ?? [];
-            for (const h of rows) {
-              seedRows.push(buildRowFromHedge(h, lp.lp_id));
-            }
-          } catch { /* per-LP non-fatal */ }
-        }));
+          }
+        } catch { seedFailed = true; }
+
+        if (!cancelled && seedRows.length === 0 && seedFailed) {
+          // Do not leave the page showing "Waiting for orders" — that reads as
+          // "no orders yet" when in fact history could not be loaded.
+          setSeedError('Could not load order history. Live orders will still appear as they arrive.');
+        }
 
         if (!cancelled && seedRows.length > 0) {
           seedRows.sort((a, b) =>
@@ -1252,7 +1339,7 @@ export function ExecutionReportPage() {
     // old cap evicted the earlier half of the run before it could be read. Phantom-row
     // removal (see the EXECUTION_REPORT handler) roughly halves rows per order, so
     // 2000 leaves comfortable headroom without returning to unbounded growth.
-    const MAX_GRID_ROWS = 2000;
+    const MAX_GRID_ROWS = SEED_ROW_CAP;
     const sync = () => {
       const map = rowMapRef.current;
       let snapshot = Array.from(map.values());
@@ -1662,13 +1749,34 @@ export function ExecutionReportPage() {
     },
   }), []);
 
-  const onGridReady = useCallback((_ev: GridReadyEvent) => {
-    setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
+  // AG Grid sizes columns to rendered content, so running this against an empty
+  // grid collapses every column to its minimum — which is what happened whenever
+  // the history seed returned nothing. Only size when there are rows, and mark it
+  // done so the WS-driven re-size below fires exactly once.
+  const autoSizedRef = useRef(false);
+  const autoSizeIfRows = useCallback(() => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    if (api.getDisplayedRowCount() === 0) return;
+    api.autoSizeAllColumns();
+    autoSizedRef.current = true;
   }, []);
 
+  const onGridReady = useCallback((_ev: GridReadyEvent) => {
+    setTimeout(autoSizeIfRows, 0);
+  }, [autoSizeIfRows]);
+
   const onFirstDataRendered = useCallback(() => {
-    gridRef.current?.api?.autoSizeAllColumns();
-  }, []);
+    autoSizeIfRows();
+  }, [autoSizeIfRows]);
+
+  // Rows usually arrive by WS after the grid is already up, which is after both
+  // callbacks above have run. Size once on the first batch that lands.
+  useEffect(() => {
+    if (autoSizedRef.current || rows.length === 0) return;
+    const t = setTimeout(autoSizeIfRows, 150);
+    return () => clearTimeout(t);
+  }, [rows.length, autoSizeIfRows]);
 
   // Re-size columns whenever filteredRows changes — covers initial load via
   // applyTransaction (fires after onFirstDataRendered), LP filter switches,
@@ -1891,9 +1999,9 @@ export function ExecutionReportPage() {
             {/* Live but no orders yet */}
             {wsStatus === 'live' && rows.length === 0 && (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
-                <p className="text-[#999] text-sm">Waiting for orders</p>
+                <p className="text-[#999] text-sm">{seedError ? 'Order history unavailable' : 'Waiting for orders'}</p>
                 <p className="text-[#666] text-xs">
-                  Orders will appear here as the FIX Bridge submits them to an LP.
+                  {seedError ?? 'Orders will appear here as the FIX Bridge submits them to an LP.'}
                 </p>
               </div>
             )}
