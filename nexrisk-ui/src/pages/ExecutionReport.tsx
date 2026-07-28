@@ -1324,9 +1324,16 @@ export function ExecutionReportPage() {
   // Ground truth for strategy names AND for order state. Keyed by clord_id.
   // Enriches seed and live rows, and reconciles rows the WS could not resolve.
   useEffect(() => {
+    // Page fully on mount, then poll only the most recent page. Reconciliation and
+    // enrichment target recent orders, and a full paged sweep every 30s would mean
+    // up to ten requests per interval against a table that is already being written
+    // to at 100 orders/sec.
+    let firstLoad = true;
+
     const loadHedgeRecords = async () => {
       try {
-        const records = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
+        const records = await fetchHedgeRecordsPaged(firstLoad ? SEED_ROW_CAP : HEDGE_PAGE_SIZE);
+        firstLoad = false;
         if (!records) return;
 
         const map = new Map<string, { rule_id: number; rule_name: string | null }>();
