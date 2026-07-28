@@ -2,11 +2,33 @@
 // Liquidity Providers — Multi-LP Management
 // CRUD + Credentials + Test + Start/Stop + Health + Detail View
 // Providers: TraderEvolution · LMAX · CMC (pending)
+//
+// Every panel on this page reads from the server. There is no local
+// substitute for stored configuration: the config form saves through
+// PUT /api/v1/fix/admin/lp/{lp_id}, then refetches and verifies that the
+// server actually stored what was sent. Tabs whose backing endpoints are
+// not wired yet say so rather than showing sample data.
 // ============================================
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { clsx } from 'clsx';
 import { useAuth } from '@/stores/AuthContext';
+import {
+  lpAdminApi,
+  lpOpsApi,
+  type LpConfig,
+  type LpListRow,
+  type LpHealthSummaryRow,
+  type LpHealthDetail,
+  type LpTestResult,
+  type LpTestSession,
+  type LpUpdateBody,
+  type LpSessionConfig,
+  type LpProviderType,
+  type LpState,
+  type LpSessionState,
+  type LpHealthStatus,
+} from '@/services/api';
 
 // ============================================================
 // ICONS — SVG only, no emojis
@@ -31,8 +53,8 @@ const IcoX = ({ size = 13 }: { size?: number }) => (
     <path d="m13.414,12l5.293-5.293c.391-.391.391-1.023,0-1.414s-1.023-.391-1.414,0l-5.293,5.293-5.293-5.293c-.391-.391-1.023-.391-1.414,0s-.391,1.023,0,1.414l5.293,5.293-5.293,5.293c-.391.391-.391,1.023,0,1.414.195.195.451.293.707.293s.512-.098.707-.293l5.293-5.293,5.293,5.293c.195.195.451.293.707.293s.512-.098.707-.293c.391-.391.391-1.023,0-1.414l-5.293-5.293Z"/>
   </svg>
 );
-const IcoWarning = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">
+const IcoWarning = ({ size = 13 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width={size} height={size}>
     <path d="m23.119,20.998l-9.49-19.071c-.573-1.151-1.686-1.927-2.629-1.927s-2.056.776-2.629,1.927L-.001,20.998c-.543,1.09-.521,2.327.058,3.399.579,1.072,1.598,1.656,2.571,1.603l18.862-.002c.973.053,1.992-.531,2.571-1.603.579-1.072.601-2.309.058-3.397Zm-11.119.002c-.828,0-1.5-.671-1.5-1.5s.672-1.5,1.5-1.5,1.5.671,1.5,1.5-.672,1.5-1.5,1.5Zm1-5c0,.553-.447,1-1,1s-1-.447-1-1v-8c0-.553.447-1,1-1s1,.447,1,1v8Z"/>
   </svg>
 );
@@ -83,319 +105,104 @@ const IcoSignal = () => (
 );
 
 // ============================================================
-// TYPES
+// LOCAL TYPES
 // ============================================================
-type ProviderType = 'traderevolution' | 'lmax' | 'cmc';
-type LPState = 'DISCONNECTED' | 'STOPPED' | 'CONNECTING' | 'CONNECTED' | 'DEGRADED' | 'QUARANTINED' | 'SESSION_ERROR';
-type SessionState = 'DISCONNECTED' | 'CONNECTING' | 'LOGGED_ON' | 'RECONNECTING' | 'SESSION_ERROR';
-type HealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'UNKNOWN';
-type DetailTab = 'overview' | 'instruments' | 'positions' | 'orders' | 'routes' | 'config' | 'audit';
+type DetailTab = 'overview' | 'config' | 'instruments' | 'positions' | 'orders' | 'routes' | 'audit';
 
-interface SessionConfig {
-  host: string;
-  port: number;
-  sender_comp_id: string;
-  target_comp_id: string;
-  fix_version?: string;
-  heartbeat_interval?: number;
-  reconnect_interval?: number;
-  ssl?: boolean;
-  state?: SessionState;
+/** Flat mirror of the editable surface of LpConfig. Numeric fields are held as
+ *  strings so a half-typed port does not become NaN mid-keystroke. */
+interface ConfigForm {
+  lp_name:      string;
+  environment:  string;
+  enabled:      boolean;
+  auto_connect: boolean;
+  notes:        string;
+
+  t_host: string; t_port: string; t_sender: string; t_target: string;
+  t_fix:  string; t_hb:   string;
+
+  md_present: boolean;
+  m_host: string; m_port: string; m_sender: string; m_target: string;
+  m_fix:  string; m_hb:   string; m_depth:  string;
+
+  r_enabled:  boolean;
+  r_interval: string;
+  r_max:      string;
+
+  /** provider_settings, primitives only, stringified for editing. */
+  ps: Record<string, string>;
 }
 
-interface TradingConfig {
-  account: string;
-  security_exchange?: string;
-  default_tif?: string;
-  md_depth?: number;
-}
-
-interface LPConfig {
-  lp_id: string;
-  lp_name: string;
-  provider_type: ProviderType;
-  enabled: boolean;
-  state: LPState;
-  trading_session: SessionConfig & { state?: SessionState };
-  md_session: (SessionConfig & { state?: SessionState }) | null;
-  trading_config: TradingConfig;
-  credentials_set: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-interface LPHealth {
-  lp_id: string;
-  overall_health: HealthStatus;
-  trading_session: {
-    state: SessionState;
-    last_heartbeat_ts: number;
-    heartbeat_interval: number;
-    latency_ms: number;
-    messages_sent: number;
-    messages_received: number;
-  };
-  md_session?: {
-    state: SessionState;
-    subscriptions_active: number;
-    updates_per_second: number;
-    last_price_update_ts?: number;
-  };
-  instruments_loaded: number;
-  open_positions: number;
-  active_orders: number;
-  uptime_seconds: number;
-  warnings: Array<{ code: string; message: string }>;
-  checked_at: string;
-}
-
-interface TestResult {
-  lp_id: string;
-  test_result: 'PASS' | 'FAIL';
-  trading_session: { connected: boolean; logon_time_ms?: number; error?: string; server_version?: string };
-  md_session?: { connected: boolean; logon_time_ms?: number; error?: string; server_version?: string };
-  tested_at: string;
-}
-
-interface AuditEntry {
-  timestamp: string;
-  action: string;
-  user: string;
-  changes: Record<string, { old?: unknown; new?: unknown }>;
-}
-
-interface Instrument {
-  symbol: string;
-  canonical_symbol?: string;
-  security_id?: string;
-  security_type?: string;
-  trade_route?: string;
-  description?: string;
-}
-
-interface LPPosition {
-  position_id: string;
-  symbol: string;
-  side: string;
-  long_qty: number;
-  short_qty: number;
-  avg_price: number;
-  unrealized_pnl?: number;
-}
-
-interface LPOrder {
-  clord_id: string;
-  symbol: string;
-  side: string;
-  order_type: string;
-  quantity: number;
-  price?: number;
-  status: string;
-  filled_qty?: number;
-  avg_fill_price?: number;
-  created_at?: string;
-}
-
-// ============================================================
-// LP FORM STATE
-// ============================================================
-interface LPFormData {
-  lp_id: string;
-  lp_name: string;
-  provider_type: ProviderType;
-  enabled: boolean;
-  // Trading session
-  trading_host: string;
-  trading_port: string;
-  trading_sender: string;
-  trading_target: string;
-  fix_version: string;
-  heartbeat_interval: string;
-  reconnect_interval: string;
-  trading_ssl: boolean;
-  // MD session (TE only)
-  md_host: string;
-  md_port: string;
-  md_sender: string;
-  md_target: string;
-  // Trading config
-  account: string;
-  security_exchange: string;
-  default_tif: string;
-  md_depth: string;
+/** Fields the operator changed, as dotted paths, paired with the value that
+ *  should be on the server once the write lands. Drives the post-save audit. */
+interface IntendedChange {
+  path:     string;
+  expected: unknown;
 }
 
 // ============================================================
 // CONSTANTS
 // ============================================================
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8090';
-
-const PROVIDER_LABELS: Record<ProviderType, string> = {
+const PROVIDER_LABELS: Record<LpProviderType, string> = {
   traderevolution: 'TraderEvolution',
   lmax: 'LMAX',
   cmc: 'CMC Markets',
 };
 
-const PROVIDER_BORDER: Record<ProviderType, string> = {
-  traderevolution: '#4a90d9',
-  lmax: '#d4a745',
-  cmc: '#b060c0',
+const PROVIDER_BADGE: Record<LpProviderType, [string, string, string]> = {
+  traderevolution: ['#a5c8f0', '#0f2035', '#1e4270'],
+  lmax:            ['#f0d0a5', '#2a1f0f', '#5a4020'],
+  cmc:             ['#d4a5e0', '#1e1530', '#3d2860'],
 };
 
-const STATE_CFG: Record<LPState, { color: string; bg: string; border: string; label: string }> = {
+const STATE_CFG: Record<LpState, { color: string; bg: string; border: string; label: string }> = {
   DISCONNECTED:  { color: '#a0a0b0', bg: '#2a2a2c', border: '#484848', label: 'Disconnected' },
   STOPPED:       { color: '#a0a0b0', bg: '#2a2a2c', border: '#484848', label: 'Stopped' },
-  CONNECTING:    { color: '#e0d066', bg: '#2a2816', border: '#6a6530', label: 'Connecting...' },
+  CONNECTING:    { color: '#e0d066', bg: '#2a2816', border: '#6a6530', label: 'Connecting' },
   CONNECTED:     { color: '#66e07a', bg: '#162a1c', border: '#2f6a3d', label: 'Connected' },
   DEGRADED:      { color: '#e09a55', bg: '#2a2016', border: '#6a4a2f', label: 'Degraded' },
   QUARANTINED:   { color: '#ff5c5c', bg: '#2c1417', border: '#7a2f36', label: 'Quarantined' },
   SESSION_ERROR: { color: '#ff5c5c', bg: '#2c1417', border: '#7a2f36', label: 'Session Error' },
 };
 
-const HEALTH_CFG: Record<HealthStatus, { color: string; bg: string; border: string }> = {
+const HEALTH_CFG: Record<LpHealthStatus, { color: string; bg: string; border: string }> = {
   HEALTHY:   { color: '#66e07a', bg: '#162a1c', border: '#2f6a3d' },
   DEGRADED:  { color: '#e09a55', bg: '#2a2016', border: '#6a4a2f' },
   UNHEALTHY: { color: '#ff5c5c', bg: '#2c1417', border: '#7a2f36' },
   UNKNOWN:   { color: '#a0a0b0', bg: '#2a2a2c', border: '#484848' },
 };
 
-const SESSION_CFG: Record<SessionState, string> = {
+const SESSION_CFG: Record<LpSessionState, string> = {
   DISCONNECTED: '#a0a0b0',
-  CONNECTING: '#e0d066',
-  LOGGED_ON: '#66e07a',
+  CONNECTING:   '#e0d066',
+  LOGGED_ON:    '#66e07a',
   RECONNECTING: '#e09a55',
-  SESSION_ERROR: '#ff5c5c',
+  SESSION_ERROR:'#ff5c5c',
 };
 
-// ============================================================
-// API HELPERS
-// ============================================================
-async function apiFetch<T>(endpoint: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
+const ENVIRONMENTS = ['SANDBOX', 'DEMO', 'PRODUCTION'];
+const FIX_VERSIONS = ['FIX.4.2', 'FIX.4.4', 'FIX.5.0'];
 
-const lpAdminApi = {
-  list: () => apiFetch<{ success: boolean; data: { count: number; lps: LPConfig[] } }>('/api/v1/fix/admin/lp'),
-  get: (id: string) => apiFetch<{ success: boolean; data: LPConfig }>(`/api/v1/fix/admin/lp/${id}`),
-  create: (body: unknown) => apiFetch<{ success: boolean; data: unknown }>('/api/v1/fix/admin/lp', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: string, body: unknown) => apiFetch<{ success: boolean; data: unknown }>(`/api/v1/fix/admin/lp/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  remove: (id: string) => apiFetch<{ success: boolean }>(`/api/v1/fix/admin/lp/${id}`, { method: 'DELETE' }),
-  setCredentials: (id: string, body: unknown) => apiFetch<{ success: boolean; data: unknown }>(`/api/v1/fix/admin/lp/${id}/credentials`, { method: 'PUT', body: JSON.stringify(body) }),
-  credentialStatus: (id: string) => apiFetch<{ success: boolean; data: { password_set: boolean; username_set: boolean; brand_set: boolean; last_updated: string } }>(`/api/v1/fix/admin/lp/${id}/credentials/status`),
-  test: (id: string) => apiFetch<{ success: boolean; data: TestResult }>(`/api/v1/fix/admin/lp/${id}/test`, { method: 'POST' }),
-  reload: (id: string) => apiFetch<{ success: boolean }>(`/api/v1/fix/admin/lp/${id}/reload`, { method: 'POST' }),
-  health: (id: string) => apiFetch<{ success: boolean; data: LPHealth }>(`/api/v1/fix/admin/lp/${id}/health`),
-  healthAll: () => apiFetch<{ success: boolean; data: LPHealth[] }>('/api/v1/fix/admin/health'),
-  audit: (id: string) => apiFetch<{ success: boolean; data: { lp_id: string; entries: AuditEntry[] } }>(`/api/v1/fix/admin/lp/${id}/audit`),
-};
+/** Amber used for anything that is edited-but-not-stored. Deliberately not the
+ *  same green as a persisted value — the whole bug was unsaved state reading
+ *  as saved state. */
+const DIRTY = '#e0a020';
 
-const lpOpsApi = {
-  start: (id: string) => apiFetch<{ success: boolean }>(`/api/v1/fix/lp/${id}/start`, { method: 'POST' }),
-  stop: (id: string) => apiFetch<{ success: boolean }>(`/api/v1/fix/lp/${id}/stop`, { method: 'POST' }),
-  instruments: (id: string) => apiFetch<{ success: boolean; data: { instruments: Instrument[] } }>(`/api/v1/fix/lp/${id}/instruments`),
-  positions: (id: string) => apiFetch<{ success: boolean; data: { positions: LPPosition[] } }>(`/api/v1/fix/lp/${id}/positions`),
-  orders: (id: string) => apiFetch<{ success: boolean; data: { orders: LPOrder[] } }>(`/api/v1/fix/lp/${id}/orders`),
-  routes: (id: string) => apiFetch<{ success: boolean; data: unknown }>(`/api/v1/fix/lp/${id}/routes`),
-};
-
-// ============================================================
-// MOCK DATA (used until BFF wiring is complete)
-// ============================================================
-const MOCK_LPS: LPConfig[] = [
-  {
-    lp_id: 'traderevolution',
-    lp_name: 'TraderEvolution Sandbox',
-    provider_type: 'traderevolution',
-    enabled: true,
-    state: 'CONNECTED',
-    trading_session: {
-      host: 'sandbox-fixk1.traderevolution.com', port: 9882,
-      sender_comp_id: 'fix_connection_1_trd', target_comp_id: 'TEORDER',
-      fix_version: 'FIX.4.4', heartbeat_interval: 30, ssl: false,
-      state: 'LOGGED_ON',
-    },
-    md_session: {
-      host: 'sandbox-fixk1.traderevolution.com', port: 9883,
-      sender_comp_id: 'fix_connection_1', target_comp_id: 'TEPRICE',
-      fix_version: 'FIX.4.4', heartbeat_interval: 30, ssl: false,
-      state: 'LOGGED_ON',
-    },
-    trading_config: { account: 'fix_connection_1_trd', security_exchange: 'TRADE', default_tif: 'GTC', md_depth: 1 },
-    credentials_set: true,
-    created_at: '2026-02-15T10:00:00Z',
-    updated_at: '2026-02-20T14:30:00Z',
-  },
-  {
-    lp_id: 'lmax-demo',
-    lp_name: 'LMAX Demo',
-    provider_type: 'lmax',
-    enabled: false,
-    state: 'DISCONNECTED',
-    trading_session: {
-      host: 'fix-marketdata.lmaxtrader.com', port: 443,
-      sender_comp_id: 'DEMO_001', target_comp_id: 'LMAX',
-      fix_version: 'FIX.4.4', heartbeat_interval: 30, ssl: true,
-    },
-    md_session: null,
-    trading_config: { account: 'DEMO_001', default_tif: 'GTC' },
-    credentials_set: false,
-    created_at: '2026-03-01T09:00:00Z',
-    updated_at: '2026-03-01T09:00:00Z',
-  },
-];
-
-const MOCK_HEALTH: Record<string, LPHealth> = {
-  traderevolution: {
-    lp_id: 'traderevolution', overall_health: 'HEALTHY',
-    trading_session: { state: 'LOGGED_ON', last_heartbeat_ts: Date.now(), heartbeat_interval: 30, latency_ms: 12, messages_sent: 145, messages_received: 523 },
-    md_session: { state: 'LOGGED_ON', subscriptions_active: 3, updates_per_second: 8.5 },
-    instruments_loaded: 6, open_positions: 2, active_orders: 0, uptime_seconds: 7200,
-    warnings: [], checked_at: new Date().toISOString(),
-  },
-};
-
-const MOCK_INSTRUMENTS: Instrument[] = [
-  { symbol: 'EURUSD', canonical_symbol: 'EURUSD', security_type: 'FOREX', trade_route: 'TRADE', description: 'Euro vs US Dollar' },
-  { symbol: 'GBPUSD', canonical_symbol: 'GBPUSD', security_type: 'FOREX', trade_route: 'TRADE', description: 'British Pound vs US Dollar' },
-  { symbol: 'USDJPY', canonical_symbol: 'USDJPY', security_type: 'FOREX', trade_route: 'TRADE', description: 'US Dollar vs Japanese Yen' },
-  { symbol: 'XAUUSD', canonical_symbol: 'XAUUSD', security_type: 'CFD', trade_route: 'TRADE', description: 'Gold vs US Dollar' },
-  { symbol: 'AUDUSD', canonical_symbol: 'AUDUSD', security_type: 'FOREX', trade_route: 'TRADE', description: 'Australian Dollar vs US Dollar' },
-  { symbol: 'USDCAD', canonical_symbol: 'USDCAD', security_type: 'FOREX', trade_route: 'TRADE', description: 'US Dollar vs Canadian Dollar' },
-];
-
-const MOCK_POSITIONS: LPPosition[] = [
-  { position_id: 'TE-001', symbol: 'EURUSD', side: 'LONG', long_qty: 100000, short_qty: 0, avg_price: 1.08452, unrealized_pnl: 342.50 },
-  { position_id: 'TE-002', symbol: 'XAUUSD', side: 'SHORT', long_qty: 0, short_qty: 10, avg_price: 2945.30, unrealized_pnl: -180.20 },
-];
-
-const MOCK_ORDERS: LPOrder[] = [];
-
-const MOCK_AUDIT: AuditEntry[] = [
-  { timestamp: '2026-02-20T14:30:00Z', action: 'UPDATE_CONFIG', user: 'admin', changes: { 'trading_config.md_depth': { old: 1, new: 5 } } },
-  { timestamp: '2026-02-15T10:05:00Z', action: 'SET_CREDENTIALS', user: 'admin', changes: { password: { new: '***' } } },
-  { timestamp: '2026-02-15T10:00:00Z', action: 'CREATE_CONFIG', user: 'admin', changes: {} },
-];
+const HEALTH_POLL_MS = 10_000;
 
 // ============================================================
 // HELPERS
 // ============================================================
-function fmtDate(iso: string) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('en-GB', {
+function fmtTs(ms?: number | null): string {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString('en-GB', {
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
 }
 
-function fmtUptime(sec: number): string {
+function fmtUptime(sec?: number | null): string {
+  if (!sec) return '—';
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
   const h = Math.floor(sec / 3600);
@@ -403,90 +210,198 @@ function fmtUptime(sec: number): string {
   return `${h}h ${m}m`;
 }
 
-function emptyForm(): LPFormData {
-  return {
-    lp_id: '', lp_name: '', provider_type: 'traderevolution', enabled: true,
-    trading_host: '', trading_port: '', trading_sender: '', trading_target: '',
-    fix_version: 'FIX.4.4', heartbeat_interval: '30', reconnect_interval: '5', trading_ssl: false,
-    md_host: '', md_port: '', md_sender: '', md_target: '',
-    account: '', security_exchange: 'TRADE', default_tif: 'GTC', md_depth: '1',
-  };
+function isLiveState(state?: LpState): boolean {
+  return state === 'CONNECTED' || state === 'CONNECTING' || state === 'DEGRADED'
+      || state === 'QUARANTINED' || state === 'SESSION_ERROR';
 }
 
-function lpToForm(lp: LPConfig): LPFormData {
-  return {
-    lp_id: lp.lp_id, lp_name: lp.lp_name,
-    provider_type: lp.provider_type, enabled: lp.enabled,
-    trading_host: lp.trading_session.host,
-    trading_port: String(lp.trading_session.port),
-    trading_sender: lp.trading_session.sender_comp_id,
-    trading_target: lp.trading_session.target_comp_id,
-    fix_version: lp.trading_session.fix_version || 'FIX.4.4',
-    heartbeat_interval: String(lp.trading_session.heartbeat_interval || 30),
-    reconnect_interval: String(lp.trading_session.reconnect_interval || 5),
-    trading_ssl: lp.trading_session.ssl || false,
-    md_host: lp.md_session?.host || '',
-    md_port: lp.md_session ? String(lp.md_session.port) : '',
-    md_sender: lp.md_session?.sender_comp_id || '',
-    md_target: lp.md_session?.target_comp_id || '',
-    account: lp.trading_config.account || '',
-    security_exchange: lp.trading_config.security_exchange || 'TRADE',
-    default_tif: lp.trading_config.default_tif || 'GTC',
-    md_depth: String(lp.trading_config.md_depth || 1),
-  };
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
-function formToPayload(f: LPFormData) {
-  const payload: Record<string, unknown> = {
-    lp_id: f.lp_id,
-    lp_name: f.lp_name,
-    provider_type: f.provider_type,
-    enabled: f.enabled,
-    trading_session: {
-      host: f.trading_host,
-      port: Number(f.trading_port),
-      sender_comp_id: f.trading_sender,
-      target_comp_id: f.trading_target,
-      fix_version: f.fix_version,
-      heartbeat_interval: Number(f.heartbeat_interval) || 30,
-      reconnect_interval: Number(f.reconnect_interval) || 5,
-      ssl: f.trading_ssl,
-    },
-    trading_config: {
-      account: f.account,
-      security_exchange: f.security_exchange,
-      default_tif: f.default_tif,
-      md_depth: Number(f.md_depth) || 1,
-    },
-  };
-  // Only include md_session for providers that use it
-  if (f.provider_type === 'traderevolution' && f.md_host) {
-    payload.md_session = {
-      host: f.md_host,
-      port: Number(f.md_port),
-      sender_comp_id: f.md_sender,
-      target_comp_id: f.md_target,
-      fix_version: f.fix_version,
-      heartbeat_interval: Number(f.heartbeat_interval) || 30,
-      ssl: f.trading_ssl,
-    };
+/** provider_settings holds a provider-specific bag. Only primitives are
+ *  editable; anything structured is preserved untouched on save. */
+function primitiveSettings(ps: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(ps ?? {})) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = String(v);
+    }
   }
-  return payload;
+  return out;
 }
 
-function isStopped(state: LPState): boolean {
-  return state === 'DISCONNECTED' || state === 'STOPPED';
+function configToForm(lp: LpConfig): ConfigForm {
+  const t = lp.trading_session;
+  const m = lp.md_session;
+  const r = lp.reconnection;
+  return {
+    lp_name:      lp.lp_name ?? '',
+    environment:  lp.environment ?? 'SANDBOX',
+    enabled:      !!lp.enabled,
+    auto_connect: !!lp.auto_connect,
+    notes:        lp.notes ?? '',
+
+    t_host:   t?.host ?? '',
+    t_port:   t?.port != null ? String(t.port) : '',
+    t_sender: t?.sender_comp_id ?? '',
+    t_target: t?.target_comp_id ?? '',
+    t_fix:    t?.fix_version ?? 'FIX.4.4',
+    t_hb:     t?.heartbeat_interval != null ? String(t.heartbeat_interval) : '30',
+
+    md_present: !!m,
+    m_host:   m?.host ?? '',
+    m_port:   m?.port != null ? String(m.port) : '',
+    m_sender: m?.sender_comp_id ?? '',
+    m_target: m?.target_comp_id ?? '',
+    m_fix:    m?.fix_version ?? 'FIX.4.4',
+    m_hb:     m?.heartbeat_interval != null ? String(m.heartbeat_interval) : '30',
+    m_depth:  m?.depth != null ? String(m.depth) : '1',
+
+    r_enabled:  !!r?.enabled,
+    r_interval: r?.interval_seconds != null ? String(r.interval_seconds) : '',
+    r_max:      r?.max_attempts != null ? String(r.max_attempts) : '',
+
+    ps: primitiveSettings(lp.provider_settings),
+  };
 }
 
-function isActive(state: LPState): boolean {
-  return state === 'CONNECTED' || state === 'CONNECTING' || state === 'DEGRADED' || state === 'QUARANTINED' || state === 'SESSION_ERROR';
+function sameForm(a: ConfigForm, b: ConfigForm): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Diff the edited form against the record as fetched, and produce the minimal
+ * PUT body plus the list of changes we expect to see afterwards.
+ *
+ * Rules enforced here:
+ *  - lp_id and provider_type are immutable and are never included (400).
+ *  - Only sub-fields that actually changed are sent, so the backend's
+ *    changed_fields receipt lines up 1:1 with what was intended.
+ *  - provider_settings is replaced wholesale by the backend, so the fetched
+ *    object is spread first and only edited keys are overridden. Without this,
+ *    keys the form does not surface (fix_config_path_*, clord_prefix) would be
+ *    silently destroyed on every save.
+ */
+function buildUpdate(orig: LpConfig, f: ConfigForm): { body: LpUpdateBody; intended: IntendedChange[] } {
+  const body: LpUpdateBody = {};
+  const intended: IntendedChange[] = [];
+
+  const put = (path: string, expected: unknown) => intended.push({ path, expected });
+
+  // ── top-level scalars ────────────────────────────────────────
+  if (f.lp_name !== (orig.lp_name ?? ''))            { body.lp_name = f.lp_name;           put('lp_name', f.lp_name); }
+  if (f.environment !== (orig.environment ?? ''))    { body.environment = f.environment;   put('environment', f.environment); }
+  if (f.enabled !== !!orig.enabled)                  { body.enabled = f.enabled;           put('enabled', f.enabled); }
+  if (f.auto_connect !== !!orig.auto_connect)        { body.auto_connect = f.auto_connect; put('auto_connect', f.auto_connect); }
+  if (f.notes !== (orig.notes ?? ''))                { body.notes = f.notes;               put('notes', f.notes); }
+
+  // ── trading session ──────────────────────────────────────────
+  const t = orig.trading_session ?? ({} as LpSessionConfig);
+  const ts: Partial<LpSessionConfig> = {};
+  if (f.t_host !== (t.host ?? ''))                        { ts.host = f.t_host;                       put('trading_session.host', f.t_host); }
+  if (Number(f.t_port) !== t.port)                        { ts.port = Number(f.t_port);               put('trading_session.port', Number(f.t_port)); }
+  if (f.t_sender !== (t.sender_comp_id ?? ''))            { ts.sender_comp_id = f.t_sender;           put('trading_session.sender_comp_id', f.t_sender); }
+  if (f.t_target !== (t.target_comp_id ?? ''))            { ts.target_comp_id = f.t_target;           put('trading_session.target_comp_id', f.t_target); }
+  if (f.t_fix !== (t.fix_version ?? ''))                  { ts.fix_version = f.t_fix;                 put('trading_session.fix_version', f.t_fix); }
+  if (Number(f.t_hb) !== t.heartbeat_interval)            { ts.heartbeat_interval = Number(f.t_hb);   put('trading_session.heartbeat_interval', Number(f.t_hb)); }
+  if (Object.keys(ts).length) body.trading_session = ts;
+
+  // ── market data session ──────────────────────────────────────
+  if (f.md_present) {
+    const m = orig.md_session;
+    if (!m) {
+      // No stored MD session. Send the block whole; the write receipt and the
+      // refetch below are what confirm the backend accepted it.
+      body.md_session = {
+        host: f.m_host, port: Number(f.m_port),
+        sender_comp_id: f.m_sender, target_comp_id: f.m_target,
+        fix_version: f.m_fix, heartbeat_interval: Number(f.m_hb),
+        depth: Number(f.m_depth),
+      };
+      put('md_session.host', f.m_host);
+      put('md_session.port', Number(f.m_port));
+      put('md_session.sender_comp_id', f.m_sender);
+      put('md_session.target_comp_id', f.m_target);
+    } else {
+      const ms: Partial<LpSessionConfig> = {};
+      if (f.m_host !== (m.host ?? ''))                { ms.host = f.m_host;                     put('md_session.host', f.m_host); }
+      if (Number(f.m_port) !== m.port)                { ms.port = Number(f.m_port);             put('md_session.port', Number(f.m_port)); }
+      if (f.m_sender !== (m.sender_comp_id ?? ''))    { ms.sender_comp_id = f.m_sender;         put('md_session.sender_comp_id', f.m_sender); }
+      if (f.m_target !== (m.target_comp_id ?? ''))    { ms.target_comp_id = f.m_target;         put('md_session.target_comp_id', f.m_target); }
+      if (f.m_fix !== (m.fix_version ?? ''))          { ms.fix_version = f.m_fix;               put('md_session.fix_version', f.m_fix); }
+      if (Number(f.m_hb) !== m.heartbeat_interval)    { ms.heartbeat_interval = Number(f.m_hb); put('md_session.heartbeat_interval', Number(f.m_hb)); }
+      if (Number(f.m_depth) !== m.depth)              { ms.depth = Number(f.m_depth);           put('md_session.depth', Number(f.m_depth)); }
+      if (Object.keys(ms).length) body.md_session = ms;
+    }
+  }
+
+  // ── reconnection ─────────────────────────────────────────────
+  const r = orig.reconnection ?? ({ enabled: false, interval_seconds: 0, max_attempts: 0 });
+  const rc: Partial<typeof r> = {};
+  if (f.r_enabled !== !!r.enabled)                  { rc.enabled = f.r_enabled;                    put('reconnection.enabled', f.r_enabled); }
+  if (Number(f.r_interval) !== r.interval_seconds)  { rc.interval_seconds = Number(f.r_interval);  put('reconnection.interval_seconds', Number(f.r_interval)); }
+  if (Number(f.r_max) !== r.max_attempts)           { rc.max_attempts = Number(f.r_max);           put('reconnection.max_attempts', Number(f.r_max)); }
+  if (Object.keys(rc).length) body.reconnection = rc as typeof r;
+
+  // ── provider settings (replaced wholesale — preserve unedited keys) ──
+  const origPs = primitiveSettings(orig.provider_settings);
+  const psChanged = Object.keys(f.ps).filter(k => f.ps[k] !== origPs[k]);
+  if (psChanged.length) {
+    const merged: Record<string, unknown> = { ...(orig.provider_settings ?? {}) };
+    for (const k of psChanged) {
+      const before = (orig.provider_settings ?? {})[k];
+      merged[k] = typeof before === 'number' ? Number(f.ps[k])
+                : typeof before === 'boolean' ? f.ps[k] === 'true'
+                : f.ps[k];
+      put(`provider_settings.${k}`, merged[k]);
+    }
+    body.provider_settings = merged;
+  }
+
+  return { body, intended };
+}
+
+/** Read a dotted path off the refetched record. */
+function readPath(obj: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>(
+    (acc, key) => (acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[key] : undefined),
+    obj,
+  );
+}
+
+/**
+ * The real acceptance check. changed_fields is the backend's own account of
+ * what it accepted; this compares the record as it now reads on the server
+ * against what was sent. Anything listed here was dropped in transit and the
+ * operator has to be told, because a silent no-op is the original defect.
+ */
+function auditWrite(fresh: LpConfig, intended: IntendedChange[]): string[] {
+  const dropped: string[] = [];
+  for (const { path, expected } of intended) {
+    const actual = readPath(fresh, path);
+    if (String(actual) !== String(expected)) {
+      dropped.push(`${path} — sent ${JSON.stringify(expected)}, stored ${JSON.stringify(actual)}`);
+    }
+  }
+  return dropped;
 }
 
 // ============================================================
 // SHARED ATOMS
 // ============================================================
-function StateBadge({ state }: { state: LPState }) {
-  const c = STATE_CFG[state] || STATE_CFG.DISCONNECTED;
+function StateBadge({ state }: { state?: LpState }) {
+  const c = state ? STATE_CFG[state] : undefined;
+  if (!c) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap"
+        style={{ color: '#a0a0b0', backgroundColor: '#2a2a2c', border: '1px solid #484848' }}>
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#555' }} />
+        No status
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap"
       style={{ color: c.color, backgroundColor: c.bg, border: `1px solid ${c.border}` }}>
@@ -496,41 +411,51 @@ function StateBadge({ state }: { state: LPState }) {
   );
 }
 
-function ProviderBadge({ type }: { type: ProviderType }) {
-  const cfg: Record<ProviderType, [string, string, string]> = {
-    traderevolution: ['#a5c8f0', '#0f2035', '#1e4270'],
-    lmax: ['#f0d0a5', '#2a1f0f', '#5a4020'],
-    cmc:  ['#d4a5e0', '#1e1530', '#3d2860'],
-  };
-  const [color, bg, border] = cfg[type];
+function ProviderBadge({ type }: { type: LpProviderType }) {
+  const [color, bg, border] = PROVIDER_BADGE[type] ?? ['#a0a0b0', '#2a2a2c', '#484848'];
   return (
     <span className="px-1.5 py-0.5 rounded text-xs font-semibold"
       style={{ color, backgroundColor: bg, border: `1px solid ${border}` }}>
-      {PROVIDER_LABELS[type]}
+      {PROVIDER_LABELS[type] ?? type}
     </span>
   );
 }
 
-function SessionDot({ state, label }: { state?: SessionState; label: string }) {
+function EnvBadge({ env }: { env: string }) {
+  const prod = env === 'PRODUCTION';
+  return (
+    <span className="px-1.5 py-0.5 rounded text-xs font-semibold tracking-wide"
+      style={prod
+        ? { color: '#ff9a9a', backgroundColor: '#2c1417', border: '1px solid #7a2f36' }
+        : { color: '#a0a0b0', backgroundColor: '#232225', border: '1px solid #484848' }}>
+      {env}
+    </span>
+  );
+}
+
+function SessionDot({ state, label }: { state?: LpSessionState; label: string }) {
   const color = state ? SESSION_CFG[state] : '#555';
   return (
     <span className="inline-flex items-center gap-1 text-xs">
       <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
       <span className="text-text-muted">{label}:</span>
-      <span style={{ color }}>{state || 'N/A'}</span>
+      <span style={{ color }}>{state || 'unknown'}</span>
     </span>
   );
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
+    <button type="button" role="switch" aria-checked={checked} disabled={disabled}
+      onClick={() => !disabled && onChange(!checked)}
       style={{
         display: 'inline-flex', alignItems: 'center',
         width: 36, height: 20, borderRadius: 10, padding: 3,
         backgroundColor: checked ? '#163a3a' : '#383838',
         border: `1.5px solid ${checked ? '#49b3b3' : '#505050'}`,
-        cursor: 'pointer', flexShrink: 0, outline: 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        flexShrink: 0, outline: 'none',
         transition: 'background-color .15s, border-color .15s',
       }}>
       <span style={{
@@ -543,25 +468,127 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
+/** Text field that shows an amber rail while its value differs from the value
+ *  currently stored on the server. */
+function Field({ label, value, stored, onChange, mono, disabled, placeholder, hint }: {
+  label: string;
+  value: string;
+  stored: string;
+  onChange: (v: string) => void;
+  mono?: boolean;
+  disabled?: boolean;
+  placeholder?: string;
+  hint?: string;
+}) {
+  const dirty = value !== stored;
+  return (
+    <div>
+      <label className="flex items-center gap-1.5 text-text-secondary mb-1" style={{ fontSize: 11 }}>
+        {label}
+        {dirty && <span style={{ color: DIRTY, fontSize: 10 }}>edited</span>}
+      </label>
+      <input
+        className={clsx('input w-full text-sm', mono && 'font-mono')}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          borderLeft: dirty ? `2px solid ${DIRTY}` : '2px solid transparent',
+          opacity: disabled ? 0.5 : 1,
+        }} />
+      {hint && <div className="text-text-muted mt-1" style={{ fontSize: 10 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function SelectField({ label, value, stored, options, onChange }: {
+  label: string; value: string; stored: string; options: string[]; onChange: (v: string) => void;
+}) {
+  const dirty = value !== stored;
+  return (
+    <div>
+      <label className="flex items-center gap-1.5 text-text-secondary mb-1" style={{ fontSize: 11 }}>
+        {label}
+        {dirty && <span style={{ color: DIRTY, fontSize: 10 }}>edited</span>}
+      </label>
+      <select className="select w-full text-sm" value={value} onChange={e => onChange(e.target.value)}
+        style={{ borderLeft: dirty ? `2px solid ${DIRTY}` : '2px solid transparent' }}>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function SectionTitle({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="font-semibold text-text-muted uppercase tracking-wider" style={{ fontSize: 11 }}>{children}</h3>
+      {right}
+    </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-1.5 border-b border-border last:border-0">
+      <span className="text-xs text-text-muted flex-shrink-0">{label}</span>
+      <span className="text-xs text-text-primary text-right break-all">{children}</span>
+    </div>
+  );
+}
+
+function ErrorPanel({ title, lines, onDismiss }: { title: string; lines: string[]; onDismiss?: () => void }) {
+  return (
+    <div className="p-3 rounded space-y-1.5"
+      style={{ backgroundColor: '#2c1417', border: '1px solid #7a2f36' }}>
+      <div className="flex items-start justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: '#ff5c5c' }}>
+          <IcoWarning /> {title}
+        </span>
+        {onDismiss && (
+          <button onClick={onDismiss} className="p-0.5 rounded hover:bg-[#3a1a1e]" style={{ color: '#ff5c5c' }}>
+            <IcoX size={11} />
+          </button>
+        )}
+      </div>
+      {lines.map((l, i) => (
+        <div key={i} className="font-mono" style={{ fontSize: 11, color: '#ffb0b0' }}>{l}</div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyTab({ title, detail, endpoint }: { title: string; detail: string; endpoint: string }) {
+  return (
+    <div className="panel p-6 space-y-2">
+      <div className="text-sm font-semibold text-text-primary">{title}</div>
+      <div className="text-xs text-text-secondary max-w-xl leading-relaxed">{detail}</div>
+      <div className="font-mono text-text-muted pt-1" style={{ fontSize: 11 }}>{endpoint}</div>
+    </div>
+  );
+}
+
 // Toast hook
 function useToast() {
-  const [toast, setToast] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
-  const show = useCallback((msg: string) => {
-    setToast(msg);
+  const [toast, setToast] = useState<{ msg: string; tone: 'ok' | 'warn' } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const show = useCallback((msg: string, tone: 'ok' | 'warn' = 'ok') => {
+    setToast({ msg, tone });
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setToast(null), 3500);
+    timer.current = setTimeout(() => setToast(null), 4000);
   }, []);
+  useEffect(() => () => clearTimeout(timer.current), []);
   return { toast, showToast: show };
 }
 
 // ============================================================
 // LP CARD
 // ============================================================
-function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCredentials, onDetail }: {
-  lp: LPConfig;
-  health?: LPHealth;
-  onEdit: () => void;
+function LPCard({ lp, health, busy, onDelete, onStart, onStop, onTest, onCredentials, onDetail }: {
+  lp: LpListRow;
+  health?: LpHealthSummaryRow;
+  busy: boolean;
   onDelete: () => void;
   onStart: () => void;
   onStop: () => void;
@@ -569,366 +596,267 @@ function LPCard({ lp, health, onEdit, onDelete, onStart, onStop, onTest, onCrede
   onCredentials: () => void;
   onDetail: () => void;
 }) {
-  const stopped = isStopped(lp.state);
-  const active  = isActive(lp.state);
-  const busy = lp.state === 'CONNECTING';
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('lp_admin', 'EDIT');
+  const live = isLiveState(health?.state);
+  const hcfg = health ? HEALTH_CFG[health.health] : undefined;
+  const [color] = PROVIDER_BADGE[lp.provider_type] ?? ['#484848'];
 
   return (
-    <div className="panel flex flex-col overflow-hidden cursor-pointer hover:border-[#555] transition-colors"
-      onClick={onDetail}
-      style={{
-        opacity: lp.enabled ? 1 : 0.55,
-        borderTop: `2px solid ${PROVIDER_BORDER[lp.provider_type]}`,
-      }}>
-
-      {/* Header */}
-      <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+    <div className="panel p-4 space-y-3" style={{ borderLeft: `3px solid ${color}` }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <button onClick={onDetail}
+            className="text-sm font-semibold text-text-primary hover:text-[#49b3b3] text-left truncate block">
+            {lp.lp_name}
+          </button>
+          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <ProviderBadge type={lp.provider_type} />
-            {!lp.enabled && <span className="text-xs" style={{ color: '#666' }}>DISABLED</span>}
+            <EnvBadge env={lp.environment} />
+            <span className="font-mono text-text-muted" style={{ fontSize: 11 }}>{lp.lp_id}</span>
           </div>
-          <h3 className="text-sm font-semibold text-text-primary truncate">{lp.lp_name}</h3>
-          <span className="text-xs font-mono text-text-muted">{lp.lp_id}</span>
         </div>
-        <StateBadge state={lp.state} />
-      </div>
-
-      {/* Body */}
-      <div className="px-3 pb-3 space-y-1.5 text-xs flex-1">
-        {/* Session states */}
-        <div className="flex items-center gap-3">
-          <SessionDot state={lp.trading_session.state} label="Trading" />
-          {lp.md_session && <SessionDot state={lp.md_session.state} label="MD" />}
-          {!lp.md_session && lp.provider_type !== 'traderevolution' && (
-            <span className="text-xs text-text-muted">Single session</span>
+        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+          <StateBadge state={health?.state} />
+          {hcfg && (
+            <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 10, color: hcfg.color, backgroundColor: hcfg.bg, border: `1px solid ${hcfg.border}` }}>
+              {health!.health}
+            </span>
           )}
         </div>
-
-        {/* Stats row when connected */}
-        {health && active && (
-          <div className="flex items-center gap-3 text-xs">
-            <span><span className="text-text-primary font-mono">{health.instruments_loaded}</span> <span className="text-text-muted">instruments</span></span>
-            <span className="opacity-30">·</span>
-            <span><span className="text-text-primary font-mono">{health.open_positions}</span> <span className="text-text-muted">positions</span></span>
-            <span className="opacity-30">·</span>
-            <span><span className="text-text-primary font-mono">{health.active_orders}</span> <span className="text-text-muted">orders</span></span>
-          </div>
-        )}
-
-        {/* Health indicator */}
-        {health && active && (
-          <div className="flex items-center gap-2 text-xs">
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded"
-              style={{
-                color: HEALTH_CFG[health.overall_health].color,
-                backgroundColor: HEALTH_CFG[health.overall_health].bg,
-                border: `1px solid ${HEALTH_CFG[health.overall_health].border}`,
-              }}>
-              {health.overall_health}
-            </span>
-            {health.trading_session.latency_ms > 0 && (
-              <span className="text-text-muted">{health.trading_session.latency_ms}ms latency</span>
-            )}
-            {health.uptime_seconds > 0 && (
-              <span className="text-text-muted">Up {fmtUptime(health.uptime_seconds)}</span>
-            )}
-          </div>
-        )}
-
-        {/* Credential warning */}
-        {!lp.credentials_set && (
-          <div className="flex items-start gap-1.5 p-1.5 rounded"
-            style={{ backgroundColor: '#2a2016', border: '1px solid #6a4a2f' }}>
-            <span className="flex-shrink-0 mt-px" style={{ color: '#e09a55' }}><IcoWarning /></span>
-            <span style={{ color: '#e09a55' }} className="leading-tight">Credentials not configured</span>
-          </div>
-        )}
-
-        {/* Warnings */}
-        {health?.warnings?.map((w, i) => (
-          <div key={i} className="flex items-start gap-1.5 p-1.5 rounded"
-            style={{ backgroundColor: '#2a2016', border: '1px solid #6a4a2f' }}>
-            <span className="flex-shrink-0 mt-px" style={{ color: '#e09a55' }}><IcoWarning /></span>
-            <span style={{ color: '#e09a55' }} className="leading-tight">{w.message}</span>
-          </div>
-        ))}
       </div>
 
-      {/* Footer actions */}
-      <div className="px-3 py-2.5 border-t border-border flex items-center gap-1.5 flex-wrap"
-        onClick={e => e.stopPropagation()}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <SessionDot state={health?.trading_state} label="Trading" />
+        <SessionDot state={health?.md_state} label="MD" />
+      </div>
 
-        {/* Start / Stop */}
-        {canEdit && (active ? (
-          <button onClick={onStop}
-            className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-            style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
+      <div className="flex items-center gap-3 flex-wrap text-text-muted" style={{ fontSize: 11 }}>
+        <span>Uptime <span className="font-mono text-text-secondary">{fmtUptime(health?.uptime_seconds)}</span></span>
+        {!!health?.warnings_count && (
+          <span style={{ color: '#e09a55' }}>{health.warnings_count} warning{health.warnings_count === 1 ? '' : 's'}</span>
+        )}
+        {!!health?.errors_24h_count && (
+          <span style={{ color: '#ff5c5c' }}>{health.errors_24h_count} errors 24h</span>
+        )}
+        <span className={lp.credentials_set ? '' : 'flex items-center gap-1'}
+          style={{ color: lp.credentials_set ? '#66e07a' : '#e09a55' }}>
+          {lp.credentials_set ? 'Credentials set' : 'Credentials not set'}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-1.5 flex-wrap pt-1">
+        <button onClick={onDetail} className="btn btn-ghost border border-border px-2.5 py-1 flex items-center gap-1.5" style={{ fontSize: 11 }}>
+          <IcoEdit /> Configure
+        </button>
+        <button onClick={onCredentials} disabled={!canEdit}
+          className="btn btn-ghost border border-border px-2.5 py-1 flex items-center gap-1.5"
+          style={{ fontSize: 11, opacity: canEdit ? 1 : 0.4 }}>
+          <IcoKey /> Credentials
+        </button>
+        <button onClick={onTest} disabled={!canEdit || busy}
+          className="btn btn-ghost border border-border px-2.5 py-1 flex items-center gap-1.5"
+          style={{ fontSize: 11, opacity: canEdit && !busy ? 1 : 0.4 }}>
+          <IcoSignal /> Test
+        </button>
+        {live ? (
+          <button onClick={onStop} disabled={!canEdit || busy}
+            className="btn px-2.5 py-1 flex items-center gap-1.5"
+            style={{ fontSize: 11, backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f', opacity: canEdit && !busy ? 1 : 0.4 }}>
             <IcoStop /> Stop
           </button>
         ) : (
-          <button onClick={onStart} disabled={busy || !lp.credentials_set}
-            className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-            style={busy || !lp.credentials_set
-              ? { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }
-              : { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }}>
-            <IcoPlay /> {busy ? 'Starting...' : 'Start'}
+          <button onClick={onStart} disabled={!canEdit || busy}
+            className="btn px-2.5 py-1 flex items-center gap-1.5"
+            style={{ fontSize: 11, backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d', opacity: canEdit && !busy ? 1 : 0.4 }}>
+            <IcoPlay /> Start
           </button>
-        ))}
-
-        {/* Test connection */}
-        <button onClick={onTest}
-          className="btn btn-ghost text-xs border border-border px-2.5 py-1 flex items-center gap-1">
-          <IcoSignal /> Test
+        )}
+        <button onClick={onDelete} disabled={!canEdit || live}
+          title={live ? 'Stop the LP before deleting' : undefined}
+          className="btn btn-ghost border border-border px-2.5 py-1 flex items-center gap-1.5"
+          style={{ fontSize: 11, color: '#ff5c5c', opacity: canEdit && !live ? 1 : 0.4 }}>
+          <IcoTrash /> Delete
         </button>
-
-        {/* Credentials */}
-        {canEdit && !lp.credentials_set && (
-          <button onClick={onCredentials}
-            className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-            style={{ backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}>
-            <IcoKey /> Set Credentials
-          </button>
-        )}
-
-        {canEdit && (
-        <div className="ml-auto flex items-center gap-1">
-          <button onClick={onEdit} disabled={!stopped}
-            className="btn btn-ghost text-xs border border-border px-2.5 py-1"
-            style={!stopped ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}>
-            Edit
-          </button>
-          <button onClick={onDelete} disabled={!stopped}
-            className="btn text-xs px-2 py-1"
-            style={!stopped
-              ? { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }
-              : { backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
-            <IcoTrash />
-          </button>
-        </div>
-        )}
       </div>
     </div>
   );
 }
 
 // ============================================================
-// ADD / EDIT LP MODAL — provider-aware dynamic fields
+// CREATE LP MODAL
 // ============================================================
-function LPFormModal({ mode, lp, onClose, onSave }: {
-  mode: 'add' | 'edit';
-  lp?: LPConfig;
+interface CreateForm {
+  lp_id: string; lp_name: string; provider_type: LpProviderType;
+  environment: string; enabled: boolean; auto_connect: boolean;
+  t_host: string; t_port: string; t_sender: string; t_target: string; t_fix: string; t_hb: string;
+  md_present: boolean;
+  m_host: string; m_port: string; m_sender: string; m_target: string; m_depth: string;
+  account: string; security_exchange: string;
+}
+
+function emptyCreateForm(): CreateForm {
+  return {
+    lp_id: '', lp_name: '', provider_type: 'traderevolution',
+    environment: 'SANDBOX', enabled: true, auto_connect: false,
+    t_host: '', t_port: '', t_sender: '', t_target: '', t_fix: 'FIX.4.4', t_hb: '30',
+    md_present: true,
+    m_host: '', m_port: '', m_sender: '', m_target: '', m_depth: '1',
+    account: '', security_exchange: '',
+  };
+}
+
+function CreateLPModal({ onClose, onCreated, showToast }: {
   onClose: () => void;
-  onSave: (f: LPFormData) => void;
+  onCreated: () => void;
+  showToast: (m: string, t?: 'ok' | 'warn') => void;
 }) {
-  const [form, setForm] = useState<LPFormData>(
-    mode === 'edit' && lp ? lpToForm(lp) : emptyForm()
-  );
-  const upd = (k: keyof LPFormData, v: unknown) => setForm(f => ({ ...f, [k]: v }));
+  const [f, setF] = useState<CreateForm>(emptyCreateForm());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const upd = <K extends keyof CreateForm>(k: K, v: CreateForm[K]) => setF(p => ({ ...p, [k]: v }));
 
-  const needsMdSession = form.provider_type === 'traderevolution';
-  const isLmax = form.provider_type === 'lmax';
+  const idValid = /^[a-z0-9][a-z0-9-]{2,31}$/.test(f.lp_id);
+  const canSave = idValid && !!f.lp_name && !!f.t_host && !!f.t_port && !!f.t_sender && !!f.t_target;
 
-  const canSave = form.lp_id.length >= 3 && form.lp_name && form.trading_host && form.trading_port && form.trading_sender && form.trading_target;
+  const submit = async () => {
+    setSaving(true); setError(null);
+    try {
+      await lpAdminApi.create({
+        lp_id: f.lp_id,
+        provider_type: f.provider_type,
+        lp_name: f.lp_name,
+        environment: f.environment,
+        enabled: f.enabled,
+        auto_connect: f.auto_connect,
+        trading_session: {
+          host: f.t_host, port: Number(f.t_port),
+          sender_comp_id: f.t_sender, target_comp_id: f.t_target,
+          fix_version: f.t_fix, heartbeat_interval: Number(f.t_hb),
+        },
+        ...(f.md_present && f.m_host ? {
+          md_session: {
+            host: f.m_host, port: Number(f.m_port),
+            sender_comp_id: f.m_sender, target_comp_id: f.m_target,
+            fix_version: f.t_fix, heartbeat_interval: Number(f.t_hb),
+            depth: Number(f.m_depth),
+          },
+        } : {}),
+        ...(f.account || f.security_exchange ? {
+          provider_settings: {
+            ...(f.account ? { account: f.account } : {}),
+            ...(f.security_exchange ? { security_exchange: f.security_exchange } : {}),
+          },
+        } : {}),
+      });
+      showToast(`${f.lp_name} created — set credentials before starting it`);
+      onCreated();
+      onClose();
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
       <div className="panel w-full max-w-2xl max-h-[90vh] overflow-y-auto" style={{ backgroundColor: '#2a2a2c' }}>
-        {/* Header */}
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <h2 className="text-base font-semibold text-text-primary">
-            {mode === 'add' ? 'Add Liquidity Provider' : `Edit — ${lp?.lp_name}`}
-          </h2>
+          <h2 className="text-base font-semibold text-text-primary">Add liquidity provider</h2>
           <button onClick={onClose} className="p-1 hover:bg-surface-hover rounded"><IcoX /></button>
         </div>
 
-        {/* Form */}
         <div className="p-5 space-y-5">
+          {error && <ErrorPanel title="Could not create the LP" lines={[error]} onDismiss={() => setError(null)} />}
 
-          {/* Basic Info */}
           <div>
-            <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Basic Info</h3>
+            <SectionTitle>Identity</SectionTitle>
             <div className="grid grid-cols-2 gap-3">
+              <Field label="LP ID" value={f.lp_id} stored={f.lp_id} mono
+                placeholder="e.g. lmax-demo"
+                hint="Lowercase letters, digits and hyphens. 3–32 characters. Cannot be changed later."
+                onChange={v => upd('lp_id', v.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
+              <Field label="Display name" value={f.lp_name} stored={f.lp_name}
+                placeholder="e.g. LMAX Demo" onChange={v => upd('lp_name', v)} />
               <div>
-                <label className="block text-xs text-text-secondary mb-1">LP ID</label>
-                <input className="input w-full text-sm" value={form.lp_id}
-                  disabled={mode === 'edit'}
-                  placeholder="e.g. traderevolution"
-                  onChange={e => upd('lp_id', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                  style={mode === 'edit' ? { opacity: 0.5, cursor: 'not-allowed' } : undefined} />
-                <span className="text-[10px] text-text-muted mt-0.5 block">Lowercase + hyphens, 3-32 chars</span>
+                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Provider</label>
+                <select className="select w-full text-sm" value={f.provider_type}
+                  onChange={e => upd('provider_type', e.target.value as LpProviderType)}>
+                  {Object.entries(PROVIDER_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <div className="text-text-muted mt-1" style={{ fontSize: 10 }}>Cannot be changed later.</div>
               </div>
               <div>
-                <label className="block text-xs text-text-secondary mb-1">Display Name</label>
-                <input className="input w-full text-sm" value={form.lp_name}
-                  placeholder="e.g. TraderEvolution Sandbox"
-                  onChange={e => upd('lp_name', e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">Provider Type</label>
-                <select className="select w-full text-sm" value={form.provider_type}
-                  disabled={mode === 'edit'}
-                  onChange={e => {
-                    const pt = e.target.value as ProviderType;
-                    upd('provider_type', pt);
-                    if (pt === 'lmax') {
-                      setForm(f => ({ ...f, provider_type: pt, trading_ssl: true, md_host: '', md_port: '', md_sender: '', md_target: '' }));
-                    }
-                  }}
-                  style={mode === 'edit' ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}>
-                  <option value="traderevolution">TraderEvolution</option>
-                  <option value="lmax">LMAX</option>
+                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Environment</label>
+                <select className="select w-full text-sm" value={f.environment}
+                  onChange={e => upd('environment', e.target.value)}>
+                  {ENVIRONMENTS.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
-              <div className="flex items-center gap-2 pt-4">
-                <Toggle checked={form.enabled} onChange={v => upd('enabled', v)} />
-                <span className="text-sm text-text-secondary">{form.enabled ? 'Enabled' : 'Disabled'}</span>
-              </div>
+            </div>
+            <div className="flex items-center gap-6 mt-3">
+              <label className="flex items-center gap-2 text-xs text-text-secondary">
+                <Toggle checked={f.enabled} onChange={v => upd('enabled', v)} /> Enabled
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-secondary">
+                <Toggle checked={f.auto_connect} onChange={v => upd('auto_connect', v)} /> Connect on service start
+              </label>
             </div>
           </div>
 
-          {/* Trading Session */}
           <div>
-            <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Trading Session</h3>
+            <SectionTitle>Trading session</SectionTitle>
             <div className="grid grid-cols-2 gap-3">
+              <Field label="Host" value={f.t_host} stored={f.t_host} mono onChange={v => upd('t_host', v)} />
+              <Field label="Port" value={f.t_port} stored={f.t_port} mono onChange={v => upd('t_port', v.replace(/\D/g, ''))} />
+              <Field label="SenderCompID" value={f.t_sender} stored={f.t_sender} mono onChange={v => upd('t_sender', v)} />
+              <Field label="TargetCompID" value={f.t_target} stored={f.t_target} mono onChange={v => upd('t_target', v)} />
               <div>
-                <label className="block text-xs text-text-secondary mb-1">Host</label>
-                <input className="input w-full text-sm font-mono" value={form.trading_host}
-                  placeholder="sandbox-fixk1.example.com"
-                  onChange={e => upd('trading_host', e.target.value)} />
+                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>FIX version</label>
+                <select className="select w-full text-sm" value={f.t_fix} onChange={e => upd('t_fix', e.target.value)}>
+                  {FIX_VERSIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
               </div>
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">Port</label>
-                <input className="input w-full text-sm font-mono" value={form.trading_port}
-                  type="number" placeholder="9882"
-                  onChange={e => upd('trading_port', e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">SenderCompID</label>
-                <input className="input w-full text-sm font-mono" value={form.trading_sender}
-                  placeholder="fix_connection_1_trd"
-                  onChange={e => upd('trading_sender', e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">TargetCompID</label>
-                <input className="input w-full text-sm font-mono" value={form.trading_target}
-                  placeholder="TEORDER"
-                  onChange={e => upd('trading_target', e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-4 gap-3 mt-3">
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">FIX Version</label>
-                <input className="input w-full text-sm font-mono" value={form.fix_version}
-                  onChange={e => upd('fix_version', e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">Heartbeat (s)</label>
-                <input className="input w-full text-sm font-mono" value={form.heartbeat_interval}
-                  type="number" onChange={e => upd('heartbeat_interval', e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">Reconnect (s)</label>
-                <input className="input w-full text-sm font-mono" value={form.reconnect_interval}
-                  type="number" onChange={e => upd('reconnect_interval', e.target.value)} />
-              </div>
-              <div className="flex items-center gap-2 pt-4">
-                <Toggle checked={form.trading_ssl} onChange={v => upd('trading_ssl', v)} />
-                <span className="text-sm text-text-secondary">SSL</span>
-              </div>
+              <Field label="Heartbeat (s)" value={f.t_hb} stored={f.t_hb} mono onChange={v => upd('t_hb', v.replace(/\D/g, ''))} />
             </div>
           </div>
 
-          {/* Market Data Session (TE only) */}
-          {needsMdSession && (
-            <div>
-              <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Market Data Session</h3>
+          <div>
+            <SectionTitle right={<Toggle checked={f.md_present} onChange={v => upd('md_present', v)} />}>
+              Market data session
+            </SectionTitle>
+            {f.md_present && (
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">MD Host</label>
-                  <input className="input w-full text-sm font-mono" value={form.md_host}
-                    placeholder="Same as trading host"
-                    onChange={e => upd('md_host', e.target.value)} />
-                </div>
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">MD Port</label>
-                  <input className="input w-full text-sm font-mono" value={form.md_port}
-                    type="number" placeholder="9883"
-                    onChange={e => upd('md_port', e.target.value)} />
-                </div>
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">MD SenderCompID</label>
-                  <input className="input w-full text-sm font-mono" value={form.md_sender}
-                    placeholder="fix_connection_1"
-                    onChange={e => upd('md_sender', e.target.value)} />
-                </div>
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">MD TargetCompID</label>
-                  <input className="input w-full text-sm font-mono" value={form.md_target}
-                    placeholder="TEPRICE"
-                    onChange={e => upd('md_target', e.target.value)} />
-                </div>
+                <Field label="Host" value={f.m_host} stored={f.m_host} mono onChange={v => upd('m_host', v)} />
+                <Field label="Port" value={f.m_port} stored={f.m_port} mono onChange={v => upd('m_port', v.replace(/\D/g, ''))} />
+                <Field label="SenderCompID" value={f.m_sender} stored={f.m_sender} mono onChange={v => upd('m_sender', v)} />
+                <Field label="TargetCompID" value={f.m_target} stored={f.m_target} mono onChange={v => upd('m_target', v)} />
+                <Field label="Book depth" value={f.m_depth} stored={f.m_depth} mono onChange={v => upd('m_depth', v.replace(/\D/g, ''))} />
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* LMAX note */}
-          {isLmax && (
-            <div className="p-3 rounded text-xs"
-              style={{ backgroundColor: '#1a1e28', border: '1px solid #3a4050', color: '#a5b0c0' }}>
-              LMAX uses a single FIX session for both trading and market data. No separate MD session configuration is needed.
-            </div>
-          )}
-
-          {/* Trading Config */}
           <div>
-            <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Trading Config</h3>
-            <div className="grid grid-cols-4 gap-3">
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">Account</label>
-                <input className="input w-full text-sm font-mono" value={form.account}
-                  onChange={e => upd('account', e.target.value)} />
-              </div>
-              {needsMdSession && (
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">Security Exchange</label>
-                  <input className="input w-full text-sm font-mono" value={form.security_exchange}
-                    onChange={e => upd('security_exchange', e.target.value)} />
-                </div>
-              )}
-              <div>
-                <label className="block text-xs text-text-secondary mb-1">Default TIF</label>
-                <select className="select w-full text-sm" value={form.default_tif}
-                  onChange={e => upd('default_tif', e.target.value)}>
-                  <option value="GTC">GTC</option>
-                  <option value="IOC">IOC</option>
-                  <option value="DAY">DAY</option>
-                  <option value="FOK">FOK</option>
-                </select>
-              </div>
-              {needsMdSession && (
-                <div>
-                  <label className="block text-xs text-text-secondary mb-1">MD Depth</label>
-                  <input className="input w-full text-sm font-mono" value={form.md_depth}
-                    type="number" min="1" max="20"
-                    onChange={e => upd('md_depth', e.target.value)} />
-                </div>
-              )}
+            <SectionTitle>Provider settings</SectionTitle>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Account" value={f.account} stored={f.account} mono onChange={v => upd('account', v)} />
+              <Field label="Security exchange" value={f.security_exchange} stored={f.security_exchange} mono onChange={v => upd('security_exchange', v)} />
+            </div>
+            <div className="text-text-muted mt-2" style={{ fontSize: 10 }}>
+              Further provider keys can be added from the Configuration tab once the LP exists.
             </div>
           </div>
         </div>
 
-        {/* Footer */}
         <div className="px-5 py-4 border-t border-border flex items-center justify-end gap-2">
           <button onClick={onClose} className="btn btn-ghost text-xs border border-border px-4 py-1.5">Cancel</button>
-          <button onClick={() => onSave(form)} disabled={!canSave}
+          <button onClick={submit} disabled={!canSave || saving}
             className="btn text-xs px-4 py-1.5"
-            style={canSave
+            style={canSave && !saving
               ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
               : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
-            {mode === 'add' ? 'Create LP' : 'Save Changes'}
+            {saving ? 'Creating…' : 'Create LP'}
           </button>
         </div>
       </div>
@@ -939,66 +867,119 @@ function LPFormModal({ mode, lp, onClose, onSave }: {
 // ============================================================
 // CREDENTIALS MODAL
 // ============================================================
-function CredentialsModal({ lp, onClose, onSave }: {
-  lp: LPConfig;
+function CredentialsModal({ lpId, lpName, providerType, credentials, onClose, onSaved, showToast }: {
+  lpId: string;
+  lpName: string;
+  providerType: LpProviderType;
+  credentials?: LpConfig['credentials'];
   onClose: () => void;
-  onSave: (data: { password: string; username?: string; brand?: string }) => void;
+  onSaved: () => void;
+  showToast: (m: string, t?: 'ok' | 'warn') => void;
 }) {
   const [password, setPassword] = useState('');
+  const [mdPassword, setMdPassword] = useState('');
   const [username, setUsername] = useState('');
   const [brand, setBrand] = useState('');
   const [showPwd, setShowPwd] = useState(false);
-  const isCmc = lp.provider_type === 'cmc';
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isCmc = providerType === 'cmc';
+
+  const submit = async () => {
+    setSaving(true); setError(null);
+    try {
+      await lpAdminApi.setCredentials(lpId, {
+        ...(password ? { password } : {}),
+        ...(mdPassword ? { md_password: mdPassword } : {}),
+        ...(username ? { username } : {}),
+        ...(brand ? { brand } : {}),
+      });
+      showToast(`Credentials saved for ${lpName}`);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
       <div className="panel w-full max-w-md" style={{ backgroundColor: '#2a2a2c' }}>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <h2 className="text-base font-semibold text-text-primary">Set Credentials — {lp.lp_name}</h2>
+          <h2 className="text-base font-semibold text-text-primary">Credentials — {lpName}</h2>
           <button onClick={onClose} className="p-1 hover:bg-surface-hover rounded"><IcoX /></button>
         </div>
         <div className="p-5 space-y-4">
+          {error && <ErrorPanel title="Could not save credentials" lines={[error]} onDismiss={() => setError(null)} />}
+
+          {credentials && (
+            <div className="space-y-1">
+              <Row label="Trading password">
+                {credentials.trading_password_set_at
+                  ? <span style={{ color: '#66e07a' }}>Set {fmtTs(credentials.trading_password_set_at)}</span>
+                  : <span style={{ color: '#e09a55' }}>Never set</span>}
+              </Row>
+              <Row label="Market data password">
+                {credentials.md_password_set_at
+                  ? <span style={{ color: '#66e07a' }}>Set {fmtTs(credentials.md_password_set_at)}</span>
+                  : <span style={{ color: '#e09a55' }}>Never set</span>}
+              </Row>
+            </div>
+          )}
+
           <div>
-            <label className="block text-xs text-text-secondary mb-1">Password (FIX Logon)</label>
+            <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Trading password (FIX logon)</label>
             <div className="relative">
               <input className="input w-full text-sm font-mono pr-9"
                 type={showPwd ? 'text' : 'password'}
                 value={password} onChange={e => setPassword(e.target.value)}
-                placeholder="Enter FIX password" />
+                placeholder="Leave blank to keep the stored password" />
               <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
                 onClick={() => setShowPwd(!showPwd)}>
                 {showPwd ? <IcoEyeOff /> : <IcoEye />}
               </button>
             </div>
           </div>
+
+          <div>
+            <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Market data password</label>
+            <input className="input w-full text-sm font-mono"
+              type={showPwd ? 'text' : 'password'}
+              value={mdPassword} onChange={e => setMdPassword(e.target.value)}
+              placeholder="Leave blank to keep the stored password" />
+          </div>
+
           {isCmc && (
             <>
               <div>
-                <label className="block text-xs text-text-secondary mb-1">Username (Tag 553)</label>
+                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Username (tag 553)</label>
                 <input className="input w-full text-sm font-mono" value={username}
                   onChange={e => setUsername(e.target.value)} placeholder="CMC username" />
               </div>
               <div>
-                <label className="block text-xs text-text-secondary mb-1">Brand Code (Tag 21001)</label>
+                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Brand code (tag 21001)</label>
                 <input className="input w-full text-sm font-mono" value={brand}
                   onChange={e => setBrand(e.target.value)} placeholder="Brand code" />
               </div>
             </>
           )}
+
           <div className="p-2.5 rounded text-xs"
             style={{ backgroundColor: '#1a1e28', border: '1px solid #3a4050', color: '#a5b0c0' }}>
-            Credentials are stored with AES-256 encryption. Actual values are never returned by the API.
+            Passwords are stored encrypted and are never returned by the API. Changing them takes effect on the
+            running session only after a reload.
           </div>
         </div>
         <div className="px-5 py-4 border-t border-border flex items-center justify-end gap-2">
           <button onClick={onClose} className="btn btn-ghost text-xs border border-border px-4 py-1.5">Cancel</button>
-          <button onClick={() => { const data: Record<string, string> = { password }; if (username) data.username = username; if (brand) data.brand = brand; onSave(data as any); }}
-            disabled={!password}
+          <button onClick={submit} disabled={saving || (!password && !mdPassword && !username && !brand)}
             className="btn text-xs px-4 py-1.5"
-            style={password
+            style={!saving && (password || mdPassword || username || brand)
               ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
               : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
-            Save Credentials
+            {saving ? 'Saving…' : 'Save credentials'}
           </button>
         </div>
       </div>
@@ -1009,31 +990,51 @@ function CredentialsModal({ lp, onClose, onSave }: {
 // ============================================================
 // DELETE CONFIRMATION MODAL
 // ============================================================
-function DeleteModal({ lp, onClose, onConfirm }: {
-  lp: LPConfig;
+function DeleteModal({ lpId, lpName, onClose, onDeleted, showToast }: {
+  lpId: string; lpName: string;
   onClose: () => void;
-  onConfirm: () => void;
+  onDeleted: () => void;
+  showToast: (m: string, t?: 'ok' | 'warn') => void;
 }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true); setError(null);
+    try {
+      await lpAdminApi.remove(lpId);
+      showToast(`${lpName} deleted`);
+      onDeleted();
+      onClose();
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
       <div className="panel w-full max-w-md" style={{ backgroundColor: '#2a2a2c' }}>
         <div className="px-5 py-4 border-b border-border">
-          <h2 className="text-base font-semibold text-text-primary">Delete LP Configuration</h2>
+          <h2 className="text-base font-semibold text-text-primary">Delete LP configuration</h2>
         </div>
         <div className="p-5 space-y-3">
+          {error && <ErrorPanel title="Could not delete the LP" lines={[error]} onDismiss={() => setError(null)} />}
           <p className="text-sm text-text-secondary">
-            Permanently delete <span className="text-text-primary font-semibold">{lp.lp_name}</span> ({lp.lp_id})?
+            Permanently delete <span className="text-text-primary font-semibold">{lpName}</span>
+            <span className="font-mono text-text-muted"> ({lpId})</span>?
           </p>
           <p className="text-sm text-text-muted">
-            This will remove all configuration, credentials, and audit history. This action cannot be undone.
+            This removes the configuration and its stored credentials. It cannot be undone.
           </p>
         </div>
         <div className="px-5 py-4 border-t border-border flex items-center justify-end gap-2">
           <button onClick={onClose} className="btn btn-ghost text-xs border border-border px-4 py-1.5">Cancel</button>
-          <button onClick={onConfirm}
+          <button onClick={submit} disabled={busy}
             className="btn text-xs px-4 py-1.5"
-            style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
-            Delete LP
+            style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36', opacity: busy ? 0.5 : 1 }}>
+            {busy ? 'Deleting…' : 'Delete LP'}
           </button>
         </div>
       </div>
@@ -1044,103 +1045,116 @@ function DeleteModal({ lp, onClose, onConfirm }: {
 // ============================================================
 // CONNECTION TEST MODAL
 // ============================================================
-function TestModal({ lp, onClose }: {
-  lp: LPConfig;
-  onClose: () => void;
-}) {
-  const [status, setStatus] = useState<'testing' | 'done'>('testing');
-  const [result, setResult] = useState<TestResult | null>(null);
+
+/** SKIPPED is not a pass. A skipped session gets a grey dot and says so in
+ *  words, because an operator reading grey-as-green is how an untested session
+ *  gets mistaken for a working one. */
+function testSessionStyle(result?: LpTestSession['result']): { dot: string; label: string; color: string } {
+  switch (result) {
+    case 'OK':      return { dot: '#66e07a', label: 'Connected',  color: '#66e07a' };
+    case 'SKIPPED': return { dot: '#6a6a6a', label: 'Not tested', color: '#a0a0b0' };
+    case 'TIMEOUT': return { dot: '#e09a55', label: 'Timed out',  color: '#e09a55' };
+    case 'FAILED':  return { dot: '#ff5c5c', label: 'Failed',     color: '#ff5c5c' };
+    default:        return { dot: '#6a6a6a', label: 'No result',  color: '#a0a0b0' };
+  }
+}
+
+function TestSessionPanel({ title, session }: { title: string; session?: LpTestSession }) {
+  const s = testSessionStyle(session?.result);
+  return (
+    <div className="p-3 rounded space-y-1.5" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-text-secondary">{title}</span>
+        <span className="flex items-center gap-1.5" style={{ fontSize: 11, color: s.color }}>
+          {s.label}
+          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.dot }} />
+        </span>
+      </div>
+      {session?.message && (
+        <div className="text-text-muted" style={{ fontSize: 11 }}>{session.message}</div>
+      )}
+      {session?.error && (
+        <div style={{ fontSize: 11, color: '#ff5c5c' }}>{session.error}</div>
+      )}
+      <div className="flex items-center gap-3 flex-wrap text-text-muted" style={{ fontSize: 11 }}>
+        {session?.latency_ms != null && (
+          <span>Logon <span className="font-mono text-text-primary">{session.latency_ms} ms</span></span>
+        )}
+        {session?.server_comp_id && (
+          <span>Server <span className="font-mono text-text-primary">{session.server_comp_id}</span></span>
+        )}
+        {session?.error_code && (
+          <span className="font-mono" style={{ color: '#ff9a9a' }}>{session.error_code}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TestModal({ lpId, lpName, onClose }: { lpId: string; lpName: string; onClose: () => void }) {
+  const [status, setStatus] = useState<'testing' | 'done' | 'error'>('testing');
+  const [result, setResult] = useState<LpTestResult | null>(null);
   const [error, setError] = useState<string>('');
 
   useEffect(() => {
-    // Using mock for now — swap to lpAdminApi.test(lp.lp_id)
-    const timer = setTimeout(() => {
-      setResult({
-        lp_id: lp.lp_id, test_result: lp.credentials_set ? 'PASS' : 'FAIL',
-        trading_session: lp.credentials_set
-          ? { connected: true, logon_time_ms: 245, server_version: 'FIX.4.4' }
-          : { connected: false, error: 'Credentials not configured' },
-        md_session: lp.md_session
-          ? (lp.credentials_set
-            ? { connected: true, logon_time_ms: 198, server_version: 'FIX.4.4' }
-            : { connected: false, error: 'Credentials not configured' })
-          : undefined,
-        tested_at: new Date().toISOString(),
-      });
-      setStatus('done');
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [lp]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await lpAdminApi.test(lpId);
+        if (cancelled) return;
+        setResult(r);
+        setStatus('done');
+      } catch (e) {
+        if (cancelled) return;
+        setError(errMessage(e));
+        setStatus('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [lpId]);
 
-  const pass = result?.test_result === 'PASS';
+  const overall = result?.overall;
+  const overallStyle = overall === 'PASS'
+    ? { color: '#66e07a', backgroundColor: '#162a1c', border: '1px solid #2f6a3d' }
+    : overall === 'PARTIAL'
+      ? { color: '#e09a55', backgroundColor: '#2a2016', border: '1px solid #6a4a2f' }
+      : { color: '#ff5c5c', backgroundColor: '#2c1417', border: '1px solid #7a2f36' };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
       <div className="panel w-full max-w-md" style={{ backgroundColor: '#2a2a2c' }}>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <h2 className="text-base font-semibold text-text-primary">Connection Test — {lp.lp_name}</h2>
+          <h2 className="text-base font-semibold text-text-primary">Connection test — {lpName}</h2>
           <button onClick={onClose} className="p-1 hover:bg-surface-hover rounded"><IcoX /></button>
         </div>
         <div className="p-5">
           {status === 'testing' && (
             <div className="flex items-center gap-3 py-6 justify-center">
               <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#49b3b3 transparent transparent transparent' }} />
-              <span className="text-sm text-text-secondary">Testing FIX connectivity...</span>
+              <span className="text-sm text-text-secondary">Opening FIX sessions…</span>
             </div>
           )}
+
+          {status === 'error' && <ErrorPanel title="The test could not run" lines={[error]} />}
+
           {status === 'done' && result && (
             <div className="space-y-4">
-              {/* Overall result */}
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-sm font-semibold"
-                  style={pass
-                    ? { color: '#66e07a', backgroundColor: '#162a1c', border: '1px solid #2f6a3d' }
-                    : { color: '#ff5c5c', backgroundColor: '#2c1417', border: '1px solid #7a2f36' }}>
-                  {pass ? <IcoCheck /> : <IcoX size={12} />}
-                  {pass ? 'PASS' : 'FAIL'}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-sm font-semibold" style={overallStyle}>
+                  {overall === 'PASS' ? <IcoCheck /> : <IcoX size={12} />}
+                  {overall}
                 </span>
-                <span className="text-xs text-text-muted">{fmtDate(result.tested_at)}</span>
+                <span className="text-xs text-text-muted">{fmtTs(result.tested_at)}</span>
+                <span className="font-mono text-text-muted" style={{ fontSize: 11 }}>{result.test_scope}</span>
               </div>
 
-              {/* Trading session */}
-              <div className="p-3 rounded space-y-1" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-text-secondary">Trading Session</span>
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: result.trading_session.connected ? '#66e07a' : '#ff5c5c' }} />
-                </div>
-                {result.trading_session.connected ? (
-                  <div className="text-xs text-text-muted">
-                    Logon: <span className="text-text-primary font-mono">{result.trading_session.logon_time_ms}ms</span>
-                    {result.trading_session.server_version && (
-                      <> · Version: <span className="text-text-primary font-mono">{result.trading_session.server_version}</span></>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-xs" style={{ color: '#ff5c5c' }}>{result.trading_session.error}</div>
-                )}
-              </div>
+              <TestSessionPanel title="Trading session" session={result.trading_session} />
+              <TestSessionPanel title="Market data session" session={result.md_session} />
 
-              {/* MD session */}
-              {result.md_session && (
-                <div className="p-3 rounded space-y-1" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-text-secondary">Market Data Session</span>
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: result.md_session.connected ? '#66e07a' : '#ff5c5c' }} />
-                  </div>
-                  {result.md_session.connected ? (
-                    <div className="text-xs text-text-muted">
-                      Logon: <span className="text-text-primary font-mono">{result.md_session.logon_time_ms}ms</span>
-                    </div>
-                  ) : (
-                    <div className="text-xs" style={{ color: '#ff5c5c' }}>{result.md_session.error}</div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          {error && (
-            <div className="p-3 rounded text-xs" style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
-              {error}
+              <div className="text-text-muted leading-relaxed" style={{ fontSize: 11 }}>
+                The test connects to the configuration stored on the server, not to anything unsaved on screen.
+                Save first, then test.
+              </div>
             </div>
           )}
         </div>
@@ -1155,526 +1169,629 @@ function TestModal({ lp, onClose }: {
 // ============================================================
 // LP LIST VIEW
 // ============================================================
-function LPListView({ lps, healthMap, onAdd, onEdit, onDelete, onStart, onStop, onTest, onCredentials, onDetail }: {
-  lps: LPConfig[];
-  healthMap: Record<string, LPHealth>;
+function LPListView({ lps, healthMap, loading, error, busyId, onAdd, onReload, onDelete, onStart, onStop, onTest, onCredentials, onDetail }: {
+  lps: LpListRow[];
+  healthMap: Record<string, LpHealthSummaryRow>;
+  loading: boolean;
+  error: string | null;
+  busyId: string | null;
   onAdd: () => void;
-  onEdit: (lp: LPConfig) => void;
-  onDelete: (lp: LPConfig) => void;
-  onStart: (lp: LPConfig) => void;
-  onStop: (lp: LPConfig) => void;
-  onTest: (lp: LPConfig) => void;
-  onCredentials: (lp: LPConfig) => void;
-  onDetail: (lp: LPConfig) => void;
+  onReload: () => void;
+  onDelete: (lp: LpListRow) => void;
+  onStart: (lp: LpListRow) => void;
+  onStop: (lp: LpListRow) => void;
+  onTest: (lp: LpListRow) => void;
+  onCredentials: (lp: LpListRow) => void;
+  onDetail: (lp: LpListRow) => void;
 }) {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('lp_admin', 'EDIT');
+
   return (
     <div className="space-y-4">
-      {/* Add button row */}
-      {canEdit && (
-      <div className="flex items-center justify-end">
-        <button onClick={onAdd}
-          className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
-          style={{ backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }}>
-          <IcoPlus /> Add LP
-        </button>
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-text-muted">
+          {loading ? 'Loading providers…' : `${lps.length} configured`}
+        </span>
+        <div className="flex items-center gap-2">
+          <button onClick={onReload} className="btn btn-ghost text-xs border border-border px-3 py-1.5 flex items-center gap-1.5">
+            <IcoRefresh /> Refresh
+          </button>
+          <button onClick={onAdd} disabled={!canEdit}
+            className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
+            style={canEdit
+              ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
+              : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
+            <IcoPlus /> Add LP
+          </button>
+        </div>
       </div>
+
+      {error && <ErrorPanel title="Could not load providers" lines={[error]} />}
+
+      {!loading && !error && lps.length === 0 && (
+        <div className="panel p-8 text-center space-y-2">
+          <div className="text-sm text-text-primary">No liquidity providers configured</div>
+          <div className="text-xs text-text-secondary">Add one to start routing hedges to an external venue.</div>
+        </div>
       )}
 
-      {/* Cards grid */}
-      {lps.length === 0 ? (
-        <div className="panel p-12 flex flex-col items-center justify-center">
-          <span className="text-text-muted text-sm mb-2">No liquidity providers configured</span>
-          {canEdit && (
-          <button onClick={onAdd}
-            className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
-            style={{ backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }}>
-            <IcoPlus /> Add your first LP
-          </button>
-          )}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {lps.map(lp => (
-            <LPCard key={lp.lp_id} lp={lp} health={healthMap[lp.lp_id]}
-              onEdit={() => onEdit(lp)}
-              onDelete={() => onDelete(lp)}
-              onStart={() => onStart(lp)}
-              onStop={() => onStop(lp)}
-              onTest={() => onTest(lp)}
-              onCredentials={() => onCredentials(lp)}
-              onDetail={() => onDetail(lp)} />
-          ))}
-        </div>
-      )}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {lps.map(lp => (
+          <LPCard key={lp.lp_id} lp={lp} health={healthMap[lp.lp_id]} busy={busyId === lp.lp_id}
+            onDetail={() => onDetail(lp)}
+            onDelete={() => onDelete(lp)}
+            onStart={() => onStart(lp)}
+            onStop={() => onStop(lp)}
+            onTest={() => onTest(lp)}
+            onCredentials={() => onCredentials(lp)} />
+        ))}
+      </div>
     </div>
   );
 }
 
 // ============================================================
-// DETAIL VIEW — Overview + Tabs
+// OVERVIEW TAB
 // ============================================================
-function DetailView({ lp, health, onBack, onCredentials, onStart, onStop, showToast }: {
-  lp: LPConfig;
-  health?: LPHealth;
-  onBack: () => void;
-  onCredentials: () => void;
-  onStart: () => void;
-  onStop: () => void;
-  showToast: (msg: string) => void;
-}) {
-  const [tab, setTab] = useState<DetailTab>('overview');
-  const [instruments, setInstruments] = useState<Instrument[]>([]);
-  const [positions, setPositions] = useState<LPPosition[]>([]);
-  const [orders, setOrders] = useState<LPOrder[]>([]);
-  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
-  const [routes, setRoutes] = useState<unknown>(null);
-  const [loading, setLoading] = useState(false);
+function OverviewTab({ config, health }: { config: LpConfig; health?: LpHealthDetail }) {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="panel p-4">
+        <SectionTitle>Session health</SectionTitle>
+        {!health ? (
+          <div className="text-xs text-text-muted">No health data returned for this LP.</div>
+        ) : (
+          <div className="space-y-1">
+            <Row label="Overall">
+              <span style={{ color: HEALTH_CFG[health.health]?.color }}>{health.health}</span>
+            </Row>
+            <Row label="State">{health.state}</Row>
+            <Row label="Trading">
+              <span style={{ color: SESSION_CFG[health.trading_session?.state] }}>
+                {health.trading_session?.state}
+              </span>
+              <span className="font-mono text-text-muted"> · {health.trading_session?.host}:{health.trading_session?.port}</span>
+            </Row>
+            <Row label="Market data">
+              {health.md_session ? (
+                <>
+                  <span style={{ color: SESSION_CFG[health.md_session.state] }}>{health.md_session.state}</span>
+                  <span className="font-mono text-text-muted"> · {health.md_session.host}:{health.md_session.port}</span>
+                </>
+              ) : <span className="text-text-muted">Not configured</span>}
+            </Row>
+            <Row label="Uptime">{fmtUptime(health.uptime_seconds)}</Row>
+            <Row label="Last connected">{fmtTs(health.last_connected_at)}</Row>
+            <Row label="Average latency">
+              {health.avg_latency_ms != null ? `${health.avg_latency_ms} ms` : <span className="text-text-muted">No traffic yet</span>}
+            </Row>
+            <Row label="Fill rate">
+              {health.fill_rate_pct != null ? `${health.fill_rate_pct}%` : <span className="text-text-muted">No traffic yet</span>}
+            </Row>
+            <Row label="Reject rate">
+              {health.reject_rate_pct != null ? `${health.reject_rate_pct}%` : <span className="text-text-muted">No traffic yet</span>}
+            </Row>
+            <Row label="Errors (24h)">{health.errors_24h_count}</Row>
+          </div>
+        )}
+      </div>
 
-  const isLive = isActive(lp.state);
+      <div className="space-y-4">
+        <div className="panel p-4">
+          <SectionTitle>Record</SectionTitle>
+          <div className="space-y-1">
+            <Row label="LP ID"><span className="font-mono">{config.lp_id}</span></Row>
+            <Row label="Provider">{PROVIDER_LABELS[config.provider_type] ?? config.provider_type}</Row>
+            <Row label="Environment">{config.environment}</Row>
+            <Row label="Enabled">{config.enabled ? 'Yes' : 'No'}</Row>
+            <Row label="Connect on start">{config.auto_connect ? 'Yes' : 'No'}</Row>
+            <Row label="Created">{fmtTs(config.created_at)} <span className="text-text-muted">by {config.created_by || '—'}</span></Row>
+            <Row label="Last updated">
+              {config.updated_at === config.created_at
+                ? <span className="text-text-muted">Never modified since creation</span>
+                : <>{fmtTs(config.updated_at)} <span className="text-text-muted">by {config.updated_by || '—'}</span></>}
+            </Row>
+          </div>
+        </div>
+
+        {!!health?.warnings?.length && (
+          <div className="panel p-4">
+            <SectionTitle>Warnings</SectionTitle>
+            <div className="space-y-2">
+              {health.warnings.map((w, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span style={{ color: '#e09a55', marginTop: 1 }}><IcoWarning size={11} /></span>
+                  <div>
+                    <div className="font-mono" style={{ fontSize: 11, color: '#e09a55' }}>{w.code}</div>
+                    <div className="text-xs text-text-secondary">{w.message}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CONFIGURATION TAB — the editable form
+// ============================================================
+function ConfigTab({ config, live, onSaved, showToast }: {
+  config: LpConfig;
+  live: boolean;
+  onSaved: (fresh: LpConfig) => void;
+  showToast: (m: string, t?: 'ok' | 'warn') => void;
+}) {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('lp_admin', 'EDIT');
 
-  // Load tab data
-  useEffect(() => {
-    setLoading(true);
-    const timer = setTimeout(() => {
-      switch (tab) {
-        case 'instruments':
-          setInstruments(MOCK_INSTRUMENTS);
-          break;
-        case 'positions':
-          setPositions(MOCK_POSITIONS);
-          break;
-        case 'orders':
-          setOrders(MOCK_ORDERS);
-          break;
-        case 'audit':
-          setAuditEntries(MOCK_AUDIT);
-          break;
-      }
-      setLoading(false);
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [tab, lp.lp_id]);
+  const stored = useMemo(() => configToForm(config), [config]);
+  const [form, setForm] = useState<ConfigForm>(stored);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dropped, setDropped] = useState<string[]>([]);
+  const [receipt, setReceipt] = useState<string[] | null>(null);
+  const [needsReload, setNeedsReload] = useState(false);
+  const [reloading, setReloading] = useState(false);
 
-  const tabs: { id: DetailTab; label: string; live?: boolean }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'instruments', label: 'Instruments', live: true },
-    { id: 'positions', label: 'Positions', live: true },
-    { id: 'orders', label: 'Orders', live: true },
-    { id: 'routes', label: 'Routes', live: true },
-    { id: 'config', label: 'Configuration' },
-    { id: 'audit', label: 'Audit Log' },
+  // Re-baseline whenever the record is refetched from the server.
+  useEffect(() => { setForm(stored); }, [stored]);
+
+  const dirty = !sameForm(form, stored);
+  const upd = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) => setForm(p => ({ ...p, [k]: v }));
+  const updPs = (k: string, v: string) => setForm(p => ({ ...p, ps: { ...p.ps, [k]: v } }));
+
+  const save = async () => {
+    const { body, intended } = buildUpdate(config, form);
+    if (!intended.length) { showToast('Nothing to save'); return; }
+
+    setSaving(true); setError(null); setDropped([]); setReceipt(null);
+    try {
+      const res = await lpAdminApi.update(config.lp_id, body);
+      const fresh = await lpAdminApi.get(config.lp_id);
+      const missing = auditWrite(fresh, intended);
+
+      setReceipt(res.changed_fields ?? []);
+      onSaved(fresh);
+
+      if (missing.length) {
+        setDropped(missing);
+        showToast('Saved with problems — some fields were not stored', 'warn');
+      } else {
+        showToast(`Saved. ${intended.length} field${intended.length === 1 ? '' : 's'} updated.`);
+        const touchedConnection = intended.some(i =>
+          i.path.startsWith('trading_session') || i.path.startsWith('md_session') || i.path.startsWith('reconnection'));
+        if (live && touchedConnection) setNeedsReload(true);
+      }
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const doReload = async () => {
+    setReloading(true);
+    try {
+      await lpAdminApi.reload(config.lp_id);
+      setNeedsReload(false);
+      showToast('LP reloaded — the running session now uses the saved configuration');
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
+      setReloading(false);
+    }
+  };
+
+  const psKeys = Object.keys(form.ps).sort();
+
+  return (
+    <div className="space-y-4">
+      {/* Save bar */}
+      <div className="panel px-4 py-3 flex items-center justify-between gap-4 flex-wrap sticky top-0 z-10">
+        <div className="flex items-center gap-2 flex-wrap">
+          {dirty ? (
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded" style={{ fontSize: 11, color: DIRTY, backgroundColor: '#2a2216', border: `1px solid ${DIRTY}55` }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: DIRTY }} />
+              Unsaved changes
+            </span>
+          ) : (
+            <span className="text-text-muted" style={{ fontSize: 11 }}>
+              Showing the configuration stored on the server.
+            </span>
+          )}
+          {!canEdit && (
+            <span className="text-text-muted" style={{ fontSize: 11 }}>You have read-only access to LP configuration.</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setForm(stored)} disabled={!dirty || saving}
+            className="btn btn-ghost text-xs border border-border px-3 py-1.5"
+            style={{ opacity: dirty && !saving ? 1 : 0.4 }}>
+            Discard changes
+          </button>
+          <button onClick={save} disabled={!dirty || saving || !canEdit}
+            className="btn text-xs px-4 py-1.5"
+            style={dirty && !saving && canEdit
+              ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
+              : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+
+      {error && <ErrorPanel title="The save did not go through" lines={[error]} onDismiss={() => setError(null)} />}
+
+      {!!dropped.length && (
+        <ErrorPanel
+          title="The server did not store every change"
+          lines={dropped}
+          onDismiss={() => setDropped([])} />
+      )}
+
+      {needsReload && (
+        <div className="p-3 rounded flex items-center justify-between gap-4 flex-wrap"
+          style={{ backgroundColor: '#2a2016', border: '1px solid #6a4a2f' }}>
+          <span className="text-xs" style={{ color: '#e09a55' }}>
+            Saved. The running session is still using the previous connection settings until the LP is reloaded.
+          </span>
+          <button onClick={doReload} disabled={reloading}
+            className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
+            style={{ backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}>
+            <IcoRefresh /> {reloading ? 'Reloading…' : 'Reload LP now'}
+          </button>
+        </div>
+      )}
+
+      {receipt && !dropped.length && (
+        <div className="p-2.5 rounded" style={{ backgroundColor: '#162a1c', border: '1px solid #2f6a3d' }}>
+          <div className="flex items-center gap-1.5" style={{ fontSize: 11, color: '#66e07a' }}>
+            <IcoCheck /> Stored: <span className="font-mono">{receipt.length ? receipt.join(', ') : 'no fields reported'}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Identity */}
+      <div className="panel p-4">
+        <SectionTitle>Identity</SectionTitle>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Display name" value={form.lp_name} stored={stored.lp_name} disabled={!canEdit}
+            onChange={v => upd('lp_name', v)} />
+          <SelectField label="Environment" value={form.environment} stored={stored.environment}
+            options={Array.from(new Set([...ENVIRONMENTS, form.environment]))}
+            onChange={v => upd('environment', v)} />
+          <div>
+            <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>LP ID</label>
+            <input className="input w-full text-sm font-mono" value={config.lp_id} disabled
+              style={{ opacity: 0.5, cursor: 'not-allowed' }} />
+            <div className="text-text-muted mt-1" style={{ fontSize: 10 }}>Immutable. Not sent on save.</div>
+          </div>
+          <div>
+            <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Provider</label>
+            <input className="input w-full text-sm" value={PROVIDER_LABELS[config.provider_type] ?? config.provider_type} disabled
+              style={{ opacity: 0.5, cursor: 'not-allowed' }} />
+            <div className="text-text-muted mt-1" style={{ fontSize: 10 }}>Immutable. Not sent on save.</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-6 mt-3 flex-wrap">
+          <label className="flex items-center gap-2 text-xs text-text-secondary">
+            <Toggle checked={form.enabled} onChange={v => upd('enabled', v)} disabled={!canEdit} />
+            Enabled {form.enabled !== stored.enabled && <span style={{ color: DIRTY, fontSize: 10 }}>edited</span>}
+          </label>
+          <label className="flex items-center gap-2 text-xs text-text-secondary">
+            <Toggle checked={form.auto_connect} onChange={v => upd('auto_connect', v)} disabled={!canEdit} />
+            Connect on service start {form.auto_connect !== stored.auto_connect && <span style={{ color: DIRTY, fontSize: 10 }}>edited</span>}
+          </label>
+        </div>
+        <div className="mt-3">
+          <Field label="Notes" value={form.notes} stored={stored.notes} disabled={!canEdit}
+            onChange={v => upd('notes', v)} />
+        </div>
+      </div>
+
+      {/* Trading session */}
+      <div className="panel p-4">
+        <SectionTitle>Trading session</SectionTitle>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Field label="Host" value={form.t_host} stored={stored.t_host} mono disabled={!canEdit} onChange={v => upd('t_host', v)} />
+          <Field label="Port" value={form.t_port} stored={stored.t_port} mono disabled={!canEdit} onChange={v => upd('t_port', v.replace(/\D/g, ''))} />
+          <SelectField label="FIX version" value={form.t_fix} stored={stored.t_fix}
+            options={Array.from(new Set([...FIX_VERSIONS, form.t_fix]))} onChange={v => upd('t_fix', v)} />
+          <Field label="SenderCompID" value={form.t_sender} stored={stored.t_sender} mono disabled={!canEdit} onChange={v => upd('t_sender', v)} />
+          <Field label="TargetCompID" value={form.t_target} stored={stored.t_target} mono disabled={!canEdit} onChange={v => upd('t_target', v)} />
+          <Field label="Heartbeat (s)" value={form.t_hb} stored={stored.t_hb} mono disabled={!canEdit} onChange={v => upd('t_hb', v.replace(/\D/g, ''))} />
+        </div>
+      </div>
+
+      {/* Market data session */}
+      <div className="panel p-4">
+        <SectionTitle right={
+          !config.md_session && canEdit
+            ? <label className="flex items-center gap-2 text-xs text-text-secondary">
+                <Toggle checked={form.md_present} onChange={v => upd('md_present', v)} /> Add session
+              </label>
+            : undefined
+        }>
+          Market data session
+        </SectionTitle>
+        {!config.md_session && !form.md_present ? (
+          <div className="text-xs text-text-muted">
+            This LP has no market data session. Turn on "Add session" to configure one.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Field label="Host" value={form.m_host} stored={stored.m_host} mono disabled={!canEdit} onChange={v => upd('m_host', v)} />
+            <Field label="Port" value={form.m_port} stored={stored.m_port} mono disabled={!canEdit} onChange={v => upd('m_port', v.replace(/\D/g, ''))} />
+            <SelectField label="FIX version" value={form.m_fix} stored={stored.m_fix}
+              options={Array.from(new Set([...FIX_VERSIONS, form.m_fix]))} onChange={v => upd('m_fix', v)} />
+            <Field label="SenderCompID" value={form.m_sender} stored={stored.m_sender} mono disabled={!canEdit} onChange={v => upd('m_sender', v)} />
+            <Field label="TargetCompID" value={form.m_target} stored={stored.m_target} mono disabled={!canEdit} onChange={v => upd('m_target', v)} />
+            <Field label="Heartbeat (s)" value={form.m_hb} stored={stored.m_hb} mono disabled={!canEdit} onChange={v => upd('m_hb', v.replace(/\D/g, ''))} />
+            <Field label="Book depth" value={form.m_depth} stored={stored.m_depth} mono disabled={!canEdit} onChange={v => upd('m_depth', v.replace(/\D/g, ''))} />
+          </div>
+        )}
+      </div>
+
+      {/* Reconnection */}
+      <div className="panel p-4">
+        <SectionTitle>Reconnection</SectionTitle>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+          <label className="flex items-center gap-2 text-xs text-text-secondary pb-2">
+            <Toggle checked={form.r_enabled} onChange={v => upd('r_enabled', v)} disabled={!canEdit} />
+            Reconnect automatically {form.r_enabled !== stored.r_enabled && <span style={{ color: DIRTY, fontSize: 10 }}>edited</span>}
+          </label>
+          <Field label="Interval (s)" value={form.r_interval} stored={stored.r_interval} mono disabled={!canEdit}
+            onChange={v => upd('r_interval', v.replace(/\D/g, ''))} />
+          <Field label="Max attempts" value={form.r_max} stored={stored.r_max} mono disabled={!canEdit}
+            onChange={v => upd('r_max', v.replace(/\D/g, ''))} />
+        </div>
+      </div>
+
+      {/* Provider settings */}
+      <div className="panel p-4">
+        <SectionTitle>Provider settings</SectionTitle>
+        {psKeys.length === 0 ? (
+          <div className="text-xs text-text-muted">This provider has no additional settings stored.</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {psKeys.map(k => (
+                <Field key={k} label={k} value={form.ps[k]} stored={stored.ps[k] ?? ''} mono disabled={!canEdit}
+                  onChange={v => updPs(k, v)} />
+              ))}
+            </div>
+            <div className="text-text-muted mt-3 leading-relaxed" style={{ fontSize: 10 }}>
+              The backend replaces this whole block on save, so every key above is sent back together —
+              editing one does not drop the others.
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Credentials state */}
+      <div className="panel p-4">
+        <SectionTitle>Credentials</SectionTitle>
+        <div className="space-y-1">
+          <Row label="Trading password">
+            {config.credentials?.trading_password_set_at
+              ? <span style={{ color: '#66e07a' }}>Set {fmtTs(config.credentials.trading_password_set_at)}</span>
+              : <span style={{ color: '#e09a55' }}>Never set</span>}
+          </Row>
+          <Row label="Market data password">
+            {config.credentials?.md_password_set_at
+              ? <span style={{ color: '#66e07a' }}>Set {fmtTs(config.credentials.md_password_set_at)}</span>
+              : <span style={{ color: '#e09a55' }}>Never set</span>}
+          </Row>
+          <Row label="TLS">{config.credentials?.tls_configured ? 'Configured' : 'Not configured'}</Row>
+        </div>
+        <div className="text-text-muted mt-3" style={{ fontSize: 10 }}>
+          Passwords are written through a separate endpoint and are never part of this form.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DETAIL VIEW
+// ============================================================
+function DetailView({ lpId, onBack, onChanged, showToast }: {
+  lpId: string;
+  onBack: () => void;
+  onChanged: () => void;
+  showToast: (m: string, t?: 'ok' | 'warn') => void;
+}) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('lp_admin', 'EDIT');
+
+  const [tab, setTab] = useState<DetailTab>('overview');
+  const [config, setConfig] = useState<LpConfig | null>(null);
+  const [health, setHealth] = useState<LpHealthDetail | undefined>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [credOpen, setCredOpen] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
+
+  const loadConfig = useCallback(async () => {
+    try {
+      const c = await lpAdminApi.get(lpId);
+      setConfig(c);
+      setError(null);
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [lpId]);
+
+  const loadHealth = useCallback(async () => {
+    try {
+      setHealth(await lpAdminApi.healthDetail(lpId));
+    } catch {
+      setHealth(undefined);
+    }
+  }, [lpId]);
+
+  useEffect(() => { setLoading(true); loadConfig(); loadHealth(); }, [loadConfig, loadHealth]);
+
+  useEffect(() => {
+    const t = setInterval(loadHealth, HEALTH_POLL_MS);
+    return () => clearInterval(t);
+  }, [loadHealth]);
+
+  const live = isLiveState(health?.state);
+
+  const startStop = async (action: 'start' | 'stop') => {
+    if (!config) return;
+    setBusy(true);
+    try {
+      if (action === 'start') await lpOpsApi.start(config.lp_id);
+      else await lpOpsApi.stop(config.lp_id);
+      showToast(action === 'start' ? `${config.lp_name} starting…` : `${config.lp_name} stopped`);
+      await loadHealth();
+      onChanged();
+    } catch (e) {
+      showToast(errMessage(e), 'warn');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="panel p-8 text-center text-sm text-text-secondary">Loading configuration…</div>;
+  }
+
+  if (error || !config) {
+    return (
+      <div className="space-y-4">
+        <button onClick={onBack} className="btn btn-ghost text-xs border border-border px-3 py-1.5 flex items-center gap-1.5">
+          <IcoArrowLeft /> Back to providers
+        </button>
+        <ErrorPanel title="Could not load this LP" lines={[error ?? 'No configuration returned']} />
+      </div>
+    );
+  }
+
+  const tabs: { id: DetailTab; label: string }[] = [
+    { id: 'overview',    label: 'Overview' },
+    { id: 'config',      label: 'Configuration' },
+    { id: 'instruments', label: 'Instruments' },
+    { id: 'positions',   label: 'Positions' },
+    { id: 'orders',      label: 'Orders' },
+    { id: 'routes',      label: 'Routes' },
+    { id: 'audit',       label: 'Audit log' },
   ];
 
   return (
-    <div className="space-y-0">
-      {/* Back + header */}
-      <div className="flex items-center gap-3 mb-4">
-        <button onClick={onBack} className="p-1 hover:bg-surface-hover rounded text-text-muted hover:text-text-primary">
-          <IcoArrowLeft />
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-text-primary truncate">{lp.lp_name}</h2>
-            <ProviderBadge type={lp.provider_type} />
-            <StateBadge state={lp.state} />
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-start gap-3">
+          <button onClick={onBack} className="btn btn-ghost text-xs border border-border px-2.5 py-1.5 mt-0.5">
+            <IcoArrowLeft />
+          </button>
+          <div>
+            <h2 className="text-lg font-semibold text-text-primary">{config.lp_name}</h2>
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+              <ProviderBadge type={config.provider_type} />
+              <EnvBadge env={config.environment} />
+              <StateBadge state={health?.state} />
+              <span className="font-mono text-text-muted" style={{ fontSize: 11 }}>{config.lp_id}</span>
+            </div>
           </div>
-          <span className="text-xs font-mono text-text-muted">{lp.lp_id}</span>
         </div>
-        {canEdit && (
-        <div className="flex items-center gap-2">
-          {!lp.credentials_set && (
-            <button onClick={onCredentials}
-              className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-              style={{ backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }}>
-              <IcoKey /> Set Credentials
-            </button>
-          )}
-          {isLive ? (
-            <button onClick={onStop}
-              className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-              style={{ backgroundColor: '#2c1417', color: '#ff5c5c', border: '1px solid #7a2f36' }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setCredOpen(true)} disabled={!canEdit}
+            className="btn btn-ghost text-xs border border-border px-3 py-1.5 flex items-center gap-1.5"
+            style={{ opacity: canEdit ? 1 : 0.4 }}>
+            <IcoKey /> Credentials
+          </button>
+          <button onClick={() => setTestOpen(true)} disabled={!canEdit}
+            className="btn btn-ghost text-xs border border-border px-3 py-1.5 flex items-center gap-1.5"
+            style={{ opacity: canEdit ? 1 : 0.4 }}>
+            <IcoSignal /> Test connection
+          </button>
+          {live ? (
+            <button onClick={() => startStop('stop')} disabled={!canEdit || busy}
+              className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
+              style={{ backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f', opacity: canEdit && !busy ? 1 : 0.4 }}>
               <IcoStop /> Stop
             </button>
           ) : (
-            <button onClick={onStart} disabled={!lp.credentials_set}
-              className="btn text-xs px-2.5 py-1 flex items-center gap-1"
-              style={!lp.credentials_set
-                ? { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }
-                : { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+            <button onClick={() => startStop('start')} disabled={!canEdit || busy}
+              className="btn text-xs px-3 py-1.5 flex items-center gap-1.5"
+              style={{ backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d', opacity: canEdit && !busy ? 1 : 0.4 }}>
               <IcoPlay /> Start
             </button>
           )}
         </div>
-        )}
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-border flex mb-4">
+      <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
         {tabs.map(t => (
-          <button key={t.id}
-            onClick={() => setTab(t.id)}
-            disabled={t.live && !isLive}
-            className={clsx(
-              'px-4 py-2.5 text-sm font-medium transition-colors border-b-2',
-              tab === t.id
-                ? 'text-[#49b3b3] border-[#49b3b3]'
-                : t.live && !isLive
-                  ? 'text-[#555] border-transparent cursor-not-allowed'
-                  : 'text-text-secondary border-transparent hover:text-text-primary'
-            )}>
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={clsx('px-3 py-2 text-xs whitespace-nowrap border-b-2 -mb-px transition-colors')}
+            style={tab === t.id
+              ? { borderColor: '#49b3b3', color: '#49b3b3' }
+              : { borderColor: 'transparent', color: '#a0a0b0' }}>
             {t.label}
           </button>
         ))}
       </div>
 
-      {/* Tab content */}
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#49b3b3 transparent transparent transparent' }} />
-        </div>
-      ) : (
-        <>
-          {tab === 'overview' && <OverviewTab lp={lp} health={health} />}
-          {tab === 'instruments' && <InstrumentsTab instruments={instruments} />}
-          {tab === 'positions' && <PositionsTab positions={positions} />}
-          {tab === 'orders' && <OrdersTab orders={orders} />}
-          {tab === 'routes' && <RoutesTab lp={lp} />}
-          {tab === 'config' && <ConfigTab lp={lp} />}
-          {tab === 'audit' && <AuditTab entries={auditEntries} />}
-        </>
-      )}
-    </div>
-  );
-}
+      {tab === 'overview' && <OverviewTab config={config} health={health} />}
 
-// ── Overview Tab ─────────────────────────────────────────────
-function OverviewTab({ lp, health }: { lp: LPConfig; health?: LPHealth }) {
-  return (
-    <div className="grid grid-cols-2 gap-4">
-      {/* Health panel */}
-      <div className="panel p-4 space-y-3">
-        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Health</h3>
-        {health ? (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold"
-                style={{
-                  color: HEALTH_CFG[health.overall_health].color,
-                  backgroundColor: HEALTH_CFG[health.overall_health].bg,
-                  border: `1px solid ${HEALTH_CFG[health.overall_health].border}`,
-                }}>
-                {health.overall_health}
-              </span>
-              <span className="text-xs text-text-muted">Up {fmtUptime(health.uptime_seconds)}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="p-2 rounded" style={{ backgroundColor: '#232225' }}>
-                <div className="text-lg font-mono text-text-primary">{health.instruments_loaded}</div>
-                <div className="text-[10px] text-text-muted">Instruments</div>
-              </div>
-              <div className="p-2 rounded" style={{ backgroundColor: '#232225' }}>
-                <div className="text-lg font-mono text-text-primary">{health.open_positions}</div>
-                <div className="text-[10px] text-text-muted">Positions</div>
-              </div>
-              <div className="p-2 rounded" style={{ backgroundColor: '#232225' }}>
-                <div className="text-lg font-mono text-text-primary">{health.active_orders}</div>
-                <div className="text-[10px] text-text-muted">Orders</div>
-              </div>
-            </div>
-            {health.warnings.length > 0 && (
-              <div className="space-y-1">
-                {health.warnings.map((w, i) => (
-                  <div key={i} className="flex items-start gap-1.5 p-2 rounded text-xs"
-                    style={{ backgroundColor: '#2a2016', border: '1px solid #6a4a2f', color: '#e09a55' }}>
-                    <IcoWarning /> {w.message}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <span className="text-sm text-text-muted">LP not running — no health data</span>
-        )}
-      </div>
-
-      {/* Trading Session panel */}
-      <div className="panel p-4 space-y-3">
-        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Trading Session</h3>
-        <div className="space-y-2 text-xs">
-          <Row label="State"><SessionDot state={lp.trading_session.state} label="" /></Row>
-          <Row label="Host"><span className="font-mono">{lp.trading_session.host}:{lp.trading_session.port}</span></Row>
-          <Row label="SenderCompID"><span className="font-mono">{lp.trading_session.sender_comp_id}</span></Row>
-          <Row label="TargetCompID"><span className="font-mono">{lp.trading_session.target_comp_id}</span></Row>
-          {health && (
-            <>
-              <Row label="Latency"><span className="font-mono">{health.trading_session.latency_ms}ms</span></Row>
-              <Row label="Sent"><span className="font-mono">{health.trading_session.messages_sent.toLocaleString()}</span></Row>
-              <Row label="Received"><span className="font-mono">{health.trading_session.messages_received.toLocaleString()}</span></Row>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* MD Session panel */}
-      {lp.md_session && (
-        <div className="panel p-4 space-y-3">
-          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Market Data Session</h3>
-          <div className="space-y-2 text-xs">
-            <Row label="State"><SessionDot state={lp.md_session.state} label="" /></Row>
-            <Row label="Host"><span className="font-mono">{lp.md_session.host}:{lp.md_session.port}</span></Row>
-            <Row label="SenderCompID"><span className="font-mono">{lp.md_session.sender_comp_id}</span></Row>
-            <Row label="TargetCompID"><span className="font-mono">{lp.md_session.target_comp_id}</span></Row>
-            {health?.md_session && (
-              <>
-                <Row label="Subscriptions"><span className="font-mono">{health.md_session.subscriptions_active}</span></Row>
-                <Row label="Updates/sec"><span className="font-mono">{health.md_session.updates_per_second}</span></Row>
-              </>
-            )}
-          </div>
-        </div>
+      {tab === 'config' && (
+        <ConfigTab config={config} live={live} showToast={showToast}
+          onSaved={fresh => { setConfig(fresh); onChanged(); loadHealth(); }} />
       )}
 
-      {/* Meta panel */}
-      <div className="panel p-4 space-y-3">
-        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Configuration</h3>
-        <div className="space-y-2 text-xs">
-          <Row label="Account"><span className="font-mono">{lp.trading_config.account}</span></Row>
-          <Row label="Default TIF">{lp.trading_config.default_tif}</Row>
-          {lp.trading_config.security_exchange && <Row label="Exchange"><span className="font-mono">{lp.trading_config.security_exchange}</span></Row>}
-          <Row label="Credentials"><span className="inline-flex items-center gap-1" style={{ color: lp.credentials_set ? '#66e07a' : '#e09a55' }}>
-            {lp.credentials_set ? <><IcoCheck /> Configured</> : <><IcoWarning /> Not set</>}
-          </span></Row>
-          <Row label="Created">{fmtDate(lp.created_at)}</Row>
-          <Row label="Updated">{fmtDate(lp.updated_at)}</Row>
-        </div>
-      </div>
-    </div>
-  );
-}
+      {tab === 'instruments' && (
+        <EmptyTab
+          title="Instruments are not wired to the server yet"
+          detail="This tab previously rendered sample rows that were indistinguishable from live data. They have been removed rather than left in place. The endpoint exists and is proxied; the table is the outstanding work."
+          endpoint="GET /api/v1/fix/lp/{lp_id}/instruments" />
+      )}
+      {tab === 'positions' && (
+        <EmptyTab
+          title="Positions are not wired to the server yet"
+          detail="Sample rows have been removed. The endpoint exists and is proxied; the table is the outstanding work."
+          endpoint="GET /api/v1/fix/lp/{lp_id}/positions" />
+      )}
+      {tab === 'orders' && (
+        <EmptyTab
+          title="Orders are not wired to the server yet"
+          detail="Sample rows have been removed. The endpoint exists and is proxied; the blotter is the outstanding work."
+          endpoint="GET /api/v1/fix/lp/{lp_id}/orders" />
+      )}
+      {tab === 'routes' && (
+        <EmptyTab
+          title="Routes are not wired to the server yet"
+          detail="The endpoint exists and is proxied; the table is the outstanding work."
+          endpoint="GET /api/v1/fix/lp/{lp_id}/routes" />
+      )}
+      {tab === 'audit' && (
+        <EmptyTab
+          title="The LP audit endpoint has been retired"
+          detail="The old per-LP audit route is now a stub that always returns an empty array. Configuration changes are recorded in the central audit log instead, which this tab has not been pointed at yet."
+          endpoint="GET /api/v1/audit/logs?category=LP_ADMIN&lp_id={lp_id}" />
+      )}
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-text-muted w-24 flex-shrink-0">{label}</span>
-      <span className="text-text-primary">{children}</span>
-    </div>
-  );
-}
-
-// ── Instruments Tab ──────────────────────────────────────────
-function InstrumentsTab({ instruments }: { instruments: Instrument[] }) {
-  return (
-    <div className="panel overflow-hidden">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="border-b border-border" style={{ backgroundColor: '#232225' }}>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Symbol</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Canonical</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Type</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Route</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {instruments.map(inst => (
-            <tr key={inst.symbol} className="border-b border-border hover:bg-[#2a2a2c]">
-              <td className="px-3 py-2 font-mono text-text-primary font-semibold">{inst.symbol}</td>
-              <td className="px-3 py-2 font-mono text-text-secondary">{inst.canonical_symbol || '—'}</td>
-              <td className="px-3 py-2">
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                  style={inst.security_type === 'FOREX'
-                    ? { color: '#49b3b3', backgroundColor: '#163a3a', border: '1px solid #2a6a6a' }
-                    : { color: '#e0d066', backgroundColor: '#2a2816', border: '1px solid #6a6530' }}>
-                  {inst.security_type}
-                </span>
-              </td>
-              <td className="px-3 py-2 font-mono text-text-muted">{inst.trade_route || '—'}</td>
-              <td className="px-3 py-2 text-text-secondary">{inst.description || '—'}</td>
-            </tr>
-          ))}
-          {instruments.length === 0 && (
-            <tr><td colSpan={5} className="px-3 py-8 text-center text-text-muted">No instruments loaded</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Positions Tab ────────────────────────────────────────────
-function PositionsTab({ positions }: { positions: LPPosition[] }) {
-  return (
-    <div className="panel overflow-hidden">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="border-b border-border" style={{ backgroundColor: '#232225' }}>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Position ID</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Symbol</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Side</th>
-            <th className="text-right px-3 py-2 text-text-muted font-semibold">Long Qty</th>
-            <th className="text-right px-3 py-2 text-text-muted font-semibold">Short Qty</th>
-            <th className="text-right px-3 py-2 text-text-muted font-semibold">Avg Price</th>
-            <th className="text-right px-3 py-2 text-text-muted font-semibold">Unrealized P&L</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map(p => (
-            <tr key={p.position_id} className="border-b border-border hover:bg-[#2a2a2c]">
-              <td className="px-3 py-2 font-mono text-text-secondary">{p.position_id}</td>
-              <td className="px-3 py-2 font-mono text-text-primary font-semibold">{p.symbol}</td>
-              <td className="px-3 py-2">
-                <span style={{ color: p.side === 'LONG' ? '#66e07a' : '#ff5c5c' }}>{p.side}</span>
-              </td>
-              <td className="px-3 py-2 text-right font-mono text-text-primary">{p.long_qty > 0 ? p.long_qty.toLocaleString() : '—'}</td>
-              <td className="px-3 py-2 text-right font-mono text-text-primary">{p.short_qty > 0 ? p.short_qty.toLocaleString() : '—'}</td>
-              <td className="px-3 py-2 text-right font-mono text-text-primary">{p.avg_price.toFixed(5)}</td>
-              <td className={clsx('px-3 py-2 text-right font-mono', (p.unrealized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative')}>
-                {(p.unrealized_pnl || 0) >= 0 ? '+' : ''}{(p.unrealized_pnl || 0).toFixed(2)}
-              </td>
-            </tr>
-          ))}
-          {positions.length === 0 && (
-            <tr><td colSpan={7} className="px-3 py-8 text-center text-text-muted">No open positions</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Orders Tab ───────────────────────────────────────────────
-function OrdersTab({ orders }: { orders: LPOrder[] }) {
-  return (
-    <div className="panel overflow-hidden">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="border-b border-border" style={{ backgroundColor: '#232225' }}>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">ClOrdID</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Symbol</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Side</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Type</th>
-            <th className="text-right px-3 py-2 text-text-muted font-semibold">Qty</th>
-            <th className="text-right px-3 py-2 text-text-muted font-semibold">Price</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {orders.map(o => (
-            <tr key={o.clord_id} className="border-b border-border hover:bg-[#2a2a2c]">
-              <td className="px-3 py-2 font-mono text-text-secondary">{o.clord_id}</td>
-              <td className="px-3 py-2 font-mono text-text-primary font-semibold">{o.symbol}</td>
-              <td className="px-3 py-2"><span style={{ color: o.side === 'BUY' ? '#66e07a' : '#ff5c5c' }}>{o.side}</span></td>
-              <td className="px-3 py-2 text-text-secondary">{o.order_type}</td>
-              <td className="px-3 py-2 text-right font-mono text-text-primary">{o.quantity.toLocaleString()}</td>
-              <td className="px-3 py-2 text-right font-mono text-text-primary">{o.price?.toFixed(5) || 'MKT'}</td>
-              <td className="px-3 py-2 text-text-secondary">{o.status}</td>
-            </tr>
-          ))}
-          {orders.length === 0 && (
-            <tr><td colSpan={7} className="px-3 py-8 text-center text-text-muted">No active orders</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Routes Tab ───────────────────────────────────────────────
-function RoutesTab({ lp }: { lp: LPConfig }) {
-  return (
-    <div className="panel p-6 text-center">
-      <span className="text-sm text-text-muted">Route data loads from <span className="font-mono text-text-secondary">GET /api/v1/fix/lp/{lp.lp_id}/routes</span></span>
-    </div>
-  );
-}
-
-// ── Config Tab ───────────────────────────────────────────────
-function ConfigTab({ lp }: { lp: LPConfig }) {
-  return (
-    <div className="panel p-4">
-      <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
-        {JSON.stringify({
-          lp_id: lp.lp_id,
-          lp_name: lp.lp_name,
-          provider_type: lp.provider_type,
-          enabled: lp.enabled,
-          trading_session: {
-            host: lp.trading_session.host,
-            port: lp.trading_session.port,
-            sender_comp_id: lp.trading_session.sender_comp_id,
-            target_comp_id: lp.trading_session.target_comp_id,
-            fix_version: lp.trading_session.fix_version,
-            heartbeat_interval: lp.trading_session.heartbeat_interval,
-            ssl: lp.trading_session.ssl,
-          },
-          md_session: lp.md_session ? {
-            host: lp.md_session.host,
-            port: lp.md_session.port,
-            sender_comp_id: lp.md_session.sender_comp_id,
-            target_comp_id: lp.md_session.target_comp_id,
-          } : null,
-          trading_config: lp.trading_config,
-        }, null, 2)}
-      </pre>
-    </div>
-  );
-}
-
-// ── Audit Tab ────────────────────────────────────────────────
-function AuditTab({ entries }: { entries: AuditEntry[] }) {
-  const actionColor: Record<string, string> = {
-    CREATE_CONFIG: '#66e07a',
-    UPDATE_CONFIG: '#49b3b3',
-    DELETE_CONFIG: '#ff5c5c',
-    SET_CREDENTIALS: '#e0d066',
-    START_LP: '#66e07a',
-    STOP_LP: '#e09a55',
-    TEST_CONNECTION: '#a5c8f0',
-  };
-
-  return (
-    <div className="panel overflow-hidden">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="border-b border-border" style={{ backgroundColor: '#232225' }}>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Timestamp</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Action</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">User</th>
-            <th className="text-left px-3 py-2 text-text-muted font-semibold">Changes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((e, i) => (
-            <tr key={i} className="border-b border-border hover:bg-[#2a2a2c]">
-              <td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(e.timestamp)}</td>
-              <td className="px-3 py-2">
-                <span className="font-mono font-semibold" style={{ color: actionColor[e.action] || '#a0a0b0' }}>
-                  {e.action}
-                </span>
-              </td>
-              <td className="px-3 py-2 text-text-secondary">{e.user}</td>
-              <td className="px-3 py-2 text-text-muted font-mono">
-                {Object.keys(e.changes).length > 0
-                  ? Object.entries(e.changes).map(([k, v]) => (
-                    <span key={k} className="mr-2">
-                      {k}: {v.old !== undefined ? <span style={{ color: '#ff5c5c' }}>{String(v.old)}</span> : ''}
-                      {v.old !== undefined && v.new !== undefined ? ' → ' : ''}
-                      {v.new !== undefined ? <span style={{ color: '#66e07a' }}>{String(v.new)}</span> : ''}
-                    </span>
-                  ))
-                  : <span className="text-text-muted">—</span>}
-              </td>
-            </tr>
-          ))}
-          {entries.length === 0 && (
-            <tr><td colSpan={4} className="px-3 py-8 text-center text-text-muted">No audit entries</td></tr>
-          )}
-        </tbody>
-      </table>
+      {credOpen && (
+        <CredentialsModal lpId={config.lp_id} lpName={config.lp_name} providerType={config.provider_type}
+          credentials={config.credentials}
+          onClose={() => setCredOpen(false)}
+          onSaved={() => { loadConfig(); onChanged(); }}
+          showToast={showToast} />
+      )}
+      {testOpen && (
+        <TestModal lpId={config.lp_id} lpName={config.lp_name} onClose={() => setTestOpen(false)} />
+      )}
     </div>
   );
 }
@@ -1683,156 +1800,92 @@ function AuditTab({ entries }: { entries: AuditEntry[] }) {
 // MAIN PAGE COMPONENT
 // ============================================================
 export function LiquidityProvidersPage() {
-  const [lps, setLps] = useState<LPConfig[]>(MOCK_LPS);
-  const [healthMap, setHealthMap] = useState<Record<string, LPHealth>>(MOCK_HEALTH);
+  const [lps, setLps] = useState<LpListRow[]>([]);
+  const [healthMap, setHealthMap] = useState<Record<string, LpHealthSummaryRow>>({});
+  const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const { toast, showToast } = useToast();
 
-  // View state
-  const [selectedLp, setSelectedLp] = useState<LPConfig | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [credFor, setCredFor] = useState<LpListRow | null>(null);
+  const [deleteFor, setDeleteFor] = useState<LpListRow | null>(null);
+  const [testFor, setTestFor] = useState<LpListRow | null>(null);
 
-  // Modal state
-  const [formModal, setFormModal] = useState<{ mode: 'add' | 'edit'; lp?: LPConfig } | null>(null);
-  const [credModal, setCredModal] = useState<LPConfig | null>(null);
-  const [deleteModal, setDeleteModal] = useState<LPConfig | null>(null);
-  const [testModal, setTestModal] = useState<LPConfig | null>(null);
-
-  // Derived
-  const connected = lps.filter(l => l.state === 'CONNECTED').length;
-  const total = lps.length;
-
-  // ── Handlers ────────────────────────────────────────────────
-
-  const handleSave = (f: LPFormData) => {
-    if (formModal?.mode === 'add') {
-      const newLp: LPConfig = {
-        lp_id: f.lp_id, lp_name: f.lp_name,
-        provider_type: f.provider_type, enabled: f.enabled,
-        state: 'DISCONNECTED',
-        trading_session: {
-          host: f.trading_host, port: Number(f.trading_port),
-          sender_comp_id: f.trading_sender, target_comp_id: f.trading_target,
-          fix_version: f.fix_version, heartbeat_interval: Number(f.heartbeat_interval),
-          reconnect_interval: Number(f.reconnect_interval), ssl: f.trading_ssl,
-        },
-        md_session: f.provider_type === 'traderevolution' && f.md_host ? {
-          host: f.md_host, port: Number(f.md_port),
-          sender_comp_id: f.md_sender, target_comp_id: f.md_target,
-          fix_version: f.fix_version, heartbeat_interval: Number(f.heartbeat_interval),
-          ssl: f.trading_ssl,
-        } : null,
-        trading_config: {
-          account: f.account, security_exchange: f.security_exchange,
-          default_tif: f.default_tif, md_depth: Number(f.md_depth) || 1,
-        },
-        credentials_set: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      setLps(prev => [...prev, newLp]);
-      showToast(`${f.lp_name} created`);
-    } else if (formModal?.mode === 'edit' && formModal.lp) {
-      setLps(prev => prev.map(l => l.lp_id === formModal.lp!.lp_id ? {
-        ...l,
-        lp_name: f.lp_name, enabled: f.enabled,
-        trading_session: { ...l.trading_session,
-          host: f.trading_host, port: Number(f.trading_port),
-          sender_comp_id: f.trading_sender, target_comp_id: f.trading_target,
-          fix_version: f.fix_version, heartbeat_interval: Number(f.heartbeat_interval),
-          reconnect_interval: Number(f.reconnect_interval), ssl: f.trading_ssl,
-        },
-        md_session: f.provider_type === 'traderevolution' && f.md_host ? {
-          ...l.md_session,
-          host: f.md_host, port: Number(f.md_port),
-          sender_comp_id: f.md_sender, target_comp_id: f.md_target,
-        } as SessionConfig : l.md_session,
-        trading_config: {
-          account: f.account, security_exchange: f.security_exchange,
-          default_tif: f.default_tif, md_depth: Number(f.md_depth) || 1,
-        },
-        updated_at: new Date().toISOString(),
-      } : l));
-      showToast(`${f.lp_name} updated`);
+  const loadList = useCallback(async () => {
+    try {
+      const res = await lpAdminApi.list();
+      setLps(res.lps ?? []);
+      setListError(null);
+    } catch (e) {
+      setListError(errMessage(e));
+    } finally {
+      setLoading(false);
     }
-    setFormModal(null);
+  }, []);
+
+  const loadHealth = useCallback(async () => {
+    try {
+      const res = await lpAdminApi.health();
+      const map: Record<string, LpHealthSummaryRow> = {};
+      for (const row of res.lps ?? []) map[row.lp_id] = row;
+      setHealthMap(map);
+    } catch {
+      // Health is supplementary — a failure here leaves the cards showing
+      // "No status" rather than blanking the page.
+    }
+  }, []);
+
+  useEffect(() => { loadList(); loadHealth(); }, [loadList, loadHealth]);
+
+  useEffect(() => {
+    const t = setInterval(loadHealth, HEALTH_POLL_MS);
+    return () => clearInterval(t);
+  }, [loadHealth]);
+
+  const startStop = async (lp: LpListRow, action: 'start' | 'stop') => {
+    setBusyId(lp.lp_id);
+    try {
+      if (action === 'start') await lpOpsApi.start(lp.lp_id);
+      else await lpOpsApi.stop(lp.lp_id);
+      showToast(action === 'start' ? `${lp.lp_name} starting…` : `${lp.lp_name} stopped`);
+      await loadHealth();
+    } catch (e) {
+      showToast(errMessage(e), 'warn');
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  const handleCredentials = (data: { password: string; username?: string; brand?: string }) => {
-    if (!credModal) return;
-    setLps(prev => prev.map(l => l.lp_id === credModal.lp_id ? { ...l, credentials_set: true, updated_at: new Date().toISOString() } : l));
-    showToast(`Credentials saved for ${credModal.lp_name}`);
-    setCredModal(null);
-  };
-
-  const handleDelete = () => {
-    if (!deleteModal) return;
-    setLps(prev => prev.filter(l => l.lp_id !== deleteModal.lp_id));
-    setHealthMap(prev => { const m = { ...prev }; delete m[deleteModal.lp_id]; return m; });
-    showToast(`${deleteModal.lp_name} deleted`);
-    setDeleteModal(null);
-    if (selectedLp?.lp_id === deleteModal.lp_id) setSelectedLp(null);
-  };
-
-  const handleStart = (lp: LPConfig) => {
-    setLps(prev => prev.map(l => l.lp_id === lp.lp_id ? {
-      ...l, state: 'CONNECTING' as LPState,
-      trading_session: { ...l.trading_session, state: 'CONNECTING' as SessionState },
-    } : l));
-    // Simulate connection
-    setTimeout(() => {
-      setLps(prev => prev.map(l => l.lp_id === lp.lp_id ? {
-        ...l, state: 'CONNECTED' as LPState,
-        trading_session: { ...l.trading_session, state: 'LOGGED_ON' as SessionState },
-        md_session: l.md_session ? { ...l.md_session, state: 'LOGGED_ON' as SessionState } : null,
-      } : l));
-      setHealthMap(prev => ({
-        ...prev,
-        [lp.lp_id]: {
-          lp_id: lp.lp_id, overall_health: 'HEALTHY' as HealthStatus,
-          trading_session: { state: 'LOGGED_ON' as SessionState, last_heartbeat_ts: Date.now(), heartbeat_interval: 30, latency_ms: 15, messages_sent: 0, messages_received: 0 },
-          ...(lp.md_session ? { md_session: { state: 'LOGGED_ON' as SessionState, subscriptions_active: 0, updates_per_second: 0 } } : {}),
-          instruments_loaded: 0, open_positions: 0, active_orders: 0, uptime_seconds: 0,
-          warnings: [], checked_at: new Date().toISOString(),
-        },
-      }));
-      showToast(`${lp.lp_name} connected`);
-    }, 2000);
-  };
-
-  const handleStop = (lp: LPConfig) => {
-    setLps(prev => prev.map(l => l.lp_id === lp.lp_id ? {
-      ...l, state: 'DISCONNECTED' as LPState,
-      trading_session: { ...l.trading_session, state: 'DISCONNECTED' as SessionState },
-      md_session: l.md_session ? { ...l.md_session, state: 'DISCONNECTED' as SessionState } : null,
-    } : l));
-    setHealthMap(prev => { const m = { ...prev }; delete m[lp.lp_id]; return m; });
-    showToast(`${lp.lp_name} stopped`);
-  };
-
-  // Keep selectedLp in sync with lps list
-  const currentSelectedLp = selectedLp ? lps.find(l => l.lp_id === selectedLp.lp_id) || null : null;
+  const connected = useMemo(
+    () => Object.values(healthMap).filter(h => h.state === 'CONNECTED').length,
+    [healthMap]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
 
       {/* Page header */}
       <div className="px-6 pt-5 pb-4 border-b border-border flex-shrink-0">
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-xl font-semibold text-text-primary">Liquidity Providers</h1>
             <p className="text-sm text-text-secondary mt-0.5">
               Configure and monitor FIX connections to external LPs
             </p>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             {toast && (
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs"
-                style={{ backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#66e07a', display: 'inline-block' }} />
-                {toast}
+                style={toast.tone === 'warn'
+                  ? { backgroundColor: '#2a2016', color: '#e09a55', border: '1px solid #6a4a2f' }
+                  : { backgroundColor: '#162a1c', color: '#66e07a', border: '1px solid #2f6a3d' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'currentColor', display: 'inline-block' }} />
+                {toast.msg}
               </span>
             )}
             <div className="flex items-center gap-3 text-xs text-text-muted">
-              <span><span className="text-text-primary font-mono">{total}</span> providers</span>
+              <span><span className="text-text-primary font-mono">{lps.length}</span> providers</span>
               <span className="opacity-30">·</span>
               <span><span className="font-mono" style={{ color: connected > 0 ? '#66e07a' : '#a0a0b0' }}>{connected}</span> connected</span>
             </div>
@@ -1846,48 +1899,50 @@ export function LiquidityProvidersPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {currentSelectedLp ? (
+        {selectedId ? (
           <DetailView
-            lp={currentSelectedLp}
-            health={healthMap[currentSelectedLp.lp_id]}
-            onBack={() => setSelectedLp(null)}
-            onCredentials={() => setCredModal(currentSelectedLp)}
-            onStart={() => handleStart(currentSelectedLp)}
-            onStop={() => handleStop(currentSelectedLp)}
-            showToast={showToast}
-          />
+            lpId={selectedId}
+            onBack={() => setSelectedId(null)}
+            onChanged={() => { loadList(); loadHealth(); }}
+            showToast={showToast} />
         ) : (
           <LPListView
             lps={lps}
             healthMap={healthMap}
-            onAdd={() => setFormModal({ mode: 'add' })}
-            onEdit={lp => setFormModal({ mode: 'edit', lp })}
-            onDelete={lp => setDeleteModal(lp)}
-            onStart={handleStart}
-            onStop={handleStop}
-            onTest={lp => setTestModal(lp)}
-            onCredentials={lp => setCredModal(lp)}
-            onDetail={lp => setSelectedLp(lp)}
-          />
+            loading={loading}
+            error={listError}
+            busyId={busyId}
+            onAdd={() => setAddOpen(true)}
+            onReload={() => { loadList(); loadHealth(); }}
+            onDelete={lp => setDeleteFor(lp)}
+            onStart={lp => startStop(lp, 'start')}
+            onStop={lp => startStop(lp, 'stop')}
+            onTest={lp => setTestFor(lp)}
+            onCredentials={lp => setCredFor(lp)}
+            onDetail={lp => setSelectedId(lp.lp_id)} />
         )}
       </div>
 
       {/* Modals */}
-      {formModal && (
-        <LPFormModal mode={formModal.mode} lp={formModal.lp}
-          onClose={() => setFormModal(null)} onSave={handleSave} />
+      {addOpen && (
+        <CreateLPModal onClose={() => setAddOpen(false)}
+          onCreated={() => { loadList(); loadHealth(); }}
+          showToast={showToast} />
       )}
-      {credModal && (
-        <CredentialsModal lp={credModal}
-          onClose={() => setCredModal(null)} onSave={handleCredentials} />
+      {credFor && (
+        <CredentialsModal lpId={credFor.lp_id} lpName={credFor.lp_name} providerType={credFor.provider_type}
+          onClose={() => setCredFor(null)}
+          onSaved={loadList}
+          showToast={showToast} />
       )}
-      {deleteModal && (
-        <DeleteModal lp={deleteModal}
-          onClose={() => setDeleteModal(null)} onConfirm={handleDelete} />
+      {deleteFor && (
+        <DeleteModal lpId={deleteFor.lp_id} lpName={deleteFor.lp_name}
+          onClose={() => setDeleteFor(null)}
+          onDeleted={() => { loadList(); loadHealth(); }}
+          showToast={showToast} />
       )}
-      {testModal && (
-        <TestModal lp={testModal}
-          onClose={() => setTestModal(null)} />
+      {testFor && (
+        <TestModal lpId={testFor.lp_id} lpName={testFor.lp_name} onClose={() => setTestFor(null)} />
       )}
     </div>
   );

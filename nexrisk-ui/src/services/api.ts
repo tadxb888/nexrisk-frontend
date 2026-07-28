@@ -2891,3 +2891,271 @@ export const alertThresholdsApi = {
     };
   },
 };
+// ════════════════════════════════════════════════════════════════════════════
+// LP Administration (FIX Bridge) — /api/v1/fix/admin/*
+//
+// Typed against LIVE payloads captured 2026-07-29, not against
+// NexRisk_FIX_Bridge_LP_Administration.md — the doc is out of date in several
+// places (it shows `trading_config`, per-session `ssl`, ISO timestamps, and a
+// `state` field on the config record; none of those exist on the wire).
+//
+// Envelope: every route under /fix/admin returns { success, data }. The BFF
+// passes the C++ body through verbatim, so the browser sees the envelope too.
+// fixAdmin() unwraps it and turns { success:false } into a thrown Error.
+// ════════════════════════════════════════════════════════════════════════════
+
+export type LpProviderType  = 'traderevolution' | 'lmax' | 'cmc';
+export type LpState         = 'DISCONNECTED' | 'STOPPED' | 'CONNECTING' | 'CONNECTED'
+                            | 'DEGRADED' | 'QUARANTINED' | 'SESSION_ERROR';
+export type LpSessionState  = 'DISCONNECTED' | 'CONNECTING' | 'LOGGED_ON'
+                            | 'RECONNECTING' | 'SESSION_ERROR';
+export type LpHealthStatus  = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'UNKNOWN';
+export type LpEnvironment   = 'SANDBOX' | 'DEMO' | 'PRODUCTION';
+
+/** FIX session block. `depth` appears on md_session only. */
+export interface LpSessionConfig {
+  host:                string;
+  port:                number;
+  sender_comp_id:      string;
+  target_comp_id:      string;
+  fix_version?:        string;
+  heartbeat_interval?: number;
+  depth?:              number;
+}
+
+export interface LpReconnection {
+  enabled:          boolean;
+  interval_seconds: number;
+  max_attempts:     number;
+}
+
+/** Credential state only — values are never returned. A `*_set_at` of 0 means
+ *  the secret has never been written. */
+export interface LpCredentialState {
+  trading_password:         string;   // always ""
+  trading_password_set_at:  number;   // epoch ms, 0 = never set
+  md_password:              string;   // always ""
+  md_password_set_at:       number;
+  tls_configured:           boolean;
+  tls_set_at:               number;
+}
+
+/** Full record from GET /fix/admin/lp/{lp_id}.
+ *  Note: carries NO session state — live state comes from the health routes. */
+export interface LpConfig {
+  lp_id:             string;
+  lp_name:           string;
+  provider_type:     LpProviderType;
+  enabled:           boolean;
+  auto_connect:      boolean;
+  environment:       LpEnvironment | string;
+  notes?:            string;
+  trading_session:   LpSessionConfig;
+  md_session:        LpSessionConfig | null;
+  reconnection:      LpReconnection;
+  /** Provider-specific bag. REPLACED WHOLESALE on PUT — always spread the
+   *  fetched object before overriding keys, or unedited keys are destroyed. */
+  provider_settings: Record<string, unknown>;
+  credentials:       LpCredentialState;
+  created_at:        number;   // epoch ms
+  updated_at:        number;   // epoch ms
+  created_by:        string;
+  updated_by:        string;
+}
+
+/** Row from GET /fix/admin/lp. Thinner than LpConfig — no sessions, no state. */
+export interface LpListRow {
+  lp_id:           string;
+  lp_name:         string;
+  provider_type:   LpProviderType;
+  enabled:         boolean;
+  auto_connect:    boolean;
+  environment:     LpEnvironment | string;
+  credentials_set: boolean;
+  created_at:      number;
+  updated_at:      number;
+}
+
+/** Row from GET /fix/admin/health — the only source of live state for the list. */
+export interface LpHealthSummaryRow {
+  lp_id:            string;
+  health:           LpHealthStatus;
+  state:            LpState;
+  trading_state:    LpSessionState;
+  md_state:         LpSessionState;
+  uptime_seconds:   number;
+  errors_24h_count: number;
+  warnings_count:   number;
+}
+
+export interface LpHealthSession {
+  connected: boolean;
+  host:      string;
+  port:      number;
+  state:     LpSessionState;
+}
+
+/** GET /fix/admin/lp/{lp_id}/health — adds warnings[] and the rate metrics the
+ *  summary route omits. Rate metrics are null until the LP has traded. */
+export interface LpHealthDetail {
+  lp_id:             string;
+  lp_name:           string;
+  health:            LpHealthStatus;
+  state:             LpState;
+  trading_session:   LpHealthSession;
+  md_session:        LpHealthSession | null;
+  avg_latency_ms:    number | null;
+  fill_rate_pct:     number | null;
+  reject_rate_pct:   number | null;
+  last_connected_at: number;   // epoch ms, 0 = never
+  uptime_seconds:    number;
+  errors_24h_count:  number;
+  warnings:          { code: string; message: string }[];
+  warnings_count:    number;
+}
+
+export type LpTestScope       = 'BOTH' | 'TRADING_ONLY' | 'MD_ONLY';
+export type LpTestSessionCode = 'OK' | 'FAILED' | 'TIMEOUT' | 'SKIPPED';
+export type LpTestErrorCode   = 'CONFIG_INVALID' | 'CREDENTIALS_MISSING'
+                              | 'TCP_CONNECT_FAILED' | 'LOGON_TIMEOUT' | 'LOGON_REJECTED';
+
+export interface LpTestSession {
+  result:              LpTestSessionCode;
+  latency_ms:          number | null;      // null on anything but OK
+  fix_logon_accepted?: boolean;
+  server_comp_id?:     string;
+  /** Written for operators. Surface verbatim rather than inventing copy. */
+  message?:            string;
+  error?:              string;
+  error_code?:         LpTestErrorCode;
+}
+
+/** POST /fix/admin/lp/{lp_id}/test.
+ *  A SKIPPED session does not block overall PASS — never render SKIPPED as
+ *  healthy or the operator reads "not tested" as "working". */
+export interface LpTestResult {
+  lp_id:           string;
+  test_scope:      LpTestScope;
+  overall:         'PASS' | 'PARTIAL' | 'FAIL';
+  tested_at:       number;   // epoch ms
+  trading_session: LpTestSession;
+  md_session?:     LpTestSession;
+}
+
+/** Body for PUT /fix/admin/lp/{lp_id}. Partial — send only what changed.
+ *  lp_id and provider_type are IMMUTABLE; including either returns 400. */
+export interface LpUpdateBody {
+  lp_name?:           string;
+  enabled?:           boolean;
+  auto_connect?:      boolean;
+  environment?:       string;
+  notes?:             string;
+  trading_session?:   Partial<LpSessionConfig>;
+  md_session?:        Partial<LpSessionConfig>;
+  reconnection?:      Partial<LpReconnection>;
+  provider_settings?: Record<string, unknown>;
+}
+
+/** `changed_fields` is the write receipt — dotted paths the backend actually
+ *  accepted. A field you sent that is missing from it was silently dropped. */
+export interface LpUpdateResponse {
+  lp_id:          string;
+  changed_fields: string[];
+  message:        string;
+}
+
+export interface LpCreateBody extends LpUpdateBody {
+  lp_id:         string;
+  provider_type: LpProviderType;
+}
+
+export interface LpCredentialsBody {
+  /** FIX logon password for the trading session. */
+  password?:    string;
+  /** Separate market-data password, where the provider uses one. */
+  md_password?: string;
+  username?:    string;
+  brand?:       string;
+}
+
+// ── envelope unwrap ─────────────────────────────────────────────
+// fetchAPI already throws on non-2xx (reading `error` off the body, which
+// matches the C++ failure shape). This adds the success-false guard for the
+// 200-with-success-false case and strips the data wrapper.
+
+async function fixAdmin<T>(endpoint: string, init?: RequestInit): Promise<T> {
+  const json = await fetchAPI<{ success?: boolean; data?: T; error?: string }>(endpoint, init);
+  if (json && typeof json === 'object' && json.success === false) {
+    throw new Error(json.error || 'Request failed');
+  }
+  return (json?.data ?? json) as unknown as T;
+}
+
+const lpPath = (id: string) => `/api/v1/fix/admin/lp/${encodeURIComponent(id)}`;
+
+export const lpAdminApi = {
+  /** List rows carry no session detail — pair with health() for the list view. */
+  list: () =>
+    fixAdmin<{ lps: LpListRow[]; total: number }>('/api/v1/fix/admin/lp'),
+
+  /** Authoritative record. This is the only source of truth for the config
+   *  form — never render unsaved local state as if it were stored. */
+  get: (lp_id: string) =>
+    fixAdmin<LpConfig>(lpPath(lp_id)),
+
+  create: (body: LpCreateBody) =>
+    fixAdmin<{ lp_id: string; message?: string }>('/api/v1/fix/admin/lp', {
+      method: 'POST',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Partial update. Caller must strip lp_id / provider_type and must spread
+   *  the fetched provider_settings before overriding keys. Check the returned
+   *  changed_fields against what you intended to write. */
+  update: (lp_id: string, body: LpUpdateBody) =>
+    fixAdmin<LpUpdateResponse>(lpPath(lp_id), {
+      method: 'PUT',
+      body:   JSON.stringify(body),
+    }),
+
+  remove: (lp_id: string) =>
+    fixAdmin<{ lp_id: string; message?: string }>(lpPath(lp_id), { method: 'DELETE' }),
+
+  /** Passwords are written here, never through update(). Stored encrypted. */
+  setCredentials: (lp_id: string, body: LpCredentialsBody) =>
+    fixAdmin<{ lp_id: string; message?: string }>(`${lpPath(lp_id)}/credentials`, {
+      method: 'PUT',
+      body:   JSON.stringify(body),
+    }),
+
+  /** Opens a real TCP socket and requires a FIX Logon (35=A) back, so a bad
+   *  host genuinely fails. Scope is not selectable: the BFF route does not
+   *  forward a body, so the backend default (BOTH) always applies. */
+  test: (lp_id: string) =>
+    fixAdmin<LpTestResult>(`${lpPath(lp_id)}/test`, { method: 'POST' }),
+
+  /** Applies a saved config to the running session. A save alone does not
+   *  take effect until this runs. */
+  reload: (lp_id: string) =>
+    fixAdmin<{ lp_id: string; message?: string }>(`${lpPath(lp_id)}/reload`, { method: 'POST' }),
+
+  healthDetail: (lp_id: string) =>
+    fixAdmin<LpHealthDetail>(`${lpPath(lp_id)}/health`),
+
+  health: () =>
+    fixAdmin<{ lps: LpHealthSummaryRow[] }>('/api/v1/fix/admin/health'),
+
+  // NOTE: GET /fix/admin/lp/{id}/audit is a stub that always returns an empty
+  // array. The replacement is /api/v1/audit/logs?category=LP_ADMIN&lp_id=…,
+  // which is not typed here yet — no live payload has been captured.
+};
+
+export const lpOpsApi = {
+  start: (lp_id: string) =>
+    fixAdmin<{ lp_id: string; message?: string }>(
+      `/api/v1/fix/lp/${encodeURIComponent(lp_id)}/start`, { method: 'POST' }),
+
+  stop: (lp_id: string) =>
+    fixAdmin<{ lp_id: string; message?: string }>(
+      `/api/v1/fix/lp/${encodeURIComponent(lp_id)}/stop`, { method: 'POST' }),
+};

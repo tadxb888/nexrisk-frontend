@@ -61,6 +61,18 @@ function stampSubmitter(body: unknown, request: FastifyRequest): unknown {
   return { ...(body as Record<string, unknown>), submitted_by: submitter };
 }
 
+// Same discipline for LP config writes. The backend records `updated_by` on
+// every accepted update, and it has been empty on every record because nothing
+// ever supplied it. Stamping it here rather than in the browser means the
+// audit trail records the authenticated session, not whatever the client
+// claimed. Any client-supplied updated_by is overwritten.
+function stampUpdatedBy(body: unknown, request: FastifyRequest): unknown {
+  const actor = resolveSubmitter(request);
+  if (!actor) return body;
+  if (body == null || typeof body !== 'object') return body;
+  return { ...(body as Record<string, unknown>), updated_by: actor };
+}
+
 // ── Backend 404 quirk ─────────────────────────────────────────
 // The C++ backend returns HTTP 404 when an in-memory cache is empty
 // (OrderStateMachine, InstrumentCache, PositionCache, FIX message store).
@@ -155,7 +167,10 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('lp_admin', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { lp_id } = lpIdParams.parse(request.params);
-      const response = await nexriskApi.put(`/api/v1/fix/admin/lp/${lp_id}`, request.body);
+      const response = await nexriskApi.put(
+        `/api/v1/fix/admin/lp/${lp_id}`,
+        stampUpdatedBy(request.body, request),
+      );
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }
