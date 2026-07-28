@@ -42,13 +42,14 @@ const gridTheme = themeQuartz.withParams({
 // the DOM Trader / hedge engine carry submitted_by on the NOS_SENT event.
 const UNKNOWN_SUBMITTER = '—';
 
-// Live grid row cap. The seed pages up to this and the sync effect evicts past it,
-// so both ends agree on one number instead of drifting apart.
-const SEED_ROW_CAP = 500;
+// Live grid row cap. The seed pages up to this and the 3s sync evicts past it,
+// so both ends of the pipeline agree on one number instead of drifting apart.
+const SEED_ROW_CAP = 2000;
 
-// States meaning the order reached the LP and filled. hedge_records reports HEDGED
-// for a completed hedge and CLOSED/CLOSING once unwound; the live path reports
-// FILLED. Counting only 'FILLED' zeroes every header stat for seeded rows.
+// States that mean the order reached the LP and filled. hedge_records reports
+// HEDGED for a completed hedge and CLOSED/CLOSING once unwound; the live AE path
+// reports FILLED. Counting only 'FILLED' left every header stat at zero as soon as
+// rows were seeded from hedge_records.
 const FILLED_STATES = new Set(['FILLED', 'HEDGED', 'PARTIAL', 'CLOSED', 'CLOSING']);
 const WS_MAX_RETRIES = 8;
 
@@ -333,9 +334,11 @@ function buildRowFromAE(
 // hedge_records is the order-lifecycle source of truth: it includes orders TE
 // never confirmed (FAILED), rejected, errored, or b-booked — states the AE-only
 // path could not represent. status is already mapped server-side.
-// Map a /api/v1/hedge/records entry onto the HedgeExecutionRow shape. The two
-// endpoints read the same table but name fields differently, and hedge/records
-// returns ISO timestamps rather than epoch ms.
+// Map a /api/v1/hedge/records entry onto the HedgeExecutionRow shape that
+// buildRowFromHedge expects. The two endpoints read the same table but use
+// different field names, and hedge/records returns ISO timestamps rather than ms.
+// Fields hedge/records does not carry (execution_source, submitted_by, account,
+// route, security_*) fall back to empty — the WS fills them for live rows.
 const asStr = (v: unknown): string => (v == null ? '' : String(v));
 const isoToMs = (v: unknown): number => {
   if (v == null) return 0;
@@ -346,46 +349,48 @@ const isoToMs = (v: unknown): number => {
 function hedgeRecordToExecutionRow(r: Record<string, unknown>): HedgeExecutionRow {
   const state = asStr(r.hedge_state);
   return {
-    record_id:          Number(r.record_id ?? 0),
-    clord_id:           asStr(r.clord_id),
-    symbol:             asStr(r.mt5_symbol),
-    direction:          (r.direction === 'LONG' || r.direction === 'SHORT') ? r.direction : '',
-    status:             state,
-    hedge_state:        state,
-    hedge_volume_lp:    asStr(r.hedge_volume_lp),
-    hedge_volume_mt5:   asStr(r.hedge_volume_mt5),
-    lp_fill_volume_lp:  asStr(r.lp_fill_volume_lp),
+    record_id:         Number(r.record_id ?? 0),
+    clord_id:          asStr(r.clord_id),
+    symbol:            asStr(r.mt5_symbol),
+    direction:         (r.direction === 'LONG' || r.direction === 'SHORT') ? r.direction : '',
+    status:            state,
+    hedge_state:       state,
+    hedge_volume_lp:   asStr(r.hedge_volume_lp),
+    hedge_volume_mt5:  asStr(r.hedge_volume_mt5),
+    lp_fill_volume_lp: asStr(r.lp_fill_volume_lp),
     lp_fill_volume_mt5: asStr(r.lp_fill_volume_mt5),
-    client_fill_price:  asStr(r.client_fill_price),
-    lp_fill_price:      asStr(r.lp_hedge_fill_price_lp ?? r.lp_fill_price),
-    raw_feed_price:     asStr(r.raw_feed_price),
-    net_revenue_pips:   asStr(r.net_revenue_pips),
-    net_revenue_usd:    asStr(r.net_revenue_usd),
-    lp_position_id:     asStr(r.lp_position_id),
-    position_id:        Number(r.position_id ?? 0),
-    login_id:           Number(r.login_id ?? 0),
-    feed_lp_id:         asStr(r.feed_lp_id),
-    hedging_lp_id:      asStr(r.hedging_lp_id),
-    rule_name:          asStr(r.rule_name),
-    rule_id:            r.rule_id == null ? null : Number(r.rule_id),
-    escalation_reason:  asStr(r.escalation_reason),
-    rejection_code:     asStr(r.rejection_code),
-    execution_source:   asStr(r.execution_source),
-    submitted_by:       r.submitted_by == null ? null : String(r.submitted_by),
-    account:            asStr(r.account),
-    route:              asStr(r.route),
-    security_exchange:  asStr(r.security_exchange),
-    security_id:        asStr(r.security_id),
-    dispatched_ms:      isoToMs(r.dispatched_at),
-    confirmed_ms:       isoToMs(r.confirmed_at),
-    escalated_ms:       isoToMs(r.escalated_at),
-    closed_ms:          isoToMs(r.closed_at),
+    client_fill_price: asStr(r.client_fill_price),
+    lp_fill_price:     asStr(r.lp_hedge_fill_price_lp ?? r.lp_fill_price),
+    raw_feed_price:    asStr(r.raw_feed_price),
+    net_revenue_pips:  asStr(r.net_revenue_pips),
+    net_revenue_usd:   asStr(r.net_revenue_usd),
+    lp_position_id:    asStr(r.lp_position_id),
+    position_id:       Number(r.position_id ?? 0),
+    login_id:          Number(r.login_id ?? 0),
+    feed_lp_id:        asStr(r.feed_lp_id),
+    hedging_lp_id:     asStr(r.hedging_lp_id),
+    rule_name:         asStr(r.rule_name),
+    rule_id:           r.rule_id == null ? null : Number(r.rule_id),
+    escalation_reason: asStr(r.escalation_reason),
+    rejection_code:    asStr(r.rejection_code),
+    execution_source:  asStr(r.execution_source),
+    submitted_by:      r.submitted_by == null ? null : String(r.submitted_by),
+    account:           asStr(r.account),
+    route:             asStr(r.route),
+    security_exchange: asStr(r.security_exchange),
+    security_id:       asStr(r.security_id),
+    dispatched_ms:     isoToMs(r.dispatched_at),
+    confirmed_ms:      isoToMs(r.confirmed_at),
+    escalated_ms:      isoToMs(r.escalated_at),
+    closed_ms:         isoToMs(r.closed_at),
   };
 }
 
 // Fetch hedge records, paged. page_size is capped at 200 server-side, so a single
-// call truncates history. Page 1 reports `total`; the rest are fetched in parallel
-// up to `cap`. Returns null only if page 1 fails outright.
+// call silently truncates history. Page 1 reports `total`; the rest are fetched in
+// parallel up to `cap` — which is the grid's own row cap, since anything beyond it
+// would be evicted by the sync effect on arrival.
+// Returns null only if page 1 fails outright; partial pages are tolerated.
 const HEDGE_PAGE_SIZE = 200;
 
 async function fetchHedgeRecordsPaged(cap: number): Promise<Record<string, unknown>[] | null> {
@@ -393,7 +398,10 @@ async function fetchHedgeRecordsPaged(cap: number): Promise<Record<string, unkno
     const ac = new AbortController();
     const killer = setTimeout(() => ac.abort(), 8000);
     try {
-      const r = await fetch(`/api/v1/hedge/records?page=${page}&page_size=${HEDGE_PAGE_SIZE}`, { signal: ac.signal });
+      const r = await fetch(
+        `/api/v1/hedge/records?page=${page}&page_size=${HEDGE_PAGE_SIZE}`,
+        { signal: ac.signal },
+      );
       if (!r.ok) return null;
       const j = await r.json();
       return { list: (j?.data ?? []) as Record<string, unknown>[], total: Number(j?.total ?? 0) };
@@ -406,12 +414,16 @@ async function fetchHedgeRecordsPaged(cap: number): Promise<Record<string, unkno
 
   const first = await getPage(1);
   if (!first) return null;
+
   const out = [...first.list];
   const wanted = first.total > 0 ? Math.min(first.total, cap) : out.length;
   const pageCount = Math.ceil(wanted / HEDGE_PAGE_SIZE);
+
   if (pageCount > 1) {
-    const rest = await Promise.all(Array.from({ length: pageCount - 1 }, (_, i) => getPage(i + 2)));
-    for (const pg of rest) if (pg) out.push(...pg.list);
+    const rest = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, i) => getPage(i + 2)),
+    );
+    for (const p of rest) if (p) out.push(...p.list);
   }
   return out;
 }
@@ -460,78 +472,99 @@ function buildRowFromHedge(
 }
 
 // Build a PENDING row when we've sent a NOS but no AE received yet
-// ── DOM Trader executions ──────────────────────────────────────────────────
-//
-// Manual DOM fills are not written to hedge_records — the Portfolio API brief
-// lists that as an unfinished backend milestone — so they cannot be seeded from
-// there, and they carry nothing on the wire that identifies them as manual.
-//
-// CBookPage solves this client-side: when the DOM panel submits an order it
-// queues the symbol+side, matches it to the resulting POSITION_REPORT, and
-// persists `position_id → { type: 'DOM Trader' }` to localStorage under
-// `nexrisk_pos_overrides`. That map is the only record that a given position was
-// manually placed, and it is already being maintained. Read it here rather than
-// duplicating the bookkeeping.
-//
-// Hedge positions are labelled with their strategy name in the same map, so
-// filtering on 'DOM Trader' cannot pick them up and no duplicate rows appear.
-const DOM_OVERRIDES_KEY = 'nexrisk_pos_overrides';
-
-function readDomPositionIds(): Set<string> {
-  try {
-    const raw = localStorage.getItem(DOM_OVERRIDES_KEY);
-    if (!raw) return new Set();
-    const entries = JSON.parse(raw) as [string, { type?: string }][];
-    return new Set(
-      entries.filter(([, v]) => v?.type === 'DOM Trader').map(([k]) => k),
-    );
-  } catch {
-    return new Set();
+// FIX OrdStatus (tag 39) → display status. Returns null for statuses that carry no
+// state change, so an intermediate frame never overwrites a terminal one.
+function mapOrdStatusToTeStatus(ordStatus: string): ExecutionReportRow['te_status'] | null {
+  switch (ordStatus) {
+    case '2': return 'FILLED';      // terminal fill
+    case '1': return 'PARTIAL';
+    case '8': return 'REJECTED';
+    case '4': return 'CANCELLED';
+    case '0':
+    case 'A': return 'PENDING';
+    default:  return null;
   }
 }
 
-interface DomPositionLike {
-  position_id: string;
-  symbol:      string;
-  open_price:  number;
-  long_qty:    number;
-  short_qty:   number;
-  commission?: number;
-  received_ts?: number;
-}
+// Build or update a fill row from a FIX ExecutionReport.
+//
+// The ER is the only message with a per-order key. TE omits tag 11 on the AE and
+// tag 37 is the position id under netting, so an AE cannot be tied to the order
+// that produced it — which is why fills built from AE could not retire their
+// pending row, resolve their submitter, or find their strategy name, and why DOM
+// Trader orders never appeared at all despite reaching TE correctly.
+//
+// Keyed `pending_<cl_ord_id>`, the same id buildPendingRow and buildRowFromHedge
+// derive, so the NOS row, the seeded row and the fill are all one row rather than
+// three. Quantities here are LP-side (tags 38/32/14) — notional, not MT5 lots.
+function buildRowFromExecReport(
+  er: Record<string, unknown>,
+  lp_id: string,
+  nosRecord: NosRecord | null,
+  existing: ExecutionReportRow | undefined,
+): ExecutionReportRow {
+  const clordId = String(er.cl_ord_id ?? er.clord_id ?? '');
+  const ts      = Number(er.timestamp_ms ?? 0) || 0;
+  const nosTs   = nosRecord?.nos_ts ?? null;
+  const mapped  = mapOrdStatusToTeStatus(String(er.ord_status ?? ''));
+  const isFill  = mapped === 'FILLED' || mapped === 'PARTIAL';
 
-// rule_name stays null so the Execution Type column renders "Manual", which is
-// correct for a manual order — it is not a missing strategy.
-function buildRowFromDomPosition(pos: DomPositionLike, lp_id: string): ExecutionReportRow {
-  const qty = (pos.long_qty || 0) + (pos.short_qty || 0);
-  const ts  = pos.received_ts || Date.now();
-  return {
-    trade_report_id: `dom_${pos.position_id}`,
-    clord_id:        '',
-    nos_time:        '—',
-    fill_time:       formatSsMs(msToFixTimestamp(ts)),
+  const lastQty = Number(er.last_qty ?? 0) || 0;
+  const cumQty  = Number(er.cum_qty  ?? 0) || 0;
+  const lastPx  = Number(er.last_px  ?? 0) || 0;
+
+  // Same 5s sanity bound as the AE path: anything larger is a timestamp artefact
+  // rather than a real round trip, and is better shown as unknown.
+  const rt = (nosTs && ts && ts > nosTs && ts - nosTs < 5000)
+    ? ts - nosTs
+    : existing?.round_trip_ms ?? null;
+
+  const base: ExecutionReportRow = existing ?? {
+    trade_report_id: `pending_${clordId}`,
+    clord_id:        clordId,
+    nos_time:        nosTs ? formatSsMs(msToFixTimestamp(nosTs)) : '—',
+    fill_time:       '—',
     round_trip_ms:   null,
-    te_status:       'FILLED',
-    user:            UNKNOWN_SUBMITTER,
-    order_id:        pos.position_id,
+    te_status:       'PENDING',
+    user:            nosRecord?.submitted_by ?? UNKNOWN_SUBMITTER,
+    order_id:        '',
     exec_id:         '',
-    symbol:          pos.symbol,
-    side:            (pos.long_qty || 0) > 0 ? 'BUY' : 'SELL',
-    ord_type:        'MKT',
-    tif:             'GTC',
-    order_qty:       qty,
-    fill_px:         pos.open_price || 0,
-    fill_qty:        qty,
-    commission:      pos.commission ?? 0,
+    symbol:          String(er.symbol ?? ''),
+    side:            er.side === 'SELL' ? 'SELL' : 'BUY',
+    ord_type:        nosRecord ? mapOrdType(nosRecord.ord_type) : 'MKT',
+    tif:             nosRecord ? mapTIF(nosRecord.tif) : 'GTC',
+    order_qty:       0,
+    fill_px:         0,
+    fill_qty:        0,
+    commission:      0,
     route:           '',
     security_exchange: '',
     security_id:     '',
     settl_date:      '',
     account:         '',
-    transact_time:   msToFixTimestamp(ts),
+    transact_time:   '',
     lp_id,
     rule_id:   null,
     rule_name: null,
+  };
+
+  return {
+    ...base,
+    trade_report_id: `pending_${clordId}`,
+    clord_id:        clordId,
+    symbol:          String(er.symbol ?? base.symbol),
+    side:            er.side === 'SELL' ? 'SELL' : (er.side === 'BUY' ? 'BUY' : base.side),
+    te_status:       mapped ?? base.te_status,
+    user:            nosRecord?.submitted_by ?? base.user,
+    order_id:        String(er.order_id ?? '') || base.order_id,
+    exec_id:         String(er.exec_id  ?? '') || base.exec_id,
+    order_qty:       cumQty > 0 ? cumQty : base.order_qty,
+    fill_qty:        isFill ? (cumQty || lastQty) : base.fill_qty,
+    fill_px:         lastPx > 0 ? lastPx : base.fill_px,
+    fill_time:       isFill && ts ? formatSsMs(msToFixTimestamp(ts)) : base.fill_time,
+    round_trip_ms:   isFill ? rt : base.round_trip_ms,
+    transact_time:   ts ? msToFixTimestamp(ts) : base.transact_time,
+    lp_id:           lp_id || base.lp_id,
   };
 }
 
@@ -973,6 +1006,18 @@ export function ExecutionReportPage() {
   const retryRef    = useRef(0);
   const mountedRef  = useRef(true);
   const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror of selectedRow.trade_report_id. The WS handlers called setSelectedRow on
+  // every single execution frame; the updater returned `prev` unchanged when nothing
+  // matched, so React bailed out of re-rendering, but each call still queued and was
+  // processed. At ~100 orders/sec across several frames per order that is a few
+  // hundred needless setState calls per second in separate WS callbacks, which React
+  // cannot batch. Reading this ref first makes the no-op case free.
+  const selectedIdRef = useRef<string | null>(null);
+
+  // Keep selectedIdRef in sync with the selected row
+  useEffect(() => {
+    selectedIdRef.current = selectedRow?.trade_report_id ?? null;
+  }, [selectedRow]);
 
   // Keep rowMapRef and clordIdMapRef in sync whenever rows state changes
   useEffect(() => {
@@ -1034,67 +1079,76 @@ export function ExecutionReportPage() {
           if (lps.length === 1) setSelectedLp(lps[0].lp_id);
         }
 
-        // 2. Seed history from /api/v1/hedge/records, paged.
+         // 2. Seed history from TWO sources, merged on trade_report_id.
         //
-        // The previous source, /api/v1/fix/lp/{lp}/hedge-executions, has no route in
-        // the C++ endpoint layer — the BFF proxies it verbatim (fix-bridge.ts:748),
-        // nothing replies, its receive times out and it surfaces as a 400. Every
-        // refresh emptied the page.
+        // 2a. /api/v1/fix/lp/{lp}/hedge-executions — the FIX message store. This is
+        //     the ONLY source containing manual / DOM Trader orders. hedge_records is
+        //     written solely by HedgeDispatcher::InsertHedgeRecord, so it holds
+        //     automated hedges and nothing else; seeding from it alone is what made
+        //     DOM trades vanish from this blotter.
+        //     The route exists end to end: BFF fix-bridge.ts:741 →
+        //     FIXBridgeEndpoint.cpp:410 → GET_HEDGE_EXECUTIONS. It can time out under
+        //     load because it proxies over the ZMQ command socket that order dispatch
+        //     also uses, hence the 503 retry and the non-fatal catch.
         //
-        // hedge/records reads the same table and is known good: it already backs the
-        // strategy-name map on this page. It is not LP-scoped, so each record carries
-        // its own hedging_lp_id.
-        const seedRows: ExecutionReportRow[] = [];
-        let seedFailed = false;
+        // 2b. /api/v1/hedge/records — supplies rule_name and hedge_state, which the
+        //     executions source does not carry. Applied second so it enriches the
+        //     matching rows; buildRowFromHedge derives the same `pending_<clord_id>`
+        //     key from both, so hedge orders merge rather than duplicate.
+        //
+        const seedMap = new Map<string, ExecutionReportRow>();
+        let execFailed   = false;
+        let recordFailed = false;
+
+        await Promise.allSettled(lps.map(async (lp) => {
+          try {
+            const url = `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=${SEED_ROW_CAP}`;
+            let res = await fetch(url);
+            if (res.status === 503) {
+              await new Promise(r => setTimeout(r, 3000));
+              if (cancelled) return;
+              res = await fetch(url);
+            }
+            if (!res.ok || cancelled) { execFailed = true; return; }
+            const data = await res.json();
+            const execRows: HedgeExecutionRow[] = data?.data ?? [];
+            for (const h of execRows) {
+              const row = buildRowFromHedge(h, lp.lp_id);
+              seedMap.set(row.trade_report_id, row);
+            }
+          } catch { execFailed = true; }
+        }));
 
         try {
           const recs = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
           if (!recs) {
-            seedFailed = true;
+            recordFailed = true;
           } else if (!cancelled) {
-            // lp_id must match an entry in the LP dropdown or the row is filtered out
-            // of both the grid and the header stats. hedging_lp_id is not guaranteed
-            // to use the same identifier, so fall back rather than trust it blindly.
+            // lp_id must match an entry in the LP dropdown or the row is filtered
+            // out of both the grid and the header stats. hedge_records reports
+            // hedging_lp_id, which is not guaranteed to use the same identifier as
+            // the LP list, so fall back rather than trust it blindly.
             const knownLpIds = new Set(lps.map(l => l.lp_id));
-            const resolveLp = (raw: string): string =>
-              knownLpIds.has(raw) ? raw : (lps.length === 1 ? lps[0].lp_id : raw);
+            const resolveLp = (raw: string): string => {
+              if (knownLpIds.has(raw)) return raw;
+              return lps.length === 1 ? lps[0].lp_id : raw;
+            };
             for (const r of recs) {
-              seedRows.push(buildRowFromHedge(
+              const row = buildRowFromHedge(
                 hedgeRecordToExecutionRow(r),
                 resolveLp(String(r.hedging_lp_id ?? '')),
-              ));
+              );
+              seedMap.set(row.trade_report_id, row);
             }
           }
-        } catch { seedFailed = true; }
+        } catch { recordFailed = true; }
 
-        // 2b. DOM Trader fills. Not present in hedge_records, so they come from the
-        // LP position list, filtered to the ids CBookPage marked as manual.
-        try {
-          const domIds = readDomPositionIds();
-          if (domIds.size > 0 && !cancelled) {
-            await Promise.allSettled(lps.map(async (lp) => {
-              const ac = new AbortController();
-              const killer = setTimeout(() => ac.abort(), 8000);
-              try {
-                const r = await fetch(`/api/v1/fix/positions/${lp.lp_id}`, { signal: ac.signal });
-                if (!r.ok) return;
-                const j = await r.json();
-                const positions = (j?.data?.positions ?? j?.data ?? []) as DomPositionLike[];
-                for (const pos of positions) {
-                  const pid = String(pos.position_id ?? '');
-                  if (!pid || !domIds.has(pid)) continue;
-                  if ((pos.open_price ?? 0) <= 0) continue;
-                  seedRows.push(buildRowFromDomPosition(pos, lp.lp_id));
-                }
-              } catch { /* non-fatal */ }
-              finally { clearTimeout(killer); }
-            }));
-          }
-        } catch { /* non-fatal */ }
+        const seedRows: ExecutionReportRow[] = Array.from(seedMap.values());
+        const seedFailed = execFailed && recordFailed;
 
         if (!cancelled && seedRows.length === 0 && seedFailed) {
-          // Do not show "Waiting for orders" — that reads as "no orders yet" when in
-          // fact history could not be loaded at all.
+          // Do not leave the page showing "Waiting for orders" — that reads as
+          // "no orders yet" when in fact history could not be loaded.
           setSeedError('Could not load order history. Live orders will still appear as they arrive.');
         }
 
@@ -1131,7 +1185,9 @@ export function ExecutionReportPage() {
     ws.onopen = () => {
       retryRef.current = 0;
       setWsStatus('live');
-      ws.send(JSON.stringify({ type: 'subscribe', topics: [''] }));
+      // No subscribe frame. CBookPage opens this same endpoint without one and
+      // receives DOM fills correctly, so the server pushes by default and an
+      // explicit topic list can only narrow what arrives.
     };
 
     ws.onmessage = (ev) => {
@@ -1187,12 +1243,37 @@ export function ExecutionReportPage() {
         //
         } else if (msg.type === 'EXECUTION_REPORT') {
           const lp_id   = msg.lp_id as string ?? '';
-          const inner   = msg.data as Record<string, unknown> ?? {};
+          // Fields may arrive wrapped under msg.data or flat on the envelope — the
+          // FIX Bridge API doc documents the flat form. Reading only msg.data drops
+          // flat frames with no row and no error. Same fallback the hedge.fill
+          // branch above already uses.
+          // Fields arrive under msg.data, flat on the envelope, or SPLIT ACROSS
+          // BOTH. CBookPage reads `fill.x ?? msg.x` per field on this same stream
+          // for exactly that reason, and it receives DOM fills correctly.
+          // Committing to one level meant a payload with data present but
+          // ord_status on the envelope failed the hasErFields test below, so the
+          // fill branch never ran and no row was ever built. Merge once, inner wins.
+          const rawInner = (msg.data ?? {}) as Record<string, unknown>;
+          const inner    = { ...(msg as Record<string, unknown>), ...rawInner };
+
+          // Distinguish a NexRisk NOS_SENT notification from a FIX ExecutionReport.
+          // Only the ER carries exec_type / ord_status; prefer the explicit
+          // discriminator when C++ sends it. Read `type` from the inner payload
+          // only — the merged view inherits msg.type, which is always
+          // 'EXECUTION_REPORT' and would defeat the check.
+          // Documented as `clord_id`, published as `cl_ord_id`. Accept either.
+          const erClordId = String(inner.cl_ord_id ?? inner.clord_id ?? '');
+
+          const innerType   = rawInner.type as string | undefined;
+          const hasErFields = inner.exec_type !== undefined || inner.ord_status !== undefined;
+          const isNosSent   = innerType === 'NOS_SENT'
+            || (!hasErFields && !!erClordId && !inner.trade_report_id);
 
           // ── NOS sent outbound ──────────────────────────────────
-          if (inner.cl_ord_id) {
+          if (isNosSent) {
+            if (!erClordId) return;   // no key — cannot build or correlate a row
             const nosRecord: NosRecord = {
-              clord_id:  inner.cl_ord_id  as string,
+              clord_id:  erClordId,
               symbol:    inner.symbol     as string,
               side:      inner.side       as string,
               order_qty: inner.qty        as number ?? 0,
@@ -1219,11 +1300,45 @@ export function ExecutionReportPage() {
             }
             // Refresh the detail panel if this row is currently selected —
             // AG Grid mutations don't trigger React re-renders on their own.
-            setSelectedRow((prev) =>
-              prev && prev.trade_report_id === pendingRow.trade_report_id ? pendingRow : prev
-            );
+            if (selectedIdRef.current === pendingRow.trade_report_id) {
+              setSelectedRow(pendingRow);
+            }
+
+          // ── FIX ExecutionReport — the fill ─────────────────────
+          // Fills are built from the ER, not the AE. The ER is the only message
+          // carrying a per-order key (tag 11); TE omits it on the AE and tag 37 is
+          // the position id under netting. Keyed on cl_ord_id, this updates the
+          // NOS row in place rather than creating a second row beside it.
+          } else if (hasErFields && erClordId) {
+            const clordId = erClordId;
+            const rowId   = `pending_${clordId}`;
+            const nosRecord = nosMapRef.current.get(clordId) ?? null;
+            const existing  = rowMapRef.current.get(rowId);
+
+            const row = buildRowFromExecReport(inner, lp_id, nosRecord, existing);
+
+            if (row.rule_id === null) {
+              const match = hedgeRuleMapRef.current.get(clordId)
+                ?? pendingHedgeFillsRef.current.get(clordId);
+              if (match) { row.rule_id = match.rule_id; row.rule_name = match.rule_name; }
+            }
+            pendingHedgeFillsRef.current.delete(clordId);
+
+            rowMapRef.current.set(rowId, row);
+            clordIdMapRef.current.set(clordId, rowId);
+
+            if (existing) {
+              gridRef.current?.api?.applyTransactionAsync({ update: [row] });
+            } else {
+              gridRef.current?.api?.applyTransactionAsync({ add: [row], addIndex: 0 });
+            }
+            if (selectedIdRef.current === rowId) setSelectedRow(row);
 
           // ── AE fill from TE ────────────────────────────────────
+          // Kept unconditional. TE omits tag 11 on the AE, so requiring a ClOrdID
+          // here silently dropped every DOM Trader fill — the orders executed and
+          // no row was ever built. An uncorrelated row showing "-" and "Manual" is
+          // far better than an invisible fill.
           } else if (inner.trade_report_id) {
             const ae = inner as unknown as TradeCaptureWsEvent['data'];
             // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
@@ -1267,11 +1382,17 @@ export function ExecutionReportPage() {
             }
             // Refresh the detail panel if this row — or the pending row it
             // replaced — is currently selected.
-            setSelectedRow((prev) => {
-              if (!prev) return prev;
-              if (prev.trade_report_id === row.trade_report_id) return row;
-              if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
-              return prev;
+            const selId = selectedIdRef.current;
+            if (selId && (selId === row.trade_report_id
+                || (row.clord_id && selId === `pending_${row.clord_id}`))) {
+              setSelectedRow(row);
+            }
+          } else {
+            // Matched no branch — a shape we do not recognise. Previously this was
+            // dropped in silence, which is how DOM orders went missing with no
+            // error anywhere. Log the payload keys so a mismatch is visible.
+            console.warn('[ExecReport] unhandled EXECUTION_REPORT payload', {
+              keys: Object.keys(inner), inner,
             });
           }
 
@@ -1324,52 +1445,11 @@ export function ExecutionReportPage() {
           }
           // Refresh the detail panel if this row — or the pending row it
           // replaced — is currently selected.
-          setSelectedRow((prev) => {
-            if (!prev) return prev;
-            if (prev.trade_report_id === row.trade_report_id) return row;
-            if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
-            return prev;
-          });
-        // ── POSITION_REPORT — DOM Trader fills only ────────────
-        // Additive branch. Nothing above is altered. A position is only turned into
-        // a row when CBookPage has marked it 'DOM Trader', so hedge and terminal
-        // positions are ignored here and cannot duplicate execution-derived rows.
-        } else if (msg.type === 'POSITION_REPORT') {
-          const pd = (msg.data ?? msg) as Record<string, unknown>;
-          const pid = String(pd.position_id ?? '');
-          if (!pid) return;
-          if (!readDomPositionIds().has(pid)) return;
-
-          const rowId = `dom_${pid}`;
-          const openPx = Number(pd.open_price ?? 0) || 0;
-          const existing = rowMapRef.current.get(rowId);
-
-          // open_price 0 means TE closed the position — drop the row.
-          if (openPx <= 0) {
-            if (existing) {
-              rowMapRef.current.delete(rowId);
-              gridRef.current?.api?.applyTransactionAsync({ remove: [existing] });
-            }
-            return;
+          const selIdTcr = selectedIdRef.current;
+          if (selIdTcr && (selIdTcr === row.trade_report_id
+              || (row.clord_id && selIdTcr === `pending_${row.clord_id}`))) {
+            setSelectedRow(row);
           }
-
-          const row = buildRowFromDomPosition({
-            position_id: pid,
-            symbol:      String(pd.symbol ?? ''),
-            open_price:  openPx,
-            long_qty:    Number(pd.long_qty  ?? 0) || 0,
-            short_qty:   Number(pd.short_qty ?? 0) || 0,
-            commission:  Number(pd.commission ?? 0) || 0,
-            received_ts: Number(msg.timestamp_ms ?? Date.now()),
-          }, String(msg.lp_id ?? ''));
-
-          rowMapRef.current.set(rowId, row);
-          if (existing) {
-            gridRef.current?.api?.applyTransactionAsync({ update: [row] });
-          } else {
-            gridRef.current?.api?.applyTransactionAsync({ add: [row], addIndex: 0 });
-          }
-
         } else if (msg.type === 'SESSION_STATE_CHANGE' || msg.type === 'SESSION_LOGON' || msg.type === 'SESSION_LOGOUT') {
           const lp_id    = msg.lp_id as string | undefined;
           const newState = (msg.session_state ?? msg.state ?? (msg.type === 'SESSION_LOGON' ? 'LOGGED_ON' : 'DISCONNECTED')) as string;
@@ -1421,36 +1501,101 @@ export function ExecutionReportPage() {
   }, [connectWs]);
 
   // ── Hedge records map — loads on mount, refreshes every 30s ──
-  // Ground truth for strategy names. Keyed by clord_id.
-  // Enriches both historical seed rows and live fill rows.
+  // Ground truth for strategy names AND for order state. Keyed by clord_id.
+  // Enriches seed and live rows, and reconciles rows the WS could not resolve.
   useEffect(() => {
+    // Page fully every time, but at 60s rather than 30s.
+    //
+    // The previous revision polled only page 1 to cut load. That also shrank the
+    // enrichment window to the 200 most recent records against a 2,000-row grid,
+    // so most rows could never be matched — it gave away the thing the poll exists
+    // to do. Halving the frequency instead keeps the full window at roughly the
+    // same request volume.
     const loadHedgeRecords = async () => {
       try {
-        const res = await fetch('/api/v1/hedge/records?page_size=200');
-        if (!res.ok) return;
-        const json = await res.json();
-        const records: Array<{ clord_id: string; rule_id: number | null; rule_name: string | null }>
-          = json.data ?? [];
+        const records = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
+        if (!records) return;
+
         const map = new Map<string, { rule_id: number; rule_name: string | null }>();
+        // Notional (LP units) keyed by clord_id. The NOS and AE report MT5 lots, so
+        // a live row shows 0.1 where the record says 10,000 for the same order. The
+        // Qty and Fill Qty columns are notional, so the record is the correct source
+        // and lots are never displayed.
+        const volMap = new Map<string, { order_qty: number; fill_qty: number }>();
         for (const r of records) {
-          if (r.clord_id && r.rule_id !== null) {
-            map.set(r.clord_id, { rule_id: r.rule_id, rule_name: r.rule_name ?? null });
+          const clord = String(r.clord_id ?? '');
+          if (!clord) continue;
+          if (r.rule_id != null) {
+            map.set(clord, { rule_id: Number(r.rule_id), rule_name: (r.rule_name as string) ?? null });
           }
+          volMap.set(clord, {
+            order_qty: parseFloat(String(r.hedge_volume_lp ?? '0')) || 0,
+            fill_qty:  parseFloat(String(r.lp_fill_volume_lp ?? '0')) || 0,
+          });
         }
         hedgeRuleMapRef.current = map;
 
-        // Enrich any rows already in the grid that don't yet have a strategy name
         const updates: ExecutionReportRow[] = [];
+
+        // 1. Reconcile rows stuck at PENDING.
+        //
+        // A pending row is created on NOS_SENT keyed `pending_<clord_id>` and is
+        // retired when the AE arrives carrying that same cl_ord_id. When the AE
+        // arrives without it, nothing can retire the row and it sits at PENDING
+        // showing a filled order as unfilled — the same missing field that leaves
+        // User as "—" and the strategy name blank.
+        //
+        // hedge_records is authoritative and already fetched here, so rebuild those
+        // rows from it. buildRowFromHedge derives the identical `pending_<clord_id>`
+        // key, so this updates in place rather than duplicating, and restores fill
+        // price, fill time, round-trip and LP position id along with the state.
+        //
+        // This is a safety net, not the fix. It closes within one poll interval;
+        // stamping cl_ord_id on the AE resolves it instantly and is the real answer.
+        for (const r of records) {
+          const clord = String(r.clord_id ?? '');
+          if (!clord) continue;
+          const existing = rowMapRef.current.get(`pending_${clord}`);
+          if (!existing || existing.te_status !== 'PENDING') continue;
+          const state = String(r.hedge_state ?? '');
+          if (!state || state === 'PENDING') continue;   // genuinely still pending
+          const rebuilt = buildRowFromHedge(
+            hedgeRecordToExecutionRow(r),
+            String(r.hedging_lp_id ?? existing.lp_id ?? ''),
+          );
+          rowMapRef.current.set(rebuilt.trade_report_id, rebuilt);
+          updates.push(rebuilt);
+        }
+
+        // 2. Enrich rows from the authoritative record: strategy name where it is
+        //    still missing, and notional quantities in place of the lots the NOS
+        //    and AE report. Only push an update when something actually changed,
+        //    so this does not churn the grid every 30s.
         for (const [, row] of rowMapRef.current) {
-          if (row.clord_id && row.rule_id === null) {
-            const match = map.get(row.clord_id);
-            if (match) {
-              const updated = { ...row, rule_id: match.rule_id, rule_name: match.rule_name };
-              rowMapRef.current.set(row.trade_report_id, updated);
-              updates.push(updated);
+          if (!row.clord_id) continue;
+          let next = row;
+
+          if (next.rule_id === null) {
+            const match = map.get(next.clord_id);
+            if (match) next = { ...next, rule_id: match.rule_id, rule_name: match.rule_name };
+          }
+
+          const vol = volMap.get(next.clord_id);
+          if (vol) {
+            if (vol.order_qty > 0 && next.order_qty !== vol.order_qty) {
+              next = { ...next, order_qty: vol.order_qty };
+            }
+            if (vol.fill_qty > 0 && next.fill_qty !== vol.fill_qty) {
+              next = { ...next, fill_qty: vol.fill_qty };
             }
           }
+
+          if (next !== row) {
+            rowMapRef.current.set(row.trade_report_id, next);
+            updates.push(next);
+          }
         }
+
         if (updates.length > 0) {
           gridRef.current?.api?.applyTransactionAsync({ update: updates });
         }
@@ -1458,7 +1603,7 @@ export function ExecutionReportPage() {
     };
 
     loadHedgeRecords();
-    const t = setInterval(loadHedgeRecords, 30_000);
+    const t = setInterval(loadHedgeRecords, 60_000);
     return () => clearInterval(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1474,7 +1619,12 @@ export function ExecutionReportPage() {
   useEffect(() => {
     let lastCount = -1;
     let lastTopId = '';
-    const MAX_GRID_ROWS = 500;  // cap live grid size so AG-Grid teardown stays fast
+    // Cap live grid size so AG-Grid teardown stays fast. Raised from 500: the burst
+    // test fires 100 orders/sec for 5s, so 500 orders arrive inside the window and the
+    // old cap evicted the earlier half of the run before it could be read. Phantom-row
+    // removal (see the EXECUTION_REPORT handler) roughly halves rows per order, so
+    // 2000 leaves comfortable headroom without returning to unbounded growth.
+    const MAX_GRID_ROWS = SEED_ROW_CAP;
     const sync = () => {
       const map = rowMapRef.current;
       let snapshot = Array.from(map.values());
@@ -1493,9 +1643,10 @@ export function ExecutionReportPage() {
           try { gridRef.current?.api?.applyTransactionAsync({ remove: drop }); } catch { /* grid not ready */ }
           for (const r of drop) {
             map.delete(r.trade_report_id);
-            // Purge the secondary indexes too — they otherwise retain an entry per
-            // evicted row for the lifetime of the page, and stale clord_ids resolve
-            // hedge.fill events to rows that no longer exist.
+            // Purge the secondary indexes too. Without this, clordIdMapRef and
+            // pendingHedgeFillsRef retain an entry per evicted row for the lifetime
+            // of the page — unbounded growth over a sustained run, and stale clord_id
+            // entries that resolve hedge.fill events to rows that no longer exist.
             if (r.clord_id) {
               clordIdMapRef.current.delete(r.clord_id);
               pendingHedgeFillsRef.current.delete(r.clord_id);
@@ -1655,9 +1806,10 @@ export function ExecutionReportPage() {
           cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
             const colors: Record<string, string> = {
               'FILLED':   '#66e07a',
-              // hedge_records.hedge_state values reach this column via the seed.
-              // Without entries here they fall through to the grey default.
-              'HEDGED':    '#66e07a',
+              // hedge_records.hedge_state values reach this column via the seed and
+              // the reconciliation path. Without entries here they fell through to
+              // the grey default and read as unrecognised.
+              'HEDGED':   '#66e07a',
               'ESCALATED': '#e0a020',
               'CANCELLED': '#8a8a8a',
               'PARTIAL':  '#8fcf9f',
@@ -1890,7 +2042,8 @@ export function ExecutionReportPage() {
 
   // AG Grid sizes columns to rendered content, so running this against an empty
   // grid collapses every column to its minimum — which is what happened whenever
-  // the seed returned nothing. Only size when there are rows.
+  // the history seed returned nothing. Only size when there are rows, and mark it
+  // done so the WS-driven re-size below fires exactly once.
   const autoSizedRef = useRef(false);
   const autoSizeIfRows = useCallback(() => {
     const api = gridRef.current?.api;
@@ -1908,8 +2061,8 @@ export function ExecutionReportPage() {
     autoSizeIfRows();
   }, [autoSizeIfRows]);
 
-  // Rows usually arrive by WS after both callbacks above have already run. Size
-  // once on the first batch that lands.
+  // Rows usually arrive by WS after the grid is already up, which is after both
+  // callbacks above have run. Size once on the first batch that lands.
   useEffect(() => {
     if (autoSizedRef.current || rows.length === 0) return;
     const t = setTimeout(autoSizeIfRows, 150);
@@ -1922,14 +2075,22 @@ export function ExecutionReportPage() {
   
 
   const onRowClicked = useCallback((params: { data?: ExecutionReportRow }) => {
-    if (params.data) setSelectedRow(params.data);
+    if (params.data) {
+      // Set the ref eagerly as well as via the effect. The effect only commits after
+      // the next render, so a WS frame for this row arriving in that window would miss
+      // the guard and leave the detail panel stale until the following frame.
+      selectedIdRef.current = params.data.trade_report_id;
+      setSelectedRow(params.data);
+    }
   }, []);
 
   const getContextMenuItems = useCallback(
     (params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
       const rowData = params.node?.data as ExecutionReportRow | undefined;
       return [
-        { name: 'View Order Details', action: () => { if (rowData) setSelectedRow(rowData); } },
+        { name: 'View Order Details', action: () => {
+          if (rowData) { selectedIdRef.current = rowData.trade_report_id; setSelectedRow(rowData); }
+        } },
         'separator',
         'copy',
         'copyWithHeaders',
