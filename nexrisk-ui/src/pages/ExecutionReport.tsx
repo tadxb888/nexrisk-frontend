@@ -503,7 +503,7 @@ function buildRowFromExecReport(
   nosRecord: NosRecord | null,
   existing: ExecutionReportRow | undefined,
 ): ExecutionReportRow {
-  const clordId = String(er.cl_ord_id ?? '');
+  const clordId = String(er.cl_ord_id ?? er.clord_id ?? '');
   const ts      = Number(er.timestamp_ms ?? 0) || 0;
   const nosTs   = nosRecord?.nos_ts ?? null;
   const mapped  = mapOrdStatusToTeStatus(String(er.ord_status ?? ''));
@@ -1221,16 +1221,21 @@ export function ExecutionReportPage() {
           // fill price until a manual refresh dropped it.
           // Only the ER carries exec_type / ord_status. Prefer the explicit
           // discriminator when C++ sends it (backend brief item 7).
+          // The FIX Bridge API doc documents this event's key as `clord_id` while
+          // the serialiser field list and the AE type use `cl_ord_id`. Accept both
+          // rather than fail silently on a naming mismatch.
+          const erClordId = String(inner.cl_ord_id ?? inner.clord_id ?? '');
+
           const innerType   = inner.type as string | undefined;
           const hasErFields = inner.exec_type !== undefined || inner.ord_status !== undefined;
           const isNosSent   = innerType === 'NOS_SENT'
-            || (!hasErFields && !!inner.cl_ord_id && !inner.trade_report_id);
+            || (!hasErFields && !!erClordId && !inner.trade_report_id);
 
           // ── NOS sent outbound ──────────────────────────────────
           if (isNosSent) {
-            if (!inner.cl_ord_id) return;   // no key — cannot build or correlate a row
+            if (!erClordId) return;   // no key — cannot build or correlate a row
             const nosRecord: NosRecord = {
-              clord_id:  inner.cl_ord_id  as string,
+              clord_id:  erClordId,
               symbol:    inner.symbol     as string,
               side:      inner.side       as string,
               order_qty: inner.qty        as number ?? 0,
@@ -1266,8 +1271,8 @@ export function ExecutionReportPage() {
           // carrying a per-order key (tag 11); TE omits it on the AE and tag 37 is
           // the position id under netting. Keyed on cl_ord_id, this updates the
           // NOS row in place rather than creating a second row beside it.
-          } else if (hasErFields && inner.cl_ord_id) {
-            const clordId = String(inner.cl_ord_id);
+          } else if (hasErFields && erClordId) {
+            const clordId = erClordId;
             const rowId   = `pending_${clordId}`;
             const nosRecord = nosMapRef.current.get(clordId) ?? null;
             const existing  = rowMapRef.current.get(rowId);
@@ -1295,7 +1300,7 @@ export function ExecutionReportPage() {
           // Retained only for AEs that carry a ClOrdID. Without one an AE cannot be
           // tied to its order, and building a row from it produces an uncorrelated
           // duplicate of the row the ER already created.
-          } else if (inner.trade_report_id && inner.cl_ord_id) {
+          } else if (inner.trade_report_id && erClordId) {
             const ae = inner as unknown as TradeCaptureWsEvent['data'];
             // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
             // Exact 1:1 match — no symbol|side guessing, no time window.
