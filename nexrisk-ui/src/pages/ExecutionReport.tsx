@@ -460,6 +460,81 @@ function buildRowFromHedge(
 }
 
 // Build a PENDING row when we've sent a NOS but no AE received yet
+// ── DOM Trader executions ──────────────────────────────────────────────────
+//
+// Manual DOM fills are not written to hedge_records — the Portfolio API brief
+// lists that as an unfinished backend milestone — so they cannot be seeded from
+// there, and they carry nothing on the wire that identifies them as manual.
+//
+// CBookPage solves this client-side: when the DOM panel submits an order it
+// queues the symbol+side, matches it to the resulting POSITION_REPORT, and
+// persists `position_id → { type: 'DOM Trader' }` to localStorage under
+// `nexrisk_pos_overrides`. That map is the only record that a given position was
+// manually placed, and it is already being maintained. Read it here rather than
+// duplicating the bookkeeping.
+//
+// Hedge positions are labelled with their strategy name in the same map, so
+// filtering on 'DOM Trader' cannot pick them up and no duplicate rows appear.
+const DOM_OVERRIDES_KEY = 'nexrisk_pos_overrides';
+
+function readDomPositionIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DOM_OVERRIDES_KEY);
+    if (!raw) return new Set();
+    const entries = JSON.parse(raw) as [string, { type?: string }][];
+    return new Set(
+      entries.filter(([, v]) => v?.type === 'DOM Trader').map(([k]) => k),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+interface DomPositionLike {
+  position_id: string;
+  symbol:      string;
+  open_price:  number;
+  long_qty:    number;
+  short_qty:   number;
+  commission?: number;
+  received_ts?: number;
+}
+
+// rule_name stays null so the Execution Type column renders "Manual", which is
+// correct for a manual order — it is not a missing strategy.
+function buildRowFromDomPosition(pos: DomPositionLike, lp_id: string): ExecutionReportRow {
+  const qty = (pos.long_qty || 0) + (pos.short_qty || 0);
+  const ts  = pos.received_ts || Date.now();
+  return {
+    trade_report_id: `dom_${pos.position_id}`,
+    clord_id:        '',
+    nos_time:        '—',
+    fill_time:       formatSsMs(msToFixTimestamp(ts)),
+    round_trip_ms:   null,
+    te_status:       'FILLED',
+    user:            UNKNOWN_SUBMITTER,
+    order_id:        pos.position_id,
+    exec_id:         '',
+    symbol:          pos.symbol,
+    side:            (pos.long_qty || 0) > 0 ? 'BUY' : 'SELL',
+    ord_type:        'MKT',
+    tif:             'GTC',
+    order_qty:       qty,
+    fill_px:         pos.open_price || 0,
+    fill_qty:        qty,
+    commission:      pos.commission ?? 0,
+    route:           '',
+    security_exchange: '',
+    security_id:     '',
+    settl_date:      '',
+    account:         '',
+    transact_time:   msToFixTimestamp(ts),
+    lp_id,
+    rule_id:   null,
+    rule_name: null,
+  };
+}
+
 function buildPendingRow(nos: NosRecord, lp_id: string): ExecutionReportRow {
   return {
     trade_report_id: `pending_${nos.clord_id}`,
@@ -992,6 +1067,31 @@ export function ExecutionReportPage() {
           }
         } catch { seedFailed = true; }
 
+        // 2b. DOM Trader fills. Not present in hedge_records, so they come from the
+        // LP position list, filtered to the ids CBookPage marked as manual.
+        try {
+          const domIds = readDomPositionIds();
+          if (domIds.size > 0 && !cancelled) {
+            await Promise.allSettled(lps.map(async (lp) => {
+              const ac = new AbortController();
+              const killer = setTimeout(() => ac.abort(), 8000);
+              try {
+                const r = await fetch(`/api/v1/fix/positions/${lp.lp_id}`, { signal: ac.signal });
+                if (!r.ok) return;
+                const j = await r.json();
+                const positions = (j?.data?.positions ?? j?.data ?? []) as DomPositionLike[];
+                for (const pos of positions) {
+                  const pid = String(pos.position_id ?? '');
+                  if (!pid || !domIds.has(pid)) continue;
+                  if ((pos.open_price ?? 0) <= 0) continue;
+                  seedRows.push(buildRowFromDomPosition(pos, lp.lp_id));
+                }
+              } catch { /* non-fatal */ }
+              finally { clearTimeout(killer); }
+            }));
+          }
+        } catch { /* non-fatal */ }
+
         if (!cancelled && seedRows.length === 0 && seedFailed) {
           // Do not show "Waiting for orders" — that reads as "no orders yet" when in
           // fact history could not be loaded at all.
@@ -1230,6 +1330,46 @@ export function ExecutionReportPage() {
             if (row.clord_id && prev.trade_report_id === `pending_${row.clord_id}`) return row;
             return prev;
           });
+        // ── POSITION_REPORT — DOM Trader fills only ────────────
+        // Additive branch. Nothing above is altered. A position is only turned into
+        // a row when CBookPage has marked it 'DOM Trader', so hedge and terminal
+        // positions are ignored here and cannot duplicate execution-derived rows.
+        } else if (msg.type === 'POSITION_REPORT') {
+          const pd = (msg.data ?? msg) as Record<string, unknown>;
+          const pid = String(pd.position_id ?? '');
+          if (!pid) return;
+          if (!readDomPositionIds().has(pid)) return;
+
+          const rowId = `dom_${pid}`;
+          const openPx = Number(pd.open_price ?? 0) || 0;
+          const existing = rowMapRef.current.get(rowId);
+
+          // open_price 0 means TE closed the position — drop the row.
+          if (openPx <= 0) {
+            if (existing) {
+              rowMapRef.current.delete(rowId);
+              gridRef.current?.api?.applyTransactionAsync({ remove: [existing] });
+            }
+            return;
+          }
+
+          const row = buildRowFromDomPosition({
+            position_id: pid,
+            symbol:      String(pd.symbol ?? ''),
+            open_price:  openPx,
+            long_qty:    Number(pd.long_qty  ?? 0) || 0,
+            short_qty:   Number(pd.short_qty ?? 0) || 0,
+            commission:  Number(pd.commission ?? 0) || 0,
+            received_ts: Number(msg.timestamp_ms ?? Date.now()),
+          }, String(msg.lp_id ?? ''));
+
+          rowMapRef.current.set(rowId, row);
+          if (existing) {
+            gridRef.current?.api?.applyTransactionAsync({ update: [row] });
+          } else {
+            gridRef.current?.api?.applyTransactionAsync({ add: [row], addIndex: 0 });
+          }
+
         } else if (msg.type === 'SESSION_STATE_CHANGE' || msg.type === 'SESSION_LOGON' || msg.type === 'SESSION_LOGOUT') {
           const lp_id    = msg.lp_id as string | undefined;
           const newState = (msg.session_state ?? msg.state ?? (msg.type === 'SESSION_LOGON' ? 'LOGGED_ON' : 'DISCONNECTED')) as string;
