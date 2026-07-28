@@ -1324,16 +1324,16 @@ export function ExecutionReportPage() {
   // Ground truth for strategy names AND for order state. Keyed by clord_id.
   // Enriches seed and live rows, and reconciles rows the WS could not resolve.
   useEffect(() => {
-    // Page fully on mount, then poll only the most recent page. Reconciliation and
-    // enrichment target recent orders, and a full paged sweep every 30s would mean
-    // up to ten requests per interval against a table that is already being written
-    // to at 100 orders/sec.
-    let firstLoad = true;
-
+    // Page fully every time, but at 60s rather than 30s.
+    //
+    // The previous revision polled only page 1 to cut load. That also shrank the
+    // enrichment window to the 200 most recent records against a 2,000-row grid,
+    // so most rows could never be matched — it gave away the thing the poll exists
+    // to do. Halving the frequency instead keeps the full window at roughly the
+    // same request volume.
     const loadHedgeRecords = async () => {
       try {
-        const records = await fetchHedgeRecordsPaged(firstLoad ? SEED_ROW_CAP : HEDGE_PAGE_SIZE);
-        firstLoad = false;
+        const records = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
         if (!records) return;
 
         const map = new Map<string, { rule_id: number; rule_name: string | null }>();
@@ -1423,7 +1423,7 @@ export function ExecutionReportPage() {
     };
 
     loadHedgeRecords();
-    const t = setInterval(loadHedgeRecords, 30_000);
+    const t = setInterval(loadHedgeRecords, 60_000);
     return () => clearInterval(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
