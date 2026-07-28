@@ -45,6 +45,12 @@ const UNKNOWN_SUBMITTER = '—';
 // Live grid row cap. The seed pages up to this and the 3s sync evicts past it,
 // so both ends of the pipeline agree on one number instead of drifting apart.
 const SEED_ROW_CAP = 2000;
+
+// States that mean the order reached the LP and filled. hedge_records reports
+// HEDGED for a completed hedge and CLOSED/CLOSING once unwound; the live AE path
+// reports FILLED. Counting only 'FILLED' left every header stat at zero as soon as
+// rows were seeded from hedge_records.
+const FILLED_STATES = new Set(['FILLED', 'HEDGED', 'PARTIAL', 'CLOSED', 'CLOSING']);
 const WS_MAX_RETRIES = 8;
 
 // ── Icons ──────────────────────────────────────────────────────
@@ -121,7 +127,7 @@ export interface ExecutionReportRow {
   fill_time: string;        // confirm/AE-receive instant (the value RT is measured to) or "—"
   round_trip_ms: number | null;
   // Status — always FILLED for AE; PENDING if NOS sent but no AE yet
-  te_status: 'FILLED' | 'PENDING' | 'FAILED' | 'REJECTED' | 'ERROR' | 'B_BOOK' | 'PARTIAL' | 'CLOSED' | 'CLOSING' | 'UNKNOWN';
+  te_status: 'FILLED' | 'HEDGED' | 'PENDING' | 'FAILED' | 'REJECTED' | 'ERROR' | 'B_BOOK' | 'PARTIAL' | 'ESCALATED' | 'CLOSED' | 'CLOSING' | 'UNKNOWN';
   user: string;
   order_id: string;         // tag 37 — TE order ID
   exec_id: string;
@@ -378,6 +384,48 @@ function hedgeRecordToExecutionRow(r: Record<string, unknown>): HedgeExecutionRo
     escalated_ms:      isoToMs(r.escalated_at),
     closed_ms:         isoToMs(r.closed_at),
   };
+}
+
+// Fetch hedge records, paged. page_size is capped at 200 server-side, so a single
+// call silently truncates history. Page 1 reports `total`; the rest are fetched in
+// parallel up to `cap` — which is the grid's own row cap, since anything beyond it
+// would be evicted by the sync effect on arrival.
+// Returns null only if page 1 fails outright; partial pages are tolerated.
+const HEDGE_PAGE_SIZE = 200;
+
+async function fetchHedgeRecordsPaged(cap: number): Promise<Record<string, unknown>[] | null> {
+  const getPage = async (page: number): Promise<{ list: Record<string, unknown>[]; total: number } | null> => {
+    const ac = new AbortController();
+    const killer = setTimeout(() => ac.abort(), 8000);
+    try {
+      const r = await fetch(
+        `/api/v1/hedge/records?page=${page}&page_size=${HEDGE_PAGE_SIZE}`,
+        { signal: ac.signal },
+      );
+      if (!r.ok) return null;
+      const j = await r.json();
+      return { list: (j?.data ?? []) as Record<string, unknown>[], total: Number(j?.total ?? 0) };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(killer);
+    }
+  };
+
+  const first = await getPage(1);
+  if (!first) return null;
+
+  const out = [...first.list];
+  const wanted = first.total > 0 ? Math.min(first.total, cap) : out.length;
+  const pageCount = Math.ceil(wanted / HEDGE_PAGE_SIZE);
+
+  if (pageCount > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, i) => getPage(i + 2)),
+    );
+    for (const p of rest) if (p) out.push(...p.list);
+  }
+  return out;
 }
 
 function buildRowFromHedge(
@@ -946,35 +994,27 @@ export function ExecutionReportPage() {
         // strategy-name map refreshed every 30s on this page. It is not LP-scoped, so
         // each record carries its own hedging_lp_id.
         //
-        // Single page for now — 200 most recent records. Pagination is written and
-        // ready (page 1 returns `total`, remaining pages fetched in parallel up to
-        // SEED_ROW_CAP) but deliberately held back so the burst test runs against
-        // the smallest possible change.
-        const PAGE_SIZE = 200;
         const seedRows: ExecutionReportRow[] = [];
         let seedFailed = false;
 
         try {
-          const ac = new AbortController();
-          const killer = setTimeout(() => ac.abort(), 8000);
-          let res: Response | null = null;
-          try {
-            res = await fetch(
-              `/api/v1/hedge/records?page=1&page_size=${PAGE_SIZE}`,
-              { signal: ac.signal },
-            );
-          } catch { res = null; }
-          finally { clearTimeout(killer); }
-
-          if (!res?.ok) {
+          const recs = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
+          if (!recs) {
             seedFailed = true;
           } else if (!cancelled) {
-            const json = await res.json();
-            const recs = (json?.data ?? []) as Record<string, unknown>[];
+            // lp_id must match an entry in the LP dropdown or the row is filtered
+            // out of both the grid and the header stats. hedge_records reports
+            // hedging_lp_id, which is not guaranteed to use the same identifier as
+            // the LP list, so fall back rather than trust it blindly.
+            const knownLpIds = new Set(lps.map(l => l.lp_id));
+            const resolveLp = (raw: string): string => {
+              if (knownLpIds.has(raw)) return raw;
+              return lps.length === 1 ? lps[0].lp_id : raw;
+            };
             for (const r of recs) {
               seedRows.push(buildRowFromHedge(
                 hedgeRecordToExecutionRow(r),
-                String(r.hedging_lp_id ?? ''),
+                resolveLp(String(r.hedging_lp_id ?? '')),
               ));
             }
           }
@@ -1281,36 +1321,94 @@ export function ExecutionReportPage() {
   }, [connectWs]);
 
   // ── Hedge records map — loads on mount, refreshes every 30s ──
-  // Ground truth for strategy names. Keyed by clord_id.
-  // Enriches both historical seed rows and live fill rows.
+  // Ground truth for strategy names AND for order state. Keyed by clord_id.
+  // Enriches seed and live rows, and reconciles rows the WS could not resolve.
   useEffect(() => {
     const loadHedgeRecords = async () => {
       try {
-        const res = await fetch('/api/v1/hedge/records?page_size=200');
-        if (!res.ok) return;
-        const json = await res.json();
-        const records: Array<{ clord_id: string; rule_id: number | null; rule_name: string | null }>
-          = json.data ?? [];
+        const records = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
+        if (!records) return;
+
         const map = new Map<string, { rule_id: number; rule_name: string | null }>();
+        // Notional (LP units) keyed by clord_id. The NOS and AE report MT5 lots, so
+        // a live row shows 0.1 where the record says 10,000 for the same order. The
+        // Qty and Fill Qty columns are notional, so the record is the correct source
+        // and lots are never displayed.
+        const volMap = new Map<string, { order_qty: number; fill_qty: number }>();
         for (const r of records) {
-          if (r.clord_id && r.rule_id !== null) {
-            map.set(r.clord_id, { rule_id: r.rule_id, rule_name: r.rule_name ?? null });
+          const clord = String(r.clord_id ?? '');
+          if (!clord) continue;
+          if (r.rule_id != null) {
+            map.set(clord, { rule_id: Number(r.rule_id), rule_name: (r.rule_name as string) ?? null });
           }
+          volMap.set(clord, {
+            order_qty: parseFloat(String(r.hedge_volume_lp ?? '0')) || 0,
+            fill_qty:  parseFloat(String(r.lp_fill_volume_lp ?? '0')) || 0,
+          });
         }
         hedgeRuleMapRef.current = map;
 
-        // Enrich any rows already in the grid that don't yet have a strategy name
         const updates: ExecutionReportRow[] = [];
+
+        // 1. Reconcile rows stuck at PENDING.
+        //
+        // A pending row is created on NOS_SENT keyed `pending_<clord_id>` and is
+        // retired when the AE arrives carrying that same cl_ord_id. When the AE
+        // arrives without it, nothing can retire the row and it sits at PENDING
+        // showing a filled order as unfilled — the same missing field that leaves
+        // User as "—" and the strategy name blank.
+        //
+        // hedge_records is authoritative and already fetched here, so rebuild those
+        // rows from it. buildRowFromHedge derives the identical `pending_<clord_id>`
+        // key, so this updates in place rather than duplicating, and restores fill
+        // price, fill time, round-trip and LP position id along with the state.
+        //
+        // This is a safety net, not the fix. It closes within one poll interval;
+        // stamping cl_ord_id on the AE resolves it instantly and is the real answer.
+        for (const r of records) {
+          const clord = String(r.clord_id ?? '');
+          if (!clord) continue;
+          const existing = rowMapRef.current.get(`pending_${clord}`);
+          if (!existing || existing.te_status !== 'PENDING') continue;
+          const state = String(r.hedge_state ?? '');
+          if (!state || state === 'PENDING') continue;   // genuinely still pending
+          const rebuilt = buildRowFromHedge(
+            hedgeRecordToExecutionRow(r),
+            String(r.hedging_lp_id ?? existing.lp_id ?? ''),
+          );
+          rowMapRef.current.set(rebuilt.trade_report_id, rebuilt);
+          updates.push(rebuilt);
+        }
+
+        // 2. Enrich rows from the authoritative record: strategy name where it is
+        //    still missing, and notional quantities in place of the lots the NOS
+        //    and AE report. Only push an update when something actually changed,
+        //    so this does not churn the grid every 30s.
         for (const [, row] of rowMapRef.current) {
-          if (row.clord_id && row.rule_id === null) {
-            const match = map.get(row.clord_id);
-            if (match) {
-              const updated = { ...row, rule_id: match.rule_id, rule_name: match.rule_name };
-              rowMapRef.current.set(row.trade_report_id, updated);
-              updates.push(updated);
+          if (!row.clord_id) continue;
+          let next = row;
+
+          if (next.rule_id === null) {
+            const match = map.get(next.clord_id);
+            if (match) next = { ...next, rule_id: match.rule_id, rule_name: match.rule_name };
+          }
+
+          const vol = volMap.get(next.clord_id);
+          if (vol) {
+            if (vol.order_qty > 0 && next.order_qty !== vol.order_qty) {
+              next = { ...next, order_qty: vol.order_qty };
+            }
+            if (vol.fill_qty > 0 && next.fill_qty !== vol.fill_qty) {
+              next = { ...next, fill_qty: vol.fill_qty };
             }
           }
+
+          if (next !== row) {
+            rowMapRef.current.set(row.trade_report_id, next);
+            updates.push(next);
+          }
         }
+
         if (updates.length > 0) {
           gridRef.current?.api?.applyTransactionAsync({ update: updates });
         }
@@ -1399,7 +1497,7 @@ export function ExecutionReportPage() {
 
   // ── Stats (derived from filtered rows) ──────────────────────
   const stats = useMemo(() => {
-    const filled = filteredRows.filter(r => r.te_status === 'FILLED');
+    const filled = filteredRows.filter(r => FILLED_STATES.has(r.te_status));
     const rts = filled
       .map(r => r.round_trip_ms)
       .filter((v): v is number => v !== null);
@@ -1517,10 +1615,15 @@ export function ExecutionReportPage() {
           headerTooltip: 'FILLED = 35=AE received; PENDING = NOS sent, no AE yet',
           width: 100,
           filter: 'agSetColumnFilter',
-          filterParams: { values: ['FILLED', 'PARTIAL', 'PENDING', 'FAILED', 'REJECTED', 'ERROR', 'B_BOOK', 'CLOSED', 'CLOSING', 'UNKNOWN'] },
+          filterParams: { values: ['FILLED', 'HEDGED', 'PARTIAL', 'PENDING', 'FAILED', 'REJECTED', 'ERROR', 'B_BOOK', 'ESCALATED', 'CLOSED', 'CLOSING', 'UNKNOWN'] },
           cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
             const colors: Record<string, string> = {
               'FILLED':   '#66e07a',
+              // hedge_records.hedge_state values reach this column via the seed and
+              // the reconciliation path. Without entries here they fell through to
+              // the grey default and read as unrecognised.
+              'HEDGED':   '#66e07a',
+              'ESCALATED': '#e0a020',
               'PARTIAL':  '#8fcf9f',
               'PENDING':  '#e0a020',
               'FAILED':   '#ff5c5c',
