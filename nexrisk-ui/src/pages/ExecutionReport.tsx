@@ -127,7 +127,7 @@ export interface ExecutionReportRow {
   fill_time: string;        // confirm/AE-receive instant (the value RT is measured to) or "—"
   round_trip_ms: number | null;
   // Status — always FILLED for AE; PENDING if NOS sent but no AE yet
-  te_status: 'FILLED' | 'HEDGED' | 'PENDING' | 'FAILED' | 'REJECTED' | 'ERROR' | 'B_BOOK' | 'PARTIAL' | 'ESCALATED' | 'CLOSED' | 'CLOSING' | 'UNKNOWN';
+  te_status: 'FILLED' | 'HEDGED' | 'PENDING' | 'FAILED' | 'REJECTED' | 'CANCELLED' | 'ERROR' | 'B_BOOK' | 'PARTIAL' | 'ESCALATED' | 'CLOSED' | 'CLOSING' | 'UNKNOWN';
   user: string;
   order_id: string;         // tag 37 — TE order ID
   exec_id: string;
@@ -472,6 +472,102 @@ function buildRowFromHedge(
 }
 
 // Build a PENDING row when we've sent a NOS but no AE received yet
+// FIX OrdStatus (tag 39) → display status. Returns null for statuses that carry no
+// state change, so an intermediate frame never overwrites a terminal one.
+function mapOrdStatusToTeStatus(ordStatus: string): ExecutionReportRow['te_status'] | null {
+  switch (ordStatus) {
+    case '2': return 'FILLED';      // terminal fill
+    case '1': return 'PARTIAL';
+    case '8': return 'REJECTED';
+    case '4': return 'CANCELLED';
+    case '0':
+    case 'A': return 'PENDING';
+    default:  return null;
+  }
+}
+
+// Build or update a fill row from a FIX ExecutionReport.
+//
+// The ER is the only message with a per-order key. TE omits tag 11 on the AE and
+// tag 37 is the position id under netting, so an AE cannot be tied to the order
+// that produced it — which is why fills built from AE could not retire their
+// pending row, resolve their submitter, or find their strategy name, and why DOM
+// Trader orders never appeared at all despite reaching TE correctly.
+//
+// Keyed `pending_<cl_ord_id>`, the same id buildPendingRow and buildRowFromHedge
+// derive, so the NOS row, the seeded row and the fill are all one row rather than
+// three. Quantities here are LP-side (tags 38/32/14) — notional, not MT5 lots.
+function buildRowFromExecReport(
+  er: Record<string, unknown>,
+  lp_id: string,
+  nosRecord: NosRecord | null,
+  existing: ExecutionReportRow | undefined,
+): ExecutionReportRow {
+  const clordId = String(er.cl_ord_id ?? '');
+  const ts      = Number(er.timestamp_ms ?? 0) || 0;
+  const nosTs   = nosRecord?.nos_ts ?? null;
+  const mapped  = mapOrdStatusToTeStatus(String(er.ord_status ?? ''));
+  const isFill  = mapped === 'FILLED' || mapped === 'PARTIAL';
+
+  const lastQty = Number(er.last_qty ?? 0) || 0;
+  const cumQty  = Number(er.cum_qty  ?? 0) || 0;
+  const lastPx  = Number(er.last_px  ?? 0) || 0;
+
+  // Same 5s sanity bound as the AE path: anything larger is a timestamp artefact
+  // rather than a real round trip, and is better shown as unknown.
+  const rt = (nosTs && ts && ts > nosTs && ts - nosTs < 5000)
+    ? ts - nosTs
+    : existing?.round_trip_ms ?? null;
+
+  const base: ExecutionReportRow = existing ?? {
+    trade_report_id: `pending_${clordId}`,
+    clord_id:        clordId,
+    nos_time:        nosTs ? formatSsMs(msToFixTimestamp(nosTs)) : '—',
+    fill_time:       '—',
+    round_trip_ms:   null,
+    te_status:       'PENDING',
+    user:            nosRecord?.submitted_by ?? UNKNOWN_SUBMITTER,
+    order_id:        '',
+    exec_id:         '',
+    symbol:          String(er.symbol ?? ''),
+    side:            er.side === 'SELL' ? 'SELL' : 'BUY',
+    ord_type:        nosRecord ? mapOrdType(nosRecord.ord_type) : 'MKT',
+    tif:             nosRecord ? mapTIF(nosRecord.tif) : 'GTC',
+    order_qty:       0,
+    fill_px:         0,
+    fill_qty:        0,
+    commission:      0,
+    route:           '',
+    security_exchange: '',
+    security_id:     '',
+    settl_date:      '',
+    account:         '',
+    transact_time:   '',
+    lp_id,
+    rule_id:   null,
+    rule_name: null,
+  };
+
+  return {
+    ...base,
+    trade_report_id: `pending_${clordId}`,
+    clord_id:        clordId,
+    symbol:          String(er.symbol ?? base.symbol),
+    side:            er.side === 'SELL' ? 'SELL' : (er.side === 'BUY' ? 'BUY' : base.side),
+    te_status:       mapped ?? base.te_status,
+    user:            nosRecord?.submitted_by ?? base.user,
+    order_id:        String(er.order_id ?? '') || base.order_id,
+    exec_id:         String(er.exec_id  ?? '') || base.exec_id,
+    order_qty:       cumQty > 0 ? cumQty : base.order_qty,
+    fill_qty:        isFill ? (cumQty || lastQty) : base.fill_qty,
+    fill_px:         lastPx > 0 ? lastPx : base.fill_px,
+    fill_time:       isFill && ts ? formatSsMs(msToFixTimestamp(ts)) : base.fill_time,
+    round_trip_ms:   isFill ? rt : base.round_trip_ms,
+    transact_time:   ts ? msToFixTimestamp(ts) : base.transact_time,
+    lp_id:           lp_id || base.lp_id,
+  };
+}
+
 function buildPendingRow(nos: NosRecord, lp_id: string): ExecutionReportRow {
   return {
     trade_report_id: `pending_${nos.clord_id}`,
@@ -1165,8 +1261,41 @@ export function ExecutionReportPage() {
               setSelectedRow(pendingRow);
             }
 
+          // ── FIX ExecutionReport — the fill ─────────────────────
+          // Fills are built from the ER, not the AE. The ER is the only message
+          // carrying a per-order key (tag 11); TE omits it on the AE and tag 37 is
+          // the position id under netting. Keyed on cl_ord_id, this updates the
+          // NOS row in place rather than creating a second row beside it.
+          } else if (hasErFields && inner.cl_ord_id) {
+            const clordId = String(inner.cl_ord_id);
+            const rowId   = `pending_${clordId}`;
+            const nosRecord = nosMapRef.current.get(clordId) ?? null;
+            const existing  = rowMapRef.current.get(rowId);
+
+            const row = buildRowFromExecReport(inner, lp_id, nosRecord, existing);
+
+            if (row.rule_id === null) {
+              const match = hedgeRuleMapRef.current.get(clordId)
+                ?? pendingHedgeFillsRef.current.get(clordId);
+              if (match) { row.rule_id = match.rule_id; row.rule_name = match.rule_name; }
+            }
+            pendingHedgeFillsRef.current.delete(clordId);
+
+            rowMapRef.current.set(rowId, row);
+            clordIdMapRef.current.set(clordId, rowId);
+
+            if (existing) {
+              gridRef.current?.api?.applyTransactionAsync({ update: [row] });
+            } else {
+              gridRef.current?.api?.applyTransactionAsync({ add: [row], addIndex: 0 });
+            }
+            if (selectedIdRef.current === rowId) setSelectedRow(row);
+
           // ── AE fill from TE ────────────────────────────────────
-          } else if (inner.trade_report_id) {
+          // Retained only for AEs that carry a ClOrdID. Without one an AE cannot be
+          // tied to its order, and building a row from it produces an uncorrelated
+          // duplicate of the row the ER already created.
+          } else if (inner.trade_report_id && inner.cl_ord_id) {
             const ae = inner as unknown as TradeCaptureWsEvent['data'];
             // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
             // Exact 1:1 match — no symbol|side guessing, no time window.
@@ -1222,6 +1351,11 @@ export function ExecutionReportPage() {
         } else if (msg.type === 'TRADE_CAPTURE_REPORT') {
           const ae = msg.data as unknown as TradeCaptureWsEvent['data'];
           if (!ae?.trade_report_id) return;
+          // An AE without a ClOrdID cannot be tied to the order that produced it,
+          // and the ER has already created that row. Building one here would add an
+          // uncorrelated duplicate — no submitter, no strategy, lots instead of
+          // notional — which is what the grid was showing beside every hedge row.
+          if (!ae.cl_ord_id) return;
 
           const lp_id = msg.lp_id as string ?? '';
           // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
@@ -1622,7 +1756,7 @@ export function ExecutionReportPage() {
           headerTooltip: 'FILLED = 35=AE received; PENDING = NOS sent, no AE yet',
           width: 100,
           filter: 'agSetColumnFilter',
-          filterParams: { values: ['FILLED', 'HEDGED', 'PARTIAL', 'PENDING', 'FAILED', 'REJECTED', 'ERROR', 'B_BOOK', 'ESCALATED', 'CLOSED', 'CLOSING', 'UNKNOWN'] },
+          filterParams: { values: ['FILLED', 'HEDGED', 'PARTIAL', 'PENDING', 'FAILED', 'REJECTED', 'CANCELLED', 'ERROR', 'B_BOOK', 'ESCALATED', 'CLOSED', 'CLOSING', 'UNKNOWN'] },
           cellRenderer: (p: { value: ExecutionReportRow['te_status'] }) => {
             const colors: Record<string, string> = {
               'FILLED':   '#66e07a',
@@ -1631,6 +1765,7 @@ export function ExecutionReportPage() {
               // the grey default and read as unrecognised.
               'HEDGED':   '#66e07a',
               'ESCALATED': '#e0a020',
+              'CANCELLED': '#8a8a8a',
               'PARTIAL':  '#8fcf9f',
               'PENDING':  '#e0a020',
               'FAILED':   '#ff5c5c',
