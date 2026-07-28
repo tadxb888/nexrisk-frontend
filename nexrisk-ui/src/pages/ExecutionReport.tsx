@@ -1155,6 +1155,7 @@ export function ExecutionReportPage() {
     ws.onopen = () => {
       retryRef.current = 0;
       setWsStatus('live');
+      ws.send(JSON.stringify({ type: 'subscribe', topics: [''] }));
       // No subscribe frame. CBookPage opens this same endpoint without one and
       // receives DOM fills correctly, so the server pushes by default and an
       // explicit topic list can only narrow what arrives.
