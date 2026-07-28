@@ -3069,13 +3069,20 @@ export interface LpCreateBody extends LpUpdateBody {
   provider_type: LpProviderType;
 }
 
+/** Write body for PUT .../credentials.
+ *  Field names follow the `<session>_password` convention the backend uses on
+ *  read. An earlier revision sent `password` for the trading secret; that key
+ *  was silently ignored while `md_password` was accepted, leaving
+ *  trading_password_set_at at 0 with no error raised. Callers must verify the
+ *  write by re-reading the record and checking the matching `*_set_at`
+ *  advanced — a credentials write reports success either way. */
 export interface LpCredentialsBody {
   /** FIX logon password for the trading session. */
-  password?:    string;
+  trading_password?: string;
   /** Separate market-data password, where the provider uses one. */
-  md_password?: string;
-  username?:    string;
-  brand?:       string;
+  md_password?:      string;
+  username?:         string;
+  brand?:            string;
 }
 
 // ── envelope unwrap ─────────────────────────────────────────────

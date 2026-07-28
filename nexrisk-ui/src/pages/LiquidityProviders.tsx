@@ -639,9 +639,12 @@ function LPCard({ lp, health, busy, onDelete, onStart, onStop, onTest, onCredent
         {!!health?.errors_24h_count && (
           <span style={{ color: '#ff5c5c' }}>{health.errors_24h_count} errors 24h</span>
         )}
-        <span className={lp.credentials_set ? '' : 'flex items-center gap-1'}
+        {/* This flag is a summary across every stored secret, so it reads true
+            even when only one session has a password. Per-session state lives
+            on the Configuration tab and in the credentials dialog. */}
+        <span title="Summary only. Open Credentials for per-session state."
           style={{ color: lp.credentials_set ? '#66e07a' : '#e09a55' }}>
-          {lp.credentials_set ? 'Credentials set' : 'Credentials not set'}
+          {lp.credentials_set ? 'Credentials recorded' : 'No credentials'}
         </span>
       </div>
 
@@ -810,8 +813,12 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
             <div className="grid grid-cols-2 gap-3">
               <Field label="Host" value={f.t_host} stored={f.t_host} mono onChange={v => upd('t_host', v)} />
               <Field label="Port" value={f.t_port} stored={f.t_port} mono onChange={v => upd('t_port', v.replace(/\D/g, ''))} />
-              <Field label="SenderCompID" value={f.t_sender} stored={f.t_sender} mono onChange={v => upd('t_sender', v)} />
-              <Field label="TargetCompID" value={f.t_target} stored={f.t_target} mono onChange={v => upd('t_target', v)} />
+              <Field label="SenderCompID" value={f.t_sender} stored={f.t_sender} mono
+                hint="Your side. The login the LP issued you."
+                onChange={v => upd('t_sender', v)} />
+              <Field label="TargetCompID" value={f.t_target} stored={f.t_target} mono
+                hint="Their side. The LP's trading gateway, e.g. TEORDER."
+                onChange={v => upd('t_target', v)} />
               <div>
                 <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>FIX version</label>
                 <select className="select w-full text-sm" value={f.t_fix} onChange={e => upd('t_fix', e.target.value)}>
@@ -830,8 +837,12 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Host" value={f.m_host} stored={f.m_host} mono onChange={v => upd('m_host', v)} />
                 <Field label="Port" value={f.m_port} stored={f.m_port} mono onChange={v => upd('m_port', v.replace(/\D/g, ''))} />
-                <Field label="SenderCompID" value={f.m_sender} stored={f.m_sender} mono onChange={v => upd('m_sender', v)} />
-                <Field label="TargetCompID" value={f.m_target} stored={f.m_target} mono onChange={v => upd('m_target', v)} />
+                <Field label="SenderCompID" value={f.m_sender} stored={f.m_sender} mono
+                  hint="Your side. The login the LP issued you."
+                  onChange={v => upd('m_sender', v)} />
+                <Field label="TargetCompID" value={f.m_target} stored={f.m_target} mono
+                  hint="Their side. The LP's price gateway, e.g. TEPRICE."
+                  onChange={v => upd('m_target', v)} />
                 <Field label="Book depth" value={f.m_depth} stored={f.m_depth} mono onChange={v => upd('m_depth', v.replace(/\D/g, ''))} />
               </div>
             )}
@@ -883,17 +894,56 @@ function CredentialsModal({ lpId, lpName, providerType, credentials, onClose, on
   const [showPwd, setShowPwd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [problems, setProblems] = useState<string[]>([]);
+  // The list card opens this dialog without the full record. Fetch it so the
+  // per-session state below is always the server's, never inferred from the
+  // list's single credentials_set flag.
+  const [cred, setCred] = useState(credentials);
   const isCmc = providerType === 'cmc';
 
+  useEffect(() => {
+    let cancelled = false;
+    if (credentials) return;
+    lpAdminApi.get(lpId)
+      .then(c => { if (!cancelled) setCred(c.credentials); })
+      .catch(() => { /* the dialog still works without the summary */ });
+    return () => { cancelled = true; };
+  }, [lpId, credentials]);
+
+  /**
+   * A credentials write reports success whether or not the backend recognised
+   * the field names it was given, so the response is not evidence of anything.
+   * The stored `*_set_at` timestamps are. Read them before and after and
+   * require the relevant one to have moved.
+   */
   const submit = async () => {
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); setProblems([]);
     try {
+      const before = await lpAdminApi.get(lpId);
+      const beforeTrading = before.credentials?.trading_password_set_at ?? 0;
+      const beforeMd      = before.credentials?.md_password_set_at ?? 0;
+
       await lpAdminApi.setCredentials(lpId, {
-        ...(password ? { password } : {}),
+        ...(password ? { trading_password: password } : {}),
         ...(mdPassword ? { md_password: mdPassword } : {}),
         ...(username ? { username } : {}),
         ...(brand ? { brand } : {}),
       });
+
+      const after = await lpAdminApi.get(lpId);
+      const found: string[] = [];
+      if (password && (after.credentials?.trading_password_set_at ?? 0) <= beforeTrading) {
+        found.push('trading_password — the server accepted the request but did not record a new trading password');
+      }
+      if (mdPassword && (after.credentials?.md_password_set_at ?? 0) <= beforeMd) {
+        found.push('md_password — the server accepted the request but did not record a new market data password');
+      }
+
+      if (found.length) {
+        setProblems(found);
+        return;   // leave the dialog open; the operator has not finished
+      }
+
       showToast(`Credentials saved for ${lpName}`);
       onSaved();
       onClose();
@@ -914,16 +964,23 @@ function CredentialsModal({ lpId, lpName, providerType, credentials, onClose, on
         <div className="p-5 space-y-4">
           {error && <ErrorPanel title="Could not save credentials" lines={[error]} onDismiss={() => setError(null)} />}
 
-          {credentials && (
+          {!!problems.length && (
+            <ErrorPanel
+              title="The password was not stored"
+              lines={problems}
+              onDismiss={() => setProblems([])} />
+          )}
+
+          {cred && (
             <div className="space-y-1">
               <Row label="Trading password">
-                {credentials.trading_password_set_at
-                  ? <span style={{ color: '#66e07a' }}>Set {fmtTs(credentials.trading_password_set_at)}</span>
+                {cred.trading_password_set_at
+                  ? <span style={{ color: '#66e07a' }}>Set {fmtTs(cred.trading_password_set_at)}</span>
                   : <span style={{ color: '#e09a55' }}>Never set</span>}
               </Row>
               <Row label="Market data password">
-                {credentials.md_password_set_at
-                  ? <span style={{ color: '#66e07a' }}>Set {fmtTs(credentials.md_password_set_at)}</span>
+                {cred.md_password_set_at
+                  ? <span style={{ color: '#66e07a' }}>Set {fmtTs(cred.md_password_set_at)}</span>
                   : <span style={{ color: '#e09a55' }}>Never set</span>}
               </Row>
             </div>
@@ -1500,8 +1557,12 @@ function ConfigTab({ config, live, onSaved, showToast }: {
           <Field label="Port" value={form.t_port} stored={stored.t_port} mono disabled={!canEdit} onChange={v => upd('t_port', v.replace(/\D/g, ''))} />
           <SelectField label="FIX version" value={form.t_fix} stored={stored.t_fix}
             options={Array.from(new Set([...FIX_VERSIONS, form.t_fix]))} onChange={v => upd('t_fix', v)} />
-          <Field label="SenderCompID" value={form.t_sender} stored={stored.t_sender} mono disabled={!canEdit} onChange={v => upd('t_sender', v)} />
-          <Field label="TargetCompID" value={form.t_target} stored={stored.t_target} mono disabled={!canEdit} onChange={v => upd('t_target', v)} />
+          <Field label="SenderCompID" value={form.t_sender} stored={stored.t_sender} mono disabled={!canEdit}
+            hint="Your side. The login the LP issued you."
+            onChange={v => upd('t_sender', v)} />
+          <Field label="TargetCompID" value={form.t_target} stored={stored.t_target} mono disabled={!canEdit}
+            hint="Their side. The LP's trading gateway, e.g. TEORDER."
+            onChange={v => upd('t_target', v)} />
           <Field label="Heartbeat (s)" value={form.t_hb} stored={stored.t_hb} mono disabled={!canEdit} onChange={v => upd('t_hb', v.replace(/\D/g, ''))} />
         </div>
       </div>
@@ -1527,8 +1588,12 @@ function ConfigTab({ config, live, onSaved, showToast }: {
             <Field label="Port" value={form.m_port} stored={stored.m_port} mono disabled={!canEdit} onChange={v => upd('m_port', v.replace(/\D/g, ''))} />
             <SelectField label="FIX version" value={form.m_fix} stored={stored.m_fix}
               options={Array.from(new Set([...FIX_VERSIONS, form.m_fix]))} onChange={v => upd('m_fix', v)} />
-            <Field label="SenderCompID" value={form.m_sender} stored={stored.m_sender} mono disabled={!canEdit} onChange={v => upd('m_sender', v)} />
-            <Field label="TargetCompID" value={form.m_target} stored={stored.m_target} mono disabled={!canEdit} onChange={v => upd('m_target', v)} />
+            <Field label="SenderCompID" value={form.m_sender} stored={stored.m_sender} mono disabled={!canEdit}
+              hint="Your side. The login the LP issued you."
+              onChange={v => upd('m_sender', v)} />
+            <Field label="TargetCompID" value={form.m_target} stored={stored.m_target} mono disabled={!canEdit}
+              hint="Their side. The LP's price gateway, e.g. TEPRICE."
+              onChange={v => upd('m_target', v)} />
             <Field label="Heartbeat (s)" value={form.m_hb} stored={stored.m_hb} mono disabled={!canEdit} onChange={v => upd('m_hb', v.replace(/\D/g, ''))} />
             <Field label="Book depth" value={form.m_depth} stored={stored.m_depth} mono disabled={!canEdit} onChange={v => upd('m_depth', v.replace(/\D/g, ''))} />
           </div>
