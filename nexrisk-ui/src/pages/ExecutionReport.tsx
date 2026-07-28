@@ -1155,7 +1155,9 @@ export function ExecutionReportPage() {
     ws.onopen = () => {
       retryRef.current = 0;
       setWsStatus('live');
-      ws.send(JSON.stringify({ type: 'subscribe', topics: [''] }));
+      // No subscribe frame. CBookPage opens this same endpoint without one and
+      // receives DOM fills correctly, so the server pushes by default and an
+      // explicit topic list can only narrow what arrives.
     };
 
     ws.onmessage = (ev) => {
@@ -1211,22 +1213,28 @@ export function ExecutionReportPage() {
         //
         } else if (msg.type === 'EXECUTION_REPORT') {
           const lp_id   = msg.lp_id as string ?? '';
-          const inner   = msg.data as Record<string, unknown> ?? {};
+          // Fields may arrive wrapped under msg.data or flat on the envelope — the
+          // FIX Bridge API doc documents the flat form. Reading only msg.data drops
+          // flat frames with no row and no error. Same fallback the hedge.fill
+          // branch above already uses.
+          // Fields arrive under msg.data, flat on the envelope, or SPLIT ACROSS
+          // BOTH. CBookPage reads `fill.x ?? msg.x` per field on this same stream
+          // for exactly that reason, and it receives DOM fills correctly.
+          // Committing to one level meant a payload with data present but
+          // ord_status on the envelope failed the hasErFields test below, so the
+          // fill branch never ran and no row was ever built. Merge once, inner wins.
+          const rawInner = (msg.data ?? {}) as Record<string, unknown>;
+          const inner    = { ...(msg as Record<string, unknown>), ...rawInner };
 
           // Distinguish a NexRisk NOS_SENT notification from a FIX ExecutionReport.
-          // Both carry cl_ord_id, so gating on that alone made EVERY ExecutionReport
-          // build a phantom `pending_<clord>` row. For opens the AE cleared it; for
-          // closes nothing ever did — the close AE carries no cl_ord_id, so the
-          // pending-row cleanup never matched and the row sat at PENDING with a zero
-          // fill price until a manual refresh dropped it.
-          // Only the ER carries exec_type / ord_status. Prefer the explicit
-          // discriminator when C++ sends it (backend brief item 7).
-          // The FIX Bridge API doc documents this event's key as `clord_id` while
-          // the serialiser field list and the AE type use `cl_ord_id`. Accept both
-          // rather than fail silently on a naming mismatch.
+          // Only the ER carries exec_type / ord_status; prefer the explicit
+          // discriminator when C++ sends it. Read `type` from the inner payload
+          // only — the merged view inherits msg.type, which is always
+          // 'EXECUTION_REPORT' and would defeat the check.
+          // Documented as `clord_id`, published as `cl_ord_id`. Accept either.
           const erClordId = String(inner.cl_ord_id ?? inner.clord_id ?? '');
 
-          const innerType   = inner.type as string | undefined;
+          const innerType   = rawInner.type as string | undefined;
           const hasErFields = inner.exec_type !== undefined || inner.ord_status !== undefined;
           const isNosSent   = innerType === 'NOS_SENT'
             || (!hasErFields && !!erClordId && !inner.trade_report_id);
@@ -1297,10 +1305,11 @@ export function ExecutionReportPage() {
             if (selectedIdRef.current === rowId) setSelectedRow(row);
 
           // ── AE fill from TE ────────────────────────────────────
-          // Retained only for AEs that carry a ClOrdID. Without one an AE cannot be
-          // tied to its order, and building a row from it produces an uncorrelated
-          // duplicate of the row the ER already created.
-          } else if (inner.trade_report_id && erClordId) {
+          // Kept unconditional. TE omits tag 11 on the AE, so requiring a ClOrdID
+          // here silently dropped every DOM Trader fill — the orders executed and
+          // no row was ever built. An uncorrelated row showing "-" and "Manual" is
+          // far better than an invisible fill.
+          } else if (inner.trade_report_id) {
             const ae = inner as unknown as TradeCaptureWsEvent['data'];
             // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
             // Exact 1:1 match — no symbol|side guessing, no time window.
@@ -1348,6 +1357,13 @@ export function ExecutionReportPage() {
                 || (row.clord_id && selId === `pending_${row.clord_id}`))) {
               setSelectedRow(row);
             }
+          } else {
+            // Matched no branch — a shape we do not recognise. Previously this was
+            // dropped in silence, which is how DOM orders went missing with no
+            // error anywhere. Log the payload keys so a mismatch is visible.
+            console.warn('[ExecReport] unhandled EXECUTION_REPORT payload', {
+              keys: Object.keys(inner), inner,
+            });
           }
 
         // ── TRADE_CAPTURE_REPORT — TE fill (35=AE) ───────────
@@ -1356,11 +1372,6 @@ export function ExecutionReportPage() {
         } else if (msg.type === 'TRADE_CAPTURE_REPORT') {
           const ae = msg.data as unknown as TradeCaptureWsEvent['data'];
           if (!ae?.trade_report_id) return;
-          // An AE without a ClOrdID cannot be tied to the order that produced it,
-          // and the ER has already created that row. Building one here would add an
-          // uncorrelated duplicate — no submitter, no strategy, lots instead of
-          // notional — which is what the grid was showing beside every hedge row.
-          if (!ae.cl_ord_id) return;
 
           const lp_id = msg.lp_id as string ?? '';
           // Correlate by clord_id (embedded on the AE by C++ LookupNOS).
