@@ -1127,11 +1127,19 @@ function TestSessionPanel({ title, session }: { title: string; session?: LpTestS
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.dot }} />
         </span>
       </div>
-      {session?.message && (
-        <div className="text-text-muted" style={{ fontSize: 11 }}>{session.message}</div>
-      )}
+      {/* The venue's own rejection text goes first. `message` is our backend's
+          canned line per error_code and is generic by design — on a
+          LOGON_REJECTED it reads "Check SenderCompID, TargetCompID, and
+          password" regardless of what the LP actually said, which sends the
+          operator after the wrong thing when the real reason is something
+          like a disabled session. */}
       {session?.error && (
         <div style={{ fontSize: 11, color: '#ff5c5c' }}>{session.error}</div>
+      )}
+      {session?.message && (
+        <div className="text-text-muted" style={{ fontSize: 11 }}>
+          {session.error ? `Usual causes: ${session.message}` : session.message}
+        </div>
       )}
       <div className="flex items-center gap-3 flex-wrap text-text-muted" style={{ fontSize: 11 }}>
         {session?.latency_ms != null && (
