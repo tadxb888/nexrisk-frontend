@@ -36,32 +36,6 @@ const browserClients = new Set<WebSocket>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let fastifyRef: FastifyInstance | null = null;
 
-// POSITION_BATCH frames carry the complete position list for one symbol -
-// measured at ~1.07 MB each, ~4 per second, ~4.1 MB/s to every browser. The
-// browser cannot parse that and still render, which is why grids lag tens of
-// seconds behind the fills that produced them.
-//
-// Coalesce per broker+symbol. A newer batch for a symbol contains that
-// symbol's whole book, so it fully supersedes the previous one for that
-// symbol and nothing is lost by dropping it. Batches for OTHER symbols are
-// held separately and all released together on the timer. Every other frame
-// type - EXECUTION_REPORT, EVENT, market data, session events - is forwarded
-// immediately and untouched.
-const BATCH_FLUSH_MS = 1000;
-const pendingBatches = new Map<string, string>();
-let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
-
-function flushBatches(): void {
-  if (pendingBatches.size === 0) return;
-  const frames = Array.from(pendingBatches.values());
-  pendingBatches.clear();
-  for (const frame of frames) {
-    for (const client of browserClients) {
-      if (client.readyState === WebSocket.OPEN) client.send(frame);
-    }
-  }
-}
-
 function connectBackend() {
   if (backendWs && (backendWs.readyState === WebSocket.OPEN || backendWs.readyState === WebSocket.CONNECTING)) return;
   const url = backendWsUrl();
@@ -84,21 +58,36 @@ function connectBackend() {
   });
 
   backendWs.on('message', (data: WebSocket.RawData) => {
+    const frame = data.toString();
+
+    // The subscription below uses an empty topic prefix, which the C++
+    // WebSocketManager treats as "everything" - including the MT5 topics. That
+    // pulled mt5.position onto this socket, measured at 25.58 MB per 5 seconds,
+    // roughly 1 MB per frame. No consumer of this socket reads it: CBookPage is
+    // the only FIX page and handles POSITION_REPORT / POSITION_CLOSED /
+    // POSITION_UPDATED, never POSITION_BATCH. BBookPage and NetExposure do read
+    // POSITION_BATCH, but both take it from /ws/v1/mt5/events, which subscribes
+    // to the MT5 topics explicitly and is unaffected by this.
+    //
+    // Since every page in the application holds this socket open, that traffic
+    // was being parsed by every browser on every page, including pages with no
+    // grid and no market data at all.
+    //
+    // Rejected here on the raw string, before JSON.parse, so a 1 MB frame is
+    // never deserialised only to be discarded.
+    if (frame.includes('"topic":"mt5.')) return;
+
     try {
-      const msg = JSON.parse(data.toString()) as { type?: string };
+      const msg = JSON.parse(frame) as { type?: string; topic?: string };
       if (msg.type === 'ping') {
         backendWs?.send(JSON.stringify({ type: 'pong', timestamp_ms: Date.now() }));
         return;
       }
-      // Full per-symbol position book: keep only the newest per symbol.
-      if (msg.type === 'POSITION_BATCH') {
-        const d = (msg as { data?: { broker?: string; symbol?: string } }).data ?? {};
-        const key = `${d.broker ?? ''}|${d.symbol ?? ''}`;
-        pendingBatches.set(key, data.toString());
-        return;
-      }
+      // Belt and braces: catch any mt5.* frame whose envelope is spaced
+      // differently from the literal tested above.
+      if (typeof msg.topic === 'string' && msg.topic.startsWith('mt5.')) return;
     } catch { /**/ }
-    const frame = data.toString();
+
     for (const client of browserClients) {
       if (client.readyState === WebSocket.OPEN) client.send(frame);
     }
@@ -118,8 +107,6 @@ function connectBackend() {
 export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
   fastifyRef = fastify;
   connectBackend();
-
-  if (!batchFlushTimer) batchFlushTimer = setInterval(flushBatches, BATCH_FLUSH_MS);
 
   fastify.get('/ws/v1/fix/events', { websocket: true }, (connection: SocketStream) => {
     const socket = connection.socket;
@@ -141,8 +128,6 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.addHook('onClose', async () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (batchFlushTimer) { clearInterval(batchFlushTimer); batchFlushTimer = null; }
-    pendingBatches.clear();
     backendWs?.close();
   });
 }
