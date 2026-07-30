@@ -36,6 +36,32 @@ const browserClients = new Set<WebSocket>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let fastifyRef: FastifyInstance | null = null;
 
+// POSITION_BATCH frames carry the complete position list for one symbol -
+// measured at ~1.07 MB each, ~4 per second, ~4.1 MB/s to every browser. The
+// browser cannot parse that and still render, which is why grids lag tens of
+// seconds behind the fills that produced them.
+//
+// Coalesce per broker+symbol. A newer batch for a symbol contains that
+// symbol's whole book, so it fully supersedes the previous one for that
+// symbol and nothing is lost by dropping it. Batches for OTHER symbols are
+// held separately and all released together on the timer. Every other frame
+// type - EXECUTION_REPORT, EVENT, market data, session events - is forwarded
+// immediately and untouched.
+const BATCH_FLUSH_MS = 1000;
+const pendingBatches = new Map<string, string>();
+let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+function flushBatches(): void {
+  if (pendingBatches.size === 0) return;
+  const frames = Array.from(pendingBatches.values());
+  pendingBatches.clear();
+  for (const frame of frames) {
+    for (const client of browserClients) {
+      if (client.readyState === WebSocket.OPEN) client.send(frame);
+    }
+  }
+}
+
 function connectBackend() {
   if (backendWs && (backendWs.readyState === WebSocket.OPEN || backendWs.readyState === WebSocket.CONNECTING)) return;
   const url = backendWsUrl();
@@ -64,6 +90,13 @@ function connectBackend() {
         backendWs?.send(JSON.stringify({ type: 'pong', timestamp_ms: Date.now() }));
         return;
       }
+      // Full per-symbol position book: keep only the newest per symbol.
+      if (msg.type === 'POSITION_BATCH') {
+        const d = (msg as { data?: { broker?: string; symbol?: string } }).data ?? {};
+        const key = `${d.broker ?? ''}|${d.symbol ?? ''}`;
+        pendingBatches.set(key, data.toString());
+        return;
+      }
     } catch { /**/ }
     const frame = data.toString();
     for (const client of browserClients) {
@@ -86,6 +119,8 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
   fastifyRef = fastify;
   connectBackend();
 
+  if (!batchFlushTimer) batchFlushTimer = setInterval(flushBatches, BATCH_FLUSH_MS);
+
   fastify.get('/ws/v1/fix/events', { websocket: true }, (connection: SocketStream) => {
     const socket = connection.socket;
     browserClients.add(socket);
@@ -106,6 +141,8 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.addHook('onClose', async () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (batchFlushTimer) { clearInterval(batchFlushTimer); batchFlushTimer = null; }
+    pendingBatches.clear();
     backendWs?.close();
   });
 }
