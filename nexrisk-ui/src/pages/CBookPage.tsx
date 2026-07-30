@@ -60,6 +60,15 @@ const WS_BASE  = (import.meta as any).env?.VITE_WS_URL  || 'ws://localhost:8080'
 // Brief Section 7: WebSocket at ws://localhost:8081 (via BFF proxy)
 const FIX_WS_PATH = '/ws/v1/fix/events';
 
+// Per-frame WebSocket logging is off unless explicitly switched on. Passing
+// payload objects to console.log keeps them alive for devtools to expand, which
+// on a 1 MB position batch is ruinous. Enable with:
+//   localStorage.setItem('nexrisk_cbook_ws_debug', '1')
+const WS_DEBUG = (() => {
+  try { return localStorage.getItem('nexrisk_cbook_ws_debug') === '1'; }
+  catch { return false; }
+})();
+
 async function bff<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -876,7 +885,7 @@ export function CBookPage() {
       fetch('/api/v1/hedge/records?page_size=200')
         .then((res) => (res.ok ? res.json() : null))
         .then((json) => {
-          console.log('[HEDGE records]', json);
+          if (WS_DEBUG) console.log('[HEDGE records]', json);
           if (cancelled || !json) return;
           const records: { lp_position_id?: string | null; rule_name?: string | null }[] =
             json.data ?? (Array.isArray(json) ? json : []);
@@ -890,7 +899,7 @@ export function CBookPage() {
           for (const r of records) {
             if (r.lp_position_id && r.rule_name) map.set(r.lp_position_id, r.rule_name);
           }
-          console.log('[HEDGE map]', [...map.entries()]);
+          if (WS_DEBUG) console.log('[HEDGE map]', [...map.entries()]);
           // Backfill two places so bookStats (derived from livePositions)
           // re-evaluates and the Strategy / A-Book cards render. If we only update
           // the grid nodes (as was the original behaviour), gridRows still holds the
@@ -928,7 +937,7 @@ export function CBookPage() {
       fetch('/api/v1/hedge/rules')
         .then((res) => (res.ok ? res.json() : null))
         .then((json) => {
-          console.log('[HEDGE rules]', json);
+          if (WS_DEBUG) console.log('[HEDGE rules]', json);
           if (cancelled || !json) return;
           const rules: { name?: string; status?: string }[] =
             json.data ?? (Array.isArray(json) ? json : []);
@@ -1274,11 +1283,21 @@ export function CBookPage() {
         if (cancelled) return;
         try {
           const msg = JSON.parse(evt.data);
-          if (msg.type === 'MARKET_DATA_INCREMENTAL' || msg.type === 'MARKET_DATA_SNAPSHOT') {
-            console.log('[MD]', msg.data?.symbol, 'bid:', msg.data?.best_bid, 'ask:', msg.data?.best_ask);
-          } else {
-            // Log all non-MD WS events so external closes are visible in devtools
-            console.log('[CBook WS] event:', msg.type, msg.lp_id ?? '', msg.data ?? '');
+          // Per-frame logging removed. These two lines ran on every WS frame and
+          // the second passed the whole msg.data object to the console, so a 1 MB
+          // position batch was serialised, retained and rendered by devtools for
+          // every frame. Profiling a switch away from this page attributed 341.7 ms
+          // - 59.3% of the entire recording - to this handler, and closing devtools
+          // measurably sped the page up.
+          //
+          // Set localStorage nexrisk_cbook_ws_debug = '1' to re-enable while
+          // debugging a specific issue, then clear it.
+          if (WS_DEBUG) {
+            if (msg.type === 'MARKET_DATA_INCREMENTAL' || msg.type === 'MARKET_DATA_SNAPSHOT') {
+              console.log('[MD]', msg.data?.symbol, 'bid:', msg.data?.best_bid, 'ask:', msg.data?.best_ask);
+            } else {
+              console.log('[CBook WS] event:', msg.type, msg.lp_id ?? '', msg.data ?? '');
+            }
           }
 
           // ── Shared helper: fetch positions and reconcile grid ─────────────────
@@ -1544,7 +1563,7 @@ export function CBookPage() {
               for (const b of rawBids) if (b.price != null) localBidsRef.current.set(Number(b.price), Number(b.size));
               for (const a of rawAsks) if (a.price != null) localAsksRef.current.set(Number(a.price), Number(a.size));
               const book = buildBookFromMaps(sym, localBidsRef.current, localAsksRef.current);
-              console.log('[BOOK BUILD]', sym, book, 'maps:', localBidsRef.current.size, localAsksRef.current.size);
+              if (WS_DEBUG) console.log('[BOOK BUILD]', sym, book, 'maps:', localBidsRef.current.size, localAsksRef.current.size);
               if (book) {
                 liveBookRef.current    = book;
                 pendingBookRef.current = book;

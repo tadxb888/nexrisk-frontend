@@ -1126,14 +1126,35 @@ export function ExecutionReportPage() {
         let execFailed   = false;
         let recordFailed = false;
 
+        // Start the hedge/records seed immediately rather than after the
+        // executions seed completes. These two were sequential, so the whole
+        // records fetch waited behind hedge-executions - which currently returns
+        // HTTP 400 after ~5s (RCVTIMEO on the ZMQ command socket it shares with
+        // order dispatch). That was five dead seconds on every mount before the
+        // fast source was even requested.
+        //
+        // They still merge in the original order: executions first, records
+        // second so they enrich the matching rows. Only the waiting overlaps.
+        const recsPromise = fetchHedgeRecordsPaged(SEED_ROW_CAP);
+
         await Promise.allSettled(lps.map(async (lp) => {
           try {
             const url = `/api/v1/fix/lp/${lp.lp_id}/hedge-executions?limit=${SEED_ROW_CAP}`;
-            let res = await fetch(url);
-            if (res.status === 503) {
-              await new Promise(r => setTimeout(r, 3000));
-              if (cancelled) return;
-              res = await fetch(url);
+            // Bound each attempt. Unbounded, a stalled upstream held the mount
+            // open for its full timeout; the page cannot render until this
+            // settles, so it must fail fast rather than wait out the backend.
+            const ac = new AbortController();
+            const killer = setTimeout(() => ac.abort(), 2000);
+            let res: Response;
+            try {
+              res = await fetch(url, { signal: ac.signal });
+              if (res.status === 503) {
+                await new Promise(r => setTimeout(r, 3000));
+                if (cancelled) return;
+                res = await fetch(url, { signal: ac.signal });
+              }
+            } finally {
+              clearTimeout(killer);
             }
             if (!res.ok || cancelled) { execFailed = true; return; }
             const data = await res.json();
@@ -1146,7 +1167,7 @@ export function ExecutionReportPage() {
         }));
 
         try {
-          const recs = await fetchHedgeRecordsPaged(SEED_ROW_CAP);
+          const recs = await recsPromise;
           if (!recs) {
             recordFailed = true;
           } else if (!cancelled) {
