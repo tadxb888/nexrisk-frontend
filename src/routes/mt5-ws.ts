@@ -15,6 +15,28 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSnapshot: string | null = null;
 let fastifyRef: FastifyInstance | null = null;
 
+// mt5.position frames carry the entire position book - roughly 1.1 MB each -
+// and arrive several times a second. That is ~4.6 MB/s of JSON for the browser
+// to parse, which starves the main thread and makes every page slow to load,
+// slow to switch to, and slow to repaint.
+//
+// Coalesce them: hold only the newest frame and release at most one per second.
+// Each frame is a complete book, so an older one carries no information the
+// newer one lacks - dropping it loses nothing. Every other topic is untouched
+// and still forwarded immediately.
+const POSITION_FLUSH_MS = 1000;
+let pendingPositionFrame: string | null = null;
+let positionFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+function flushPositionFrame(): void {
+  if (!pendingPositionFrame) return;
+  const frame = pendingPositionFrame;
+  pendingPositionFrame = null;
+  for (const client of browserClients) {
+    if (client.readyState === WebSocket.OPEN) client.send(frame);
+  }
+}
+
 function connectBackend() {
   if (backendWs && (backendWs.readyState === WebSocket.OPEN || backendWs.readyState === WebSocket.CONNECTING)) return;
   const url = backendWsUrl();
@@ -69,6 +91,8 @@ function connectBackend() {
       // future topics) must pass through to browser clients.
       if (msg.type === "SNAPSHOT" && msg.topic === "mt5.position") return;
       if (msg.type === "ping") { backendWs?.send(JSON.stringify({ type: "pong", timestamp_ms: Date.now() })); return; }
+      // Full-book position frame: keep only the newest, flushed on the timer.
+      if (msg.topic === "mt5.position") { pendingPositionFrame = data.toString(); return; }
     } catch { /**/ }
     const frame = data.toString();
     for (const client of browserClients) {
@@ -91,6 +115,8 @@ function connectBackend() {
 export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
   fastifyRef = fastify;
   connectBackend();
+
+  if (!positionFlushTimer) positionFlushTimer = setInterval(flushPositionFrame, POSITION_FLUSH_MS);
 
   fastify.get('/ws/v1/mt5/events', { websocket: true }, (connection: SocketStream) => {
     const socket = connection.socket;
@@ -122,6 +148,8 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.addHook('onClose', async () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (positionFlushTimer) { clearInterval(positionFlushTimer); positionFlushTimer = null; }
+    pendingPositionFrame = null;
     backendWs?.close();
   });
 }
