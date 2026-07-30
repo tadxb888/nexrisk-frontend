@@ -231,9 +231,6 @@ function mapTIF(code?: string): ExecutionReportRow['tif'] {
 // TIMESTAMP HELPERS
 // ══════════════════════════════════════════════════════════════
 function parseTimestamp(ts: string): number {
-  // Defensive: a row whose timestamp never arrived would throw here and take the
-  // whole sort comparator - and with it the sync effect - down with it.
-  if (typeof ts !== 'string' || ts === '') return 0;
   // FIX format: YYYYMMDD-HH:MM:SS.mmm
   const m = ts.match(/^(\d{4})(\d{2})(\d{2})-(\d{2}):(\d{2}):(\d{2})\.(\d{3})/);
   if (!m) return 0;
@@ -326,13 +323,7 @@ function buildRowFromAE(
     security_id:     ae.security_id,
     settl_date:      '',   // not in AE from TE
     account:         ae.account,
-    // TE does not populate tag 60 on the AE, so ae.transact_time is empty for
-    // Manual and DOM Trader fills. parseTimestamp('') returns 0, which made the
-    // row sort as 1970 - and the 3s sync keeps the newest MAX_GRID_ROWS by this
-    // exact field. With the grid at its cap, every new manual fill was therefore
-    // the first row evicted, appearing briefly and then vanishing. Fall back to
-    // the AE receive time, which is the same instant tag 60 would describe.
-    transact_time:   ae.transact_time || (fill_ts ? msToFixTimestamp(fill_ts) : ''),
+    transact_time:   ae.transact_time,
     lp_id,
     rule_id:   null,
     rule_name: null,
