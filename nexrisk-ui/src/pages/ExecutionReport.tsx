@@ -44,7 +44,7 @@ const UNKNOWN_SUBMITTER = '—';
 
 // Live grid row cap. The seed pages up to this and the 3s sync evicts past it,
 // so both ends of the pipeline agree on one number instead of drifting apart.
-const SEED_ROW_CAP = 2000;
+const SEED_ROW_CAP = 500;
 
 // States that mean the order reached the LP and filled. hedge_records reports
 // HEDGED for a completed hedge and CLOSED/CLOSING once unwound; the live AE path
@@ -393,7 +393,33 @@ function hedgeRecordToExecutionRow(r: Record<string, unknown>): HedgeExecutionRo
 // Returns null only if page 1 fails outright; partial pages are tolerated.
 const HEDGE_PAGE_SIZE = 200;
 
+// Mount starts two independent consumers of this data in the same tick - the
+// history seed and the enrichment map - and the 60s poll re-enters it later.
+// Uncoalesced that is two complete page-walks in parallel on every mount,
+// against a backend on a remote host. One in-flight walk is now shared by all
+// callers, and a successful result is reused for a few seconds so the two
+// mount-time callers cost one walk between them. Failures are never cached, so
+// a failed seed still retries exactly as before.
+let hedgeInflight: Promise<Record<string, unknown>[] | null> | null = null;
+let hedgeCache: { at: number; value: Record<string, unknown>[] } | null = null;
+const HEDGE_CACHE_TTL_MS = 5_000;
+
 async function fetchHedgeRecordsPaged(cap: number): Promise<Record<string, unknown>[] | null> {
+  if (hedgeCache && Date.now() - hedgeCache.at < HEDGE_CACHE_TTL_MS) return hedgeCache.value;
+  if (hedgeInflight) return hedgeInflight;
+
+  const p = fetchHedgeRecordsPagedUncached(cap);
+  hedgeInflight = p;
+  try {
+    const value = await p;
+    if (value !== null) hedgeCache = { at: Date.now(), value };
+    return value;
+  } finally {
+    if (hedgeInflight === p) hedgeInflight = null;
+  }
+}
+
+async function fetchHedgeRecordsPagedUncached(cap: number): Promise<Record<string, unknown>[] | null> {
   const getPage = async (page: number): Promise<{ list: Record<string, unknown>[]; total: number } | null> => {
     const ac = new AbortController();
     const killer = setTimeout(() => ac.abort(), 8000);
@@ -1500,7 +1526,7 @@ export function ExecutionReportPage() {
     };
   }, [connectWs]);
 
-  // ── Hedge records map — loads on mount, refreshes every 30s ──
+  // ── Hedge records map — loads on mount, refreshes every 60s ──
   // Ground truth for strategy names AND for order state. Keyed by clord_id.
   // Enriches seed and live rows, and reconciles rows the WS could not resolve.
   useEffect(() => {
