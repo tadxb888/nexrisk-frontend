@@ -47,15 +47,31 @@ let fastifyRef: FastifyInstance | null = null;
 // held separately and all released together on the timer. Every other frame
 // type - EXECUTION_REPORT, EVENT, market data, session events - is forwarded
 // immediately and untouched.
+// Coalescing alone only removed a third of the volume: the upstream cycles a
+// handful of symbols, so one flush per second still meant one full book per
+// symbol per second. The books themselves rarely change between flushes, so
+// the remaining traffic was the same positions serialised over and over.
+//
+// Each symbol's positions array is therefore compared against the last one
+// sent for that symbol, and an unchanged book is dropped outright. Only the
+// positions are compared - the envelope's timestamp changes on every frame
+// and would defeat the check.
+//
+// lastBatchFrame retains the most recent frame actually sent per symbol so a
+// browser connecting mid-session receives the current books immediately
+// rather than waiting for the next change.
 const BATCH_FLUSH_MS = 1000;
 const pendingBatches = new Map<string, string>();
+const lastBatchBody  = new Map<string, string>();
+const lastBatchFrame = new Map<string, string>();
 let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
 
 function flushBatches(): void {
   if (pendingBatches.size === 0) return;
-  const frames = Array.from(pendingBatches.values());
+  const entries = Array.from(pendingBatches.entries());
   pendingBatches.clear();
-  for (const frame of frames) {
+  for (const [key, frame] of entries) {
+    lastBatchFrame.set(key, frame);
     for (const client of browserClients) {
       if (client.readyState === WebSocket.OPEN) client.send(frame);
     }
@@ -90,10 +106,14 @@ function connectBackend() {
         backendWs?.send(JSON.stringify({ type: 'pong', timestamp_ms: Date.now() }));
         return;
       }
-      // Full per-symbol position book: keep only the newest per symbol.
+      // Full per-symbol position book: drop it if that symbol's book has not
+      // changed, otherwise keep only the newest pending frame per symbol.
       if (msg.type === 'POSITION_BATCH') {
-        const d = (msg as { data?: { broker?: string; symbol?: string } }).data ?? {};
-        const key = `${d.broker ?? ''}|${d.symbol ?? ''}`;
+        const d = (msg as { data?: { broker?: string; symbol?: string; positions?: unknown } }).data ?? {};
+        const key  = `${d.broker ?? ''}|${d.symbol ?? ''}`;
+        const body = JSON.stringify(d.positions ?? null);
+        if (lastBatchBody.get(key) === body) return;  // unchanged - already delivered
+        lastBatchBody.set(key, body);
         pendingBatches.set(key, data.toString());
         return;
       }
@@ -105,6 +125,10 @@ function connectBackend() {
   });
 
   backendWs.on('close', () => {
+    // Books held from the old connection are no longer authoritative.
+    pendingBatches.clear();
+    lastBatchBody.clear();
+    lastBatchFrame.clear();
     fastifyRef?.log.warn('[FIX WS] Backend disconnected — reconnecting in 3s');
     backendWs = null;
     reconnectTimer = setTimeout(() => connectBackend(), 3000);
@@ -126,6 +150,12 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
     browserClients.add(socket);
     fastify.log.info(`[FIX WS] Browser connected — total=${browserClients.size}`);
 
+    // Deliver the current book for every symbol so a client joining between
+    // changes is not left with an empty grid.
+    for (const frame of lastBatchFrame.values()) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(frame);
+    }
+
     // Forward subscribe/unsubscribe messages from browser to backend
     socket.on('message', (data: Buffer) => {
       if (backendWs?.readyState === WebSocket.OPEN) backendWs.send(data);
@@ -143,6 +173,8 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (batchFlushTimer) { clearInterval(batchFlushTimer); batchFlushTimer = null; }
     pendingBatches.clear();
+    lastBatchBody.clear();
+    lastBatchFrame.clear();
     backendWs?.close();
   });
 }
