@@ -34,51 +34,122 @@ function backendWsUrl(): string {
 let backendWs: WebSocket | null = null;
 const browserClients = new Set<WebSocket>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let generation = 0;
 let fastifyRef: FastifyInstance | null = null;
+
+// Outbound keepalive. The upstream path was observed cutting idle sockets at
+// ~140s. A 30s ping keeps the connection warm and, via the missed-pong check,
+// detects half-open sockets that never emit 'close'.
+const HEARTBEAT_MS = 30_000;
+// Cap per-browser send buffering. A stalled browser must not be allowed to
+// accumulate unbounded frames inside the BFF heap.
+const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Detach every listener and hard-kill the socket.
+ * close() alone can leave a half-open socket alive and still emitting
+ * 'message' events, which is what caused orphaned upstreams to keep fanning
+ * out frames after a reconnect.
+ */
+function teardownBackend(ws: WebSocket | null): void {
+  if (!ws) return;
+  ws.removeAllListeners();
+  try { ws.terminate(); } catch { /* already gone */ }
+}
+
+function scheduleReconnect(): void {
+  if (reconnectTimer) return; // never double-schedule
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectBackend();
+  }, 3000);
+}
+
+function fanout(frame: string): void {
+  for (const client of browserClients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (client.bufferedAmount > MAX_BUFFERED_BYTES) {
+      fastifyRef?.log.warn('[FIX WS] Browser backpressure — frame dropped');
+      continue;
+    }
+    client.send(frame);
+  }
+}
 
 function connectBackend() {
   if (backendWs && (backendWs.readyState === WebSocket.OPEN || backendWs.readyState === WebSocket.CONNECTING)) return;
+
+  // Any previous socket is dead to us — detach and kill before replacing it.
+  teardownBackend(backendWs);
+  backendWs = null;
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+
+  const myGen = ++generation;
+  const isStale = () => myGen !== generation;
+
   const url = backendWsUrl();
   fastifyRef?.log.info(`[FIX WS] Connecting to backend ${url}`);
-  backendWs = new WebSocket(url);
+  const ws = new WebSocket(url);
+  backendWs = ws;
 
-  backendWs.on('ping', (data) => {
+  let alive = true;
+
+  const handleDrop = (reason: string) => {
+    if (isStale()) return;  // an older generation dying — ignore
+    generation++;           // invalidate every handler bound to this socket
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    teardownBackend(ws);
+    if (backendWs === ws) backendWs = null;
+    fastifyRef?.log.warn(`[FIX WS] Backend disconnected (${reason}) — reconnecting in 3s`);
+    scheduleReconnect();
+  };
+
+  ws.on('ping', (data) => {
+    if (isStale()) return;
     fastifyRef?.log.debug('[FIX WS] Ping from backend — sending pong');
-    backendWs?.pong(data);
+    ws.pong(data);
   });
 
-  backendWs.on('open', () => {
+  ws.on('pong', () => { alive = true; });
+
+  ws.on('open', () => {
+    if (isStale()) return;
     fastifyRef?.log.info('[FIX WS] Backend connected');
     // Subscribe to all topics so BroadcastRaw events (MD snapshots, executions,
     // session events) are delivered to this client. The C++ WebSocketManager
     // (websocketpp) only delivers BroadcastRaw messages to subscribed clients.
     // MT5 ZMQ events (POSITION_CHANGE) arrive unconditionally — this subscribe
     // is required only for FIX Bridge events pushed via BroadcastRaw.
-    backendWs?.send(JSON.stringify({ type: 'subscribe', topics: [''] }));
+    ws.send(JSON.stringify({ type: 'subscribe', topics: [''] }));
+
+    alive = true;
+    heartbeatTimer = setInterval(() => {
+      if (isStale()) return;
+      if (!alive) { handleDrop('heartbeat timeout'); return; }
+      alive = false;
+      try { ws.ping(); } catch { /* socket already dead */ }
+    }, HEARTBEAT_MS);
   });
 
-  backendWs.on('message', (data: WebSocket.RawData) => {
+  ws.on('message', (data: WebSocket.RawData) => {
+    if (isStale()) return;  // orphaned socket — must never fan out
+    alive = true;
     try {
       const msg = JSON.parse(data.toString()) as { type?: string };
       if (msg.type === 'ping') {
-        backendWs?.send(JSON.stringify({ type: 'pong', timestamp_ms: Date.now() }));
+        ws.send(JSON.stringify({ type: 'pong', timestamp_ms: Date.now() }));
         return;
       }
     } catch { /**/ }
-    const frame = data.toString();
-    for (const client of browserClients) {
-      if (client.readyState === WebSocket.OPEN) client.send(frame);
-    }
+    fanout(data.toString());
   });
 
-  backendWs.on('close', () => {
-    fastifyRef?.log.warn('[FIX WS] Backend disconnected — reconnecting in 3s');
-    backendWs = null;
-    reconnectTimer = setTimeout(() => connectBackend(), 3000);
-  });
+  ws.on('close', () => handleDrop('close'));
 
-  backendWs.on('error', (err) => {
+  ws.on('error', (err) => {
     fastifyRef?.log.error(`[FIX WS] Backend error: ${err.message}`);
+    handleDrop(`error: ${err.message}`);
   });
 }
 
@@ -105,7 +176,10 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   fastify.addHook('onClose', async () => {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    backendWs?.close();
+    generation++;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    teardownBackend(backendWs);
+    backendWs = null;
   });
 }
