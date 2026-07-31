@@ -131,12 +131,20 @@ const ACTION_LABELS: Record<string, string> = {
   REVIEW_TERMS:     'Review Terms',
 };
 
+// Tiles read as flat black; risk is carried by the text colour and the border,
+// not by a tinted panel behind it. A grid of forty saturated blocks is tiring to
+// scan for any length of time, and the fill was competing with the label it was
+// meant to support.
+//
+// bg is the page panel colour rather than a per-level tint. Borders keep their
+// level hue so the matrix is still readable at a glance, and the 2px top bar
+// stays as the strongest per-level cue.
 const RISK_STYLE: Record<RiskLevel, { bg: string; text: string; border: string; bar: string; label: string }> = {
-  VERY_LOW: { bg: '#162a1c', text: '#66e07a', border: '#2f6a3d', bar: '#2f6a3d', label: 'Very Low' },
-  LOW:      { bg: '#162a1c', text: '#66e07a', border: '#2f6a3d', bar: '#2f6a3d', label: 'Low' },
-  MEDIUM:   { bg: '#2a2816', text: '#e0d066', border: '#6a6530', bar: '#6a6530', label: 'Medium' },
-  HIGH:     { bg: '#2a2016', text: '#e09a55', border: '#6a4a2f', bar: '#6a4a2f', label: 'High' },
-  CRITICAL: { bg: '#2c1417', text: '#ff5c5c', border: '#7a2f36', bar: '#7a2f36', label: 'Critical' },
+  VERY_LOW: { bg: '#1a1a1c', text: '#66e07a', border: '#2f6a3d', bar: '#2f6a3d', label: 'Very Low' },
+  LOW:      { bg: '#1a1a1c', text: '#66e07a', border: '#2f6a3d', bar: '#2f6a3d', label: 'Low' },
+  MEDIUM:   { bg: '#1a1a1c', text: '#e0d066', border: '#6a6530', bar: '#6a6530', label: 'Medium' },
+  HIGH:     { bg: '#1a1a1c', text: '#e09a55', border: '#6a4a2f', bar: '#6a4a2f', label: 'High' },
+  CRITICAL: { bg: '#1a1a1c', text: '#ff5c5c', border: '#7a2f36', bar: '#7a2f36', label: 'Critical' },
 };
 
 // ─── Factory Default Mock Data ────────────────────────────────
@@ -253,14 +261,14 @@ function BandCell({ band, actionDefs, modifiedRuleIds, onClick }: {
           title={`Modified by ${band.updated_by}`} />
       )}
       <div className="flex flex-col gap-0 px-2 py-1 flex-1">
-        <span className="uppercase tracking-wider font-semibold" style={{ color: s.text, opacity: 0.7, fontSize: 9 }}>
+        <span className="uppercase tracking-wider font-semibold" style={{ color: s.text, opacity: 0.7, fontSize: 12 }}>
           {s.label}
         </span>
-        <span className="text-xs font-semibold leading-tight" style={{ color: s.text }}>
+        <span className="font-semibold leading-tight" style={{ color: s.text, fontSize: 15 }}>
           {getActionLabel(band.action_code, actionDefs)}
         </span>
-        {hint && <span className="text-xs font-mono" style={{ color: s.text, opacity: 0.65 }}>{hint}</span>}
-        <span className="font-mono mt-auto" style={{ color: '#d2d6e2', fontSize: 9 }}>
+        {hint && <span className="font-mono" style={{ color: s.text, opacity: 0.65, fontSize: 15 }}>{hint}</span>}
+        <span className="font-mono mt-auto" style={{ color: '#d2d6e2', fontSize: 12 }}>
           PF {pfLabel(band)}
         </span>
       </div>
@@ -1719,7 +1727,7 @@ export function CharterPage() {
             }
           }}
         />
-      )}f
+      )}
     </div>
   );
 }
