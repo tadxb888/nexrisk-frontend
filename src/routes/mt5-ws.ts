@@ -25,37 +25,6 @@ let fastifyRef: FastifyInstance | null = null;
 // newer one lacks - dropping it loses nothing. Every other topic is untouched
 // and still forwarded immediately.
 const POSITION_FLUSH_MS = 1000;
-// Every browser socket sends a subscribe frame naming the topics it wants, and
-// this proxy used to discard them and fan every frame to every client. Six
-// separate connections are opened per session from api.ts - B-Book positions,
-// portfolio summary, portfolio exposure, cockpit, quotes and system health -
-// and five of the six have no use for position data at all. All six were
-// receiving and JSON.parsing the ~1 MB mt5.position batches and throwing them
-// away. Profiling attributed 38.9% of a recording to one of those handlers
-// alone, with the others alongside it.
-//
-// Subscriptions are now honoured per client. Prefix matching, same semantics
-// as the C++ WebSocketManager. A client that never subscribes still receives
-// everything, so nothing regresses if a caller is added that does not send the
-// frame.
-const clientTopics = new Map<WebSocket, string[]>();
-
-function clientWants(client: WebSocket, topic: string | undefined): boolean {
-  const subs = clientTopics.get(client);
-  if (!subs || subs.length === 0) return true;  // never subscribed - send all
-  if (!topic) return true;                      // acks, pongs, untopiced frames
-  for (const prefix of subs) if (topic.startsWith(prefix)) return true;
-  return false;
-}
-
-function fanout(frame: string, topic: string | undefined): void {
-  for (const client of browserClients) {
-    if (client.readyState !== WebSocket.OPEN) continue;
-    if (!clientWants(client, topic)) continue;
-    client.send(frame);
-  }
-}
-
 let pendingPositionFrame: string | null = null;
 let positionFlushTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -63,7 +32,9 @@ function flushPositionFrame(): void {
   if (!pendingPositionFrame) return;
   const frame = pendingPositionFrame;
   pendingPositionFrame = null;
-  fanout(frame, 'mt5.position');
+  for (const client of browserClients) {
+    if (client.readyState === WebSocket.OPEN) client.send(frame);
+  }
 }
 
 function connectBackend() {
@@ -106,15 +77,15 @@ function connectBackend() {
       }));
       lastSnapshot = JSON.stringify({ topic: 'mt5.position', type: 'SNAPSHOT', data: allPositions, timestamp_ms: Date.now() });
       fastifyRef?.log.info(`[MT5 WS] Snapshot ready — ${allPositions.length} positions`);
-      fanout(lastSnapshot!, 'mt5.position');
+      for (const client of browserClients) {
+        if (client.readyState === WebSocket.OPEN) client.send(lastSnapshot!);
+      }
     } catch (err) { fastifyRef?.log.error(`[MT5 WS] Snapshot error: ${err}`); }
   });
 
   backendWs.on('message', (data: WebSocket.RawData) => {
-    let topic: string | undefined;
     try {
       const msg = JSON.parse(data.toString()) as { type?: string; topic?: string };
-      topic = msg.topic;
       // Skip SNAPSHOTs only for mt5.position — that one is rebuilt locally
       // via REST above. SNAPSHOTs for any other topic (portfolio.summary,
       // future topics) must pass through to browser clients.
@@ -123,7 +94,10 @@ function connectBackend() {
       // Full-book position frame: keep only the newest, flushed on the timer.
       if (msg.topic === "mt5.position") { pendingPositionFrame = data.toString(); return; }
     } catch { /**/ }
-    fanout(data.toString(), topic);
+    const frame = data.toString();
+    for (const client of browserClients) {
+      if (client.readyState === WebSocket.OPEN) client.send(frame);
+    }
   });
 
   backendWs.on('close', () => {
@@ -149,11 +123,9 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
     browserClients.add(socket);
     fastify.log.info(`[MT5 WS] Browser connected — total=${browserClients.size}`);
 
-    // The position snapshot is deliberately NOT sent here. A client subscribes
-    // immediately after connecting, and sending before that arrives would push
-    // a ~1 MB frame to all six sockets a session opens, five of which discard
-    // it. It is sent from the subscribe handler below instead, only to clients
-    // that ask for positions.
+    if (lastSnapshot && socket.readyState === WebSocket.OPEN) {
+      socket.send(lastSnapshot);
+    }
 
     socket.on('message', (data: Buffer) => {
       // Do not forward browser subscribe messages. The shared backend
@@ -161,38 +133,23 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
       // browser's subscribe would clobber subscriptions for everyone.
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'subscribe') {
-          const topics = Array.isArray(msg.topics)
-            ? (msg.topics as unknown[]).map(String).filter(t => t.length > 0)
-            : [];
-          if (topics.length > 0) clientTopics.set(socket, topics);
-          // Now that we know what this client wants, hand it the current
-          // position book if that is among them.
-          if (lastSnapshot
-              && socket.readyState === WebSocket.OPEN
-              && clientWants(socket, 'mt5.position')) {
-            socket.send(lastSnapshot);
-          }
-          return;
-        }
+        if (msg.type === 'subscribe') return;
       } catch { /**/ }
       if (backendWs?.readyState === WebSocket.OPEN) backendWs.send(data);
     });
 
     socket.on('close', () => {
       browserClients.delete(socket);
-      clientTopics.delete(socket);
       fastify.log.info(`[MT5 WS] Browser disconnected — total=${browserClients.size}`);
     });
 
-    socket.on('error', () => { browserClients.delete(socket); clientTopics.delete(socket); });
+    socket.on('error', () => browserClients.delete(socket));
   });
 
   fastify.addHook('onClose', async () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (positionFlushTimer) { clearInterval(positionFlushTimer); positionFlushTimer = null; }
     pendingPositionFrame = null;
-    clientTopics.clear();
     backendWs?.close();
   });
 }
