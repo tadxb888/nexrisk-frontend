@@ -15,26 +15,39 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSnapshot: string | null = null;
 let fastifyRef: FastifyInstance | null = null;
 
-// mt5.position frames carry the entire position book - roughly 1.1 MB each -
-// and arrive several times a second. That is ~4.6 MB/s of JSON for the browser
-// to parse, which starves the main thread and makes every page slow to load,
-// slow to switch to, and slow to repaint.
+// POSITION_BATCH frames on mt5.position carry a symbol's entire position book
+// with current price and P/L - measured at ~1.1 MB each, several per second.
+// That is more than a browser can parse and still render, so they are coalesced
+// to one per symbol per second.
 //
-// Coalesce them: hold only the newest frame and release at most one per second.
-// Each frame is a complete book, so an older one carries no information the
-// newer one lacks - dropping it loses nothing. Every other topic is untouched
-// and still forwarded immediately.
+// Two things this must get right:
+//
+//   1. Key by symbol. A single global slot would let EURUSD's batch be
+//      overwritten by GBPUSD's within the same second, so every symbol but the
+//      last would stop updating.
+//
+//   2. Coalesce POSITION_BATCH only. POSITION_ADD, POSITION_CHANGE and
+//      POSITION_DELETE travel on this same topic and are NOT replaceable - each
+//      is the sole carrier of its event. Holding one back risks a closed
+//      position never leaving the grid. Those are forwarded immediately.
+//
+// A newer batch for a symbol supersedes the previous one for that symbol in
+// full, so dropping the older one loses nothing.
 const POSITION_FLUSH_MS = 1000;
-let pendingPositionFrame: string | null = null;
+const pendingPositionFrames = new Map<string, string>();
 let positionFlushTimer: ReturnType<typeof setInterval> | null = null;
 
-function flushPositionFrame(): void {
-  if (!pendingPositionFrame) return;
-  const frame = pendingPositionFrame;
-  pendingPositionFrame = null;
+function sendToAll(frame: string): void {
   for (const client of browserClients) {
     if (client.readyState === WebSocket.OPEN) client.send(frame);
   }
+}
+
+function flushPositionFrames(): void {
+  if (pendingPositionFrames.size === 0) return;
+  const frames = Array.from(pendingPositionFrames.values());
+  pendingPositionFrames.clear();
+  for (const frame of frames) sendToAll(frame);
 }
 
 function connectBackend() {
@@ -77,9 +90,7 @@ function connectBackend() {
       }));
       lastSnapshot = JSON.stringify({ topic: 'mt5.position', type: 'SNAPSHOT', data: allPositions, timestamp_ms: Date.now() });
       fastifyRef?.log.info(`[MT5 WS] Snapshot ready — ${allPositions.length} positions`);
-      for (const client of browserClients) {
-        if (client.readyState === WebSocket.OPEN) client.send(lastSnapshot!);
-      }
+      sendToAll(lastSnapshot!);
     } catch (err) { fastifyRef?.log.error(`[MT5 WS] Snapshot error: ${err}`); }
   });
 
@@ -91,19 +102,24 @@ function connectBackend() {
       // future topics) must pass through to browser clients.
       if (msg.type === "SNAPSHOT" && msg.topic === "mt5.position") return;
       if (msg.type === "ping") { backendWs?.send(JSON.stringify({ type: "pong", timestamp_ms: Date.now() })); return; }
-      // Full-book position frame: keep only the newest, flushed on the timer.
-      if (msg.topic === "mt5.position") { pendingPositionFrame = data.toString(); return; }
+
+      // Replaceable per-tick P/L batch: hold the newest per symbol.
+      // Everything else on this topic passes straight through.
+      const inner = (msg as { data?: { type?: string; broker?: string; symbol?: string } }).data ?? {};
+      if (msg.type === "POSITION_BATCH" || inner.type === "POSITION_BATCH") {
+        const key = `${inner.broker ?? ''}|${inner.symbol ?? ''}`;
+        pendingPositionFrames.set(key, data.toString());
+        return;
+      }
     } catch { /**/ }
-    const frame = data.toString();
-    for (const client of browserClients) {
-      if (client.readyState === WebSocket.OPEN) client.send(frame);
-    }
+    sendToAll(data.toString());
   });
 
   backendWs.on('close', () => {
     fastifyRef?.log.warn('[MT5 WS] Backend disconnected — reconnecting in 3s');
     backendWs = null;
     lastSnapshot = null;
+    pendingPositionFrames.clear();
     reconnectTimer = setTimeout(() => connectBackend(), 3000);
   });
 
@@ -116,7 +132,7 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
   fastifyRef = fastify;
   connectBackend();
 
-  if (!positionFlushTimer) positionFlushTimer = setInterval(flushPositionFrame, POSITION_FLUSH_MS);
+  if (!positionFlushTimer) positionFlushTimer = setInterval(flushPositionFrames, POSITION_FLUSH_MS);
 
   fastify.get('/ws/v1/mt5/events', { websocket: true }, (connection: SocketStream) => {
     const socket = connection.socket;
@@ -149,7 +165,7 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('onClose', async () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (positionFlushTimer) { clearInterval(positionFlushTimer); positionFlushTimer = null; }
-    pendingPositionFrame = null;
+    pendingPositionFrames.clear();
     backendWs?.close();
   });
 }
