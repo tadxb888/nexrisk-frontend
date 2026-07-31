@@ -2851,80 +2851,89 @@ export function NetExposurePage() {
             </div>
 
             {/* ── Intraday Monitor ────────────────────────────────── */}
-            <div className="border-t border-[#555] mt-2 pt-2 mb-8" style={{ height: '140px', flexShrink: 0 }}>
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-white">Intraday: Monitor</span>
-                  {selectedSymbol && <span className="text-xs text-[#49b3b3] bg-[#333] px-2 py-0.5 rounded">{selectedSymbol}</span>}
+            {/* Presentation only — every value, conditional and field name below
+                is unchanged. Type is up ~2pt throughout (the predicted prices a
+                little more, since they are what the panel exists to show), and
+                the flat grey grid is replaced by four separated period cards so
+                the eye can compare across horizons instead of reading one wide
+                ruled table. Panel height raised to fit the larger type. */}
+            <div className="border-t border-[#3f3e46] mt-2 pt-3 mb-8" style={{ height: '186px', flexShrink: 0 }}>
+              <div className="flex items-center justify-between mb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="font-semibold text-white" style={{ fontSize: 16, letterSpacing: '-0.01em' }}>Intraday: Monitor</span>
+                  {selectedSymbol && (
+                    <span className="font-mono font-semibold rounded"
+                      style={{ fontSize: 14, color: '#49b3b3', background: 'rgba(73,179,179,0.12)', border: '1px solid rgba(73,179,179,0.28)', padding: '2px 9px' }}>
+                      {selectedSymbol}
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-3 text-xs text-[#666]">
+                <div className="flex items-center gap-4" style={{ fontSize: 13, color: '#77757f' }}>
                   {intradayData && (
-                    <span>Target: <span className="text-[#a0a0b0]">
+                    <span>Target: <span className="font-mono" style={{ color: '#b8b6c0' }}>
                       {new Date(intradayData.targetTime).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })} ET
                     </span></span>
                   )}
-                  <span>Current: {new Date().toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} ET</span>
+                  <span>Current: <span className="font-mono" style={{ color: '#8d8b96' }}>{new Date().toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} ET</span></span>
                 </div>
               </div>
 
               {intradayLoading ? (
-                <div className="h-20 flex items-center justify-center text-[#555] text-sm border border-[#555] rounded">Loading predictions…</div>
+                <div className="h-24 flex items-center justify-center rounded" style={{ fontSize: 15, color: '#6a6873', border: '1px solid #3f3e46' }}>Loading predictions…</div>
               ) : intradayUnmapped ? (
-                <div className="h-20 flex items-center justify-center gap-2 text-[#888] text-sm border border-[#555] rounded">
+                <div className="h-24 flex items-center justify-center gap-2 rounded" style={{ fontSize: 15, color: '#9a98a4', border: '1px solid #3f3e46' }}>
                   <span style={{ color: '#e0a020' }}>⚠</span>
-                  No NexDay mapping for <span className="font-mono text-[#49b3b3]">{selectedSymbol}</span> — configure it in Settings → Predictions
+                  No NexDay mapping for <span className="font-mono" style={{ color: '#49b3b3' }}>{selectedSymbol}</span> — configure it in Settings → Predictions
                 </div>
               ) : selectedSymbol && intradayData ? (
-                <table className="w-full text-xs border border-[#555]" style={{ tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
-                  <colgroup><col style={{ width: '25%' }} /><col style={{ width: '25%' }} /><col style={{ width: '25%' }} /><col style={{ width: '25%' }} /></colgroup>
-                  <thead>
-                    <tr style={{ backgroundColor: '#1a1a1c' }}>
-                      {(['15 Minutes', '30 Minutes', '1 Hour', '2 Hours'] as const).map((period, i) => {
-                        const now = new Date(); const target = new Date(now);
-                        target.setMinutes(Math.floor(now.getMinutes() / 15) * 15, 0, 0);
-                        const offsets = [15, 30, 60, 120];
-                        const start = new Date(target.getTime() - offsets[i] * 60000);
-                        return (
-                          <th key={period} className="py-2 px-3 text-left border-r border-[#555] last:border-r-0">
-                            <div className="text-white font-medium">{period}</div>
-                            <div className="text-[#49b3b3] text-[10px] font-normal">{formatTime(start)} - {formatTime(target)}</div>
-                          </th>
-                        );
-                      })}
-                    </tr>
-                    <tr style={{ backgroundColor: '#232225' }}>
-                      {[0, 1, 2, 3].map((i) => (
-                        <th key={i} className="border-r border-[#555] last:border-r-0 p-0">
-                          <div className="grid grid-cols-3 text-[#999] font-normal">
-                            <span className="py-1 px-2 text-right border-r border-[#444]">pHigh</span>
-                            <span className="py-1 px-2 text-center border-r border-[#444]">pTrend</span>
-                            <span className="py-1 px-2 text-right">pLow</span>
+                <div className="grid grid-cols-4" style={{ gap: 10 }}>
+                  {([
+                    ['15 Minutes', intradayData.pred15High, intradayData.pred15Trend, intradayData.pred15Low],
+                    ['30 Minutes', intradayData.pred30High, intradayData.pred30Trend, intradayData.pred30Low],
+                    ['1 Hour',     intradayData.pred1hHigh, intradayData.pred1hTrend, intradayData.pred1hLow],
+                    ['2 Hours',    intradayData.pred2hHigh, intradayData.pred2hTrend, intradayData.pred2hLow],
+                  ] as const).map(([period, hi, trend, lo], i) => {
+                    const now = new Date(); const target = new Date(now);
+                    target.setMinutes(Math.floor(now.getMinutes() / 15) * 15, 0, 0);
+                    const offsets = [15, 30, 60, 120];
+                    const start = new Date(target.getTime() - offsets[i] * 60000);
+                    const up   = trend === 'Up';
+                    const down = trend === 'Down';
+                    const tone = up ? '#66e07a' : down ? '#ff6b6b' : '#9a98a4';
+                    return (
+                      <div key={period} className="rounded overflow-hidden"
+                        style={{ background: '#1a1a1c', border: '1px solid #3a3940' }}>
+                        {/* Direction is the one thing worth colouring, so the
+                            card carries it as a hairline rather than tinting
+                            the whole tile. */}
+                        <div style={{ height: 2, background: tone, opacity: 0.9 }} />
+                        <div className="flex items-baseline justify-between" style={{ padding: '8px 11px 6px' }}>
+                          <span className="font-semibold text-white" style={{ fontSize: 15 }}>{period}</span>
+                          <span className="font-mono" style={{ fontSize: 12, color: '#49b3b3' }}>{formatTime(start)} - {formatTime(target)}</span>
+                        </div>
+                        <div className="grid grid-cols-3" style={{ borderTop: '1px solid #2e2d34' }}>
+                          <div style={{ padding: '7px 10px 8px', borderRight: '1px solid #2e2d34' }}>
+                            <div style={{ fontSize: 11, letterSpacing: '0.09em', color: '#7d7b86', textTransform: 'uppercase', marginBottom: 3 }}>High</div>
+                            <div className="font-mono" style={{ fontSize: 16, color: '#e8e6ee', fontVariantNumeric: 'tabular-nums' }}>{(hi as number).toFixed(4)}</div>
                           </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr style={{ backgroundColor: '#232326' }}>
-                      {[
-                        [intradayData.pred15High, intradayData.pred15Trend, intradayData.pred15Low],
-                        [intradayData.pred30High, intradayData.pred30Trend, intradayData.pred30Low],
-                        [intradayData.pred1hHigh, intradayData.pred1hTrend, intradayData.pred1hLow],
-                        [intradayData.pred2hHigh, intradayData.pred2hTrend, intradayData.pred2hLow],
-                      ].map(([hi, trend, lo], i) => (
-                        <td key={i} className={i < 3 ? 'border-r border-[#555] p-0' : 'p-0'}>
-                          <div className="grid grid-cols-3 text-white font-mono">
-                            <span className="py-2 px-2 text-right border-r border-[#444]">{(hi as number).toFixed(4)}</span>
-                            <span className={clsx('py-2 px-2 text-center border-r border-[#444]', trend === 'Up' ? 'text-[#49b3b3]' : trend === 'Down' ? 'text-[#ff5c5c]' : 'text-[#999]')}>{trend as string}</span>
-                            <span className="py-2 px-2 text-right">{(lo as number).toFixed(4)}</span>
+                          <div style={{ padding: '7px 10px 8px', borderRight: '1px solid #2e2d34', textAlign: 'center' }}>
+                            <div style={{ fontSize: 11, letterSpacing: '0.09em', color: '#7d7b86', textTransform: 'uppercase', marginBottom: 3 }}>Trend</div>
+                            <div className="font-semibold" style={{ fontSize: 15, color: tone, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                              <span style={{ fontSize: 11, lineHeight: 1 }}>{up ? '▲' : down ? '▼' : '—'}</span>
+                              {trend as string}
+                            </div>
                           </div>
-                        </td>
-                      ))}
-                    </tr>
-                  </tbody>
-                </table>
+                          <div style={{ padding: '7px 10px 8px', textAlign: 'right' }}>
+                            <div style={{ fontSize: 11, letterSpacing: '0.09em', color: '#7d7b86', textTransform: 'uppercase', marginBottom: 3 }}>Low</div>
+                            <div className="font-mono" style={{ fontSize: 16, color: '#e8e6ee', fontVariantNumeric: 'tabular-nums' }}>{(lo as number).toFixed(4)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
-                <div className="h-20 flex items-center justify-center text-[#555] text-sm border border-[#555] rounded">
+                <div className="h-24 flex items-center justify-center rounded" style={{ fontSize: 15, color: '#6a6873', border: '1px solid #3f3e46' }}>
                   Select an instrument to view prediction data
                 </div>
               )}
