@@ -1262,18 +1262,6 @@ export function CBookPage() {
                   const sticky = resolvedHedgeTypeRef.current.get(p.position_id);
                   if (sticky) row.type = sticky; // never demote a resolved strategy row
                 }
-                // Apply persisted type/comment override. positionToCBook defaults
-                // type to 'Terminal', and this bootstrap rebuild was the only one
-                // of the four row-building paths that never re-applied the
-                // override - so every time it ran (LP change, re-init, reconnect)
-                // it silently demoted DOM Trader rows back to Terminal.
-                //
-                // Deliberately no consumePendingDom() here, unlike the other three
-                // paths. This runs during bootstrap, before any DOM fill of this
-                // session; consuming a pending entry here could attach a comment
-                // to a pre-existing position that merely matches symbol and side.
-                const ov = posOverrideRef.current.get(p.position_id);
-                if (ov) { row.type = ov.type; if (ov.comments) row.comments = ov.comments; }
                 return row;
               })
           );
@@ -2481,24 +2469,8 @@ export function CBookPage() {
   // Once the grid has been seeded via rowData on first render, we stop passing
   // rowData as a live prop by switching to a stable empty-array sentinel.
   // All subsequent structural changes (add/remove) go through applyTransaction only.
-  // Sizing columns on grid-ready alone measures an empty grid - rows arrive
-  // afterwards from REST and the socket, so every column ended up at its
-  // header width. autoSizeStrategy handles the initial pass and
-  // onFirstDataRendered re-runs it once real rows exist. Both are guarded on a
-  // non-empty grid, so a call that arrives before data simply does nothing
-  // rather than pinning every column to its header width.
-  const autoSizeAll = useCallback(() => {
-    const api = gridRef.current?.api;
-    if (!api) return;
-    // Measuring zero rows just re-applies header widths.
-    if (api.getDisplayedRowCount() === 0) return;
-    api.autoSizeAllColumns();
-  }, []);
-
-  const onFirstDataRendered = useCallback(() => { autoSizeAll(); }, [autoSizeAll]);
-
   const onGridReady = useCallback((_e: GridReadyEvent) => {
-    setTimeout(() => autoSizeAll(), 0);
+    setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
   }, []);
 
   const onCellValueChanged = useCallback((e: CellValueChangedEvent<CBookOrder>) => {
@@ -3023,9 +2995,7 @@ export function CBookPage() {
               }}
               cellSelection={{ enableHeaderHighlight: true }}
               getContextMenuItems={getContextMenuItems}
-              autoSizeStrategy={{ type: 'fitCellContents' }}
               onGridReady={onGridReady}
-              onFirstDataRendered={onFirstDataRendered}
               onSelectionChanged={onSelectionChanged}
               onCellValueChanged={onCellValueChanged}
             />
