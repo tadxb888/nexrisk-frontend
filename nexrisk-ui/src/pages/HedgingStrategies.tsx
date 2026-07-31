@@ -1971,11 +1971,11 @@ export function HedgeRulesPage() {
                   </FormRow>
 
                   {/* Cluster IDs */}
-                  <FormRow label="HDBSCAN Cluster IDs" hint="comma-separated integers · empty = ignore clustering · requires GET /api/v1/risk/clusters">
+                  <FormRow label="Cluster IDs">
                     <input
                       value={draftRule.cluster_ids}
                       onChange={e => setRule({ cluster_ids: e.target.value })}
-                      placeholder="e.g. 3, 7, 12  (relay to C++ dev: GET /api/v1/risk/clusters needed)"
+                      placeholder="e.g. 3, 7, 12"
                       style={{ ...inputStyle, fontFamily: FONT_MONO }}
                     />
                   </FormRow>
@@ -2068,7 +2068,7 @@ export function HedgeRulesPage() {
                     <div style={{ flex: 1, height: 1, backgroundColor: BORDER }} />
                   </div>
 
-                  <FormRow label="Condition Type" hint="evaluated per incoming position against hot-cached P&L">
+                  <FormRow label="Condition Type">
                     <select value={draftRule.condition_type} onChange={e => setRule({ condition_type: e.target.value as ConditionType })} style={selectStyle}>
                       {CONDITION_TYPES.map(c => (
                         <option key={c.value} value={c.value}>{c.label}</option>
