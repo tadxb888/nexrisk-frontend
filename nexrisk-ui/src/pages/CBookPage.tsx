@@ -2495,25 +2495,7 @@ export function CBookPage() {
     api.autoSizeAllColumns();
   }, []);
 
-  // onFirstDataRendered is not sufficient on this grid. Rows are seeded through
-  // applyTransaction rather than the rowData prop, so that event fires against
-  // an empty grid and never fires again - the sizing pass was being skipped
-  // every time. onModelUpdated fires whenever the row model changes, however
-  // the rows arrived, so the first update that actually carries rows is the one
-  // that sizes the columns. The ref keeps it to a single pass so a user's own
-  // column resize is not undone by the next tick.
-  const hasAutoSizedRef = useRef(false);
-
-  const onModelUpdated = useCallback(() => {
-    if (hasAutoSizedRef.current) return;
-    const api = gridRef.current?.api;
-    if (!api || api.getDisplayedRowCount() === 0) return;
-    api.autoSizeAllColumns();
-    hasAutoSizedRef.current = true;
-  }, []);
-
-  // Changing LP replaces the entire row set, so measure again for the new data.
-  useEffect(() => { hasAutoSizedRef.current = false; }, [domLpId]);
+  const onFirstDataRendered = useCallback(() => { autoSizeAll(); }, [autoSizeAll]);
 
   const onGridReady = useCallback((_e: GridReadyEvent) => {
     setTimeout(() => autoSizeAll(), 0);
@@ -3043,7 +3025,7 @@ export function CBookPage() {
               getContextMenuItems={getContextMenuItems}
               autoSizeStrategy={{ type: 'fitCellContents' }}
               onGridReady={onGridReady}
-              onModelUpdated={onModelUpdated}
+              onFirstDataRendered={onFirstDataRendered}
               onSelectionChanged={onSelectionChanged}
               onCellValueChanged={onCellValueChanged}
             />
