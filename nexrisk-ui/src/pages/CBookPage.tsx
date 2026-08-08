@@ -208,7 +208,6 @@ const GRID_STABLE_EMPTY: CBookOrder[] = [];
 
 const SEED_LPS: FIXLpEntry[] = [
   { lp_id: 'traderevolution', lp_name: 'TraderEvolution Sandbox', state: 'CONNECTED',    provider_type: 'traderevolution' },
-  { lp_id: 'lmax-demo',       lp_name: 'LMAX Demo',               state: 'DISCONNECTED', provider_type: 'lmax'            },
 ];
 
 const SEED_INSTRUMENTS: Record<string, FIXInstrument[]> = {
@@ -224,7 +223,6 @@ const SEED_INSTRUMENTS: Record<string, FIXInstrument[]> = {
     { symbol: 'XAUUSD', security_id: '56931', currency: 'USD', description: 'Gold / US Dollar',            instrument_group: 'Metals', min_trade_vol: 10,     max_trade_vol: 100000,  price_precision: 2, has_trade_route: true, trade_route: 'TRADE' },
     { symbol: 'XAGUSD', security_id: '',      currency: 'USD', description: 'Silver / US Dollar',          instrument_group: 'Metals', min_trade_vol: 100,    max_trade_vol: 500000,  price_precision: 3, has_trade_route: true, trade_route: 'TRADE' },
   ],
-  'lmax-demo': [],
 };
 
 const SEED_CAPABILITIES: Record<string, FIXCapabilities> = {
@@ -235,14 +233,6 @@ const SEED_CAPABILITIES: Record<string, FIXCapabilities> = {
     max_order_qty: 10000000,
     min_order_qty: 1000,
     custom_fields: { sl_tp: true, product_type: true, open_close: true },
-  },
-  'lmax-demo': {
-    lp_id: 'lmax-demo',
-    order_types: ['MARKET', 'LIMIT'],
-    time_in_force: ['IOC', 'GTC'],
-    max_order_qty: 5000000,
-    min_order_qty: 1000,
-    custom_fields: { sl_tp: false },
   },
 };
 
@@ -849,16 +839,37 @@ export function CBookPage() {
       setGridLpId((prev) => prev || seedConnected.lp_id);
       setDomLpId((prev)  => prev || seedConnected.lp_id);
     }
-    bff<{ success: boolean; data: { lps: Record<string, any> } }>('/api/v1/fix/status')
+    // /api/v1/fix/status returns UNWRAPPED JSON (verified live 2026-08-08):
+    //   { bridge_id, state, lps: [ { lp_id, provider_type, state } ] }
+    // No { success, data } envelope; lps is an ARRAY. lp_name is absent from
+    // status entries, so display names are enriched best-effort from the LP
+    // Admin registry (GET /api/v1/fix/admin/lp).
+    const namesPromise: Promise<Record<string, string>> = bff<any>('/api/v1/fix/admin/lp')
       .then((r) => {
-        if (cancelled || !r.success) return;
-        const lpDict = r.data.lps ?? {};
-        const live: FIXLpEntry[] = Object.entries(lpDict).map(([id, info]: [string, any]) => ({
-          lp_id:         id,
-          lp_name:       info.lp_name ?? SEED_LPS.find(s => s.lp_id === id)?.lp_name ?? id,
-          state:         info.state   ?? 'UNKNOWN',
-          provider_type: info.provider_type ?? '',
-        }));
+        const list = r?.data?.lps ?? r?.lps ?? [];
+        const map: Record<string, string> = {};
+        for (const e of (Array.isArray(list) ? list : Object.values(list)) as any[]) {
+          if (e?.lp_id && e?.lp_name) map[e.lp_id] = e.lp_name;
+        }
+        return map;
+      })
+      .catch(() => ({} as Record<string, string>));
+    Promise.all([bff<any>('/api/v1/fix/status'), namesPromise])
+      .then(([r, names]) => {
+        if (cancelled) return;
+        const rawLps = r?.data?.lps ?? r?.lps ?? null;
+        if (!rawLps) return; // unexpected shape — seed data shown
+        const entries: any[] = Array.isArray(rawLps)
+          ? rawLps
+          : Object.entries(rawLps).map(([id, info]: [string, any]) => ({ lp_id: id, ...info }));
+        const live: FIXLpEntry[] = entries
+          .filter((e: any) => e?.lp_id)
+          .map((e: any) => ({
+            lp_id:         e.lp_id,
+            lp_name:       e.lp_name ?? names[e.lp_id] ?? SEED_LPS.find(s => s.lp_id === e.lp_id)?.lp_name ?? e.lp_id,
+            state:         e.state   ?? 'UNKNOWN',
+            provider_type: e.provider_type ?? '',
+          }));
         for (const seed of SEED_LPS) {
           if (!live.find((l) => l.lp_id === seed.lp_id)) live.push({ ...seed, state: 'DISCONNECTED' });
         }
