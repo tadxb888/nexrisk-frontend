@@ -1043,15 +1043,37 @@ export function NetExposurePage() {
   // ── LP list: seed from /fix/status ────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    bff<{ success: boolean; data: { lps: Record<string, any> } }>('/api/v1/fix/status')
+    // /api/v1/fix/status returns UNWRAPPED JSON (verified live 2026-08-08):
+    //   { bridge_id, state, lps: [ { lp_id, provider_type, state } ] }
+    // No { success, data } envelope; lps is an ARRAY. lp_name is absent from
+    // status entries, so display names are enriched best-effort from the LP
+    // Admin registry (GET /api/v1/fix/admin/lp).
+    const namesPromise: Promise<Record<string, string>> = bff<any>('/api/v1/fix/admin/lp')
       .then((r) => {
-        if (cancelled || !r.success) return;
-        const live: FIXLpEntry[] = Object.entries(r.data.lps ?? {}).map(([id, info]: [string, any]) => ({
-          lp_id:         id,
-          lp_name:       info.lp_name ?? SEED_LPS.find((s) => s.lp_id === id)?.lp_name ?? id,
-          state:         info.state   ?? 'UNKNOWN',
-          provider_type: info.provider_type ?? '',
-        }));
+        const list = r?.data?.lps ?? r?.lps ?? [];
+        const map: Record<string, string> = {};
+        for (const e of (Array.isArray(list) ? list : Object.values(list)) as any[]) {
+          if (e?.lp_id && e?.lp_name) map[e.lp_id] = e.lp_name;
+        }
+        return map;
+      })
+      .catch(() => ({} as Record<string, string>));
+    Promise.all([bff<any>('/api/v1/fix/status'), namesPromise])
+      .then(([r, names]) => {
+        if (cancelled) return;
+        const rawLps = r?.data?.lps ?? r?.lps ?? null;
+        if (!rawLps) return; // unexpected shape — seed data shown
+        const entries: any[] = Array.isArray(rawLps)
+          ? rawLps
+          : Object.entries(rawLps).map(([id, info]: [string, any]) => ({ lp_id: id, ...info }));
+        const live: FIXLpEntry[] = entries
+          .filter((e: any) => e?.lp_id)
+          .map((e: any) => ({
+            lp_id:         e.lp_id,
+            lp_name:       e.lp_name ?? names[e.lp_id] ?? SEED_LPS.find((s) => s.lp_id === e.lp_id)?.lp_name ?? e.lp_id,
+            state:         e.state   ?? 'UNKNOWN',
+            provider_type: e.provider_type ?? '',
+          }));
         for (const seed of SEED_LPS) {
           if (!live.find((l) => l.lp_id === seed.lp_id)) live.push({ ...seed, state: 'DISCONNECTED' });
         }
