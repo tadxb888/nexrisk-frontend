@@ -9,7 +9,7 @@
 //   Right  (flex 1) — Per-LP symbol AG Grid: Delta Spread,
 //                     Avg RT, Volume, Rejection
 //
-// Thresholds (per-LP, localStorage):
+// Thresholds (per-LP, persisted via route-sanity thresholds API):
 //   Route  : Latency (max), Uptime (min), Rejection (max)
 //   Symbol : Latency (max), Rejection (max)
 //   Each with /day and /60min variants.
@@ -43,7 +43,7 @@ const BASE           = (import.meta as any).env?.VITE_API_URL || 'http://localho
 const WS_URL         = BASE.replace(/^http/, 'ws') + '/ws/v1/fix/events';
 const WS_MAX_RETRIES = 8;
 const UPTIME_TICK_MS = 5_000;
-const LS_KEY         = 'nexrisk:route-sanity:thresholds-v3';
+
 
 // ── Color tokens ──────────────────────────────────────────────
 const BG_PAGE   = '#232326';
@@ -156,16 +156,31 @@ const WS_BADGE: Record<WsStatus, { color: string; label: string }> = {
 // ══════════════════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════════════════
-function loadThresholds(): Record<string, Partial<Thresholds>> {
+async function fetchThresholdsFromApi(): Promise<Record<string, Partial<Thresholds>>> {
   try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
-  return {};
+    const res = await api<{ success: boolean; data: { thresholds: Record<string, Partial<Thresholds>> } }>(
+      '/api/v1/route-sanity/thresholds',
+    );
+    return res.data?.thresholds ?? {};
+  } catch {
+    return {};
+  }
 }
 
-function saveThresholdsToStorage(map: Record<string, Partial<Thresholds>>) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+async function putThresholdsToApi(lp_id: string, t: Partial<Thresholds>): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/route-sanity/thresholds/${encodeURIComponent(lp_id)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(t),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 function getLpThresholds(
@@ -394,9 +409,18 @@ export default function RouteSanityPage() {
   const [symLoading,   setSymLoading]   = useState(false);
   const [wsStatus,     setWsStatus]     = useState<WsStatus>('connecting');
 
-  // ── Saved thresholds (from localStorage) ───────────────────
+  // ── Saved thresholds (from server) ─────────────────────────
   const [savedThreshMap, setSavedThreshMap] =
-    useState<Record<string, Partial<Thresholds>>>(loadThresholds);
+    useState<Record<string, Partial<Thresholds>>>({});
+
+  // Load persisted thresholds from the server on mount
+  useEffect(() => {
+    let cancelled = false;
+    fetchThresholdsFromApi().then(map => {
+      if (!cancelled) setSavedThreshMap(map);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Threshold edit state ────────────────────────────────────
   // threshRows drives the middle AG Grid. draftMap tracks in-grid edits.
@@ -485,9 +509,12 @@ export default function RouteSanityPage() {
   // ── Save threshold ───────────────────────────────────────────
   const saveThresholds = useCallback(() => {
     if (!selectedLpId) return;
-    const updated = { ...savedThreshMap, [selectedLpId]: { ...draftRef.current } };
+    const draft = { ...draftRef.current };
+    const updated = { ...savedThreshMap, [selectedLpId]: draft };
     setSavedThreshMap(updated);
-    saveThresholdsToStorage(updated);
+    putThresholdsToApi(selectedLpId, draft).then(ok => {
+      if (!ok) setError('Failed to save thresholds to server');
+    });
     setIsDirty(false);
     setTimeout(() => lpGridRef.current?.api?.refreshCells({ force: true }), 50);
   }, [selectedLpId, savedThreshMap]);
@@ -1229,7 +1256,7 @@ export default function RouteSanityPage() {
           Latency · Rejection · Delta Spread (LP − MT5 pips)
         </span>
         <span style={{ fontSize: 9, color: '#404044', fontFamily: 'IBM Plex Mono, monospace' }}>
-          Thresholds saved per LP to localStorage · Uptime tracked from session start
+          Thresholds saved per LP to server · Uptime tracked from session start
         </span>
       </div>
     </div>
