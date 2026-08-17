@@ -1342,6 +1342,18 @@ export function HedgeRulesPage() {
         const json = await res.json();
         if (!res.ok) { setSaveError(json.error ?? `Error ${res.status}`); return; }
         setIsRuleDirty(false);
+        if (isSanityDirty) {
+          const sres = await fetch(`/api/v1/hedge/rules/${selectedId}/sanity-config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sanityToApiBody(draftSanity)),
+          });
+          const sjson = await sres.json();
+          if (!sres.ok) { setSaveError(sjson.error ?? `Route config error ${sres.status}`); return; }
+          setIsSanityDirty(false);
+          setSanityIsGlobal(false);
+          setSanityOverrideEnabled(true);
+        }
         await loadRules();
         showToast('Strategy saved');
       }
@@ -1350,7 +1362,7 @@ export function HedgeRulesPage() {
     } finally {
       if (mountedRef.current) setSaving(false);
     }
-  }, [isCreating, selectedId, draftRule, loadRules, showToast]);
+  }, [isCreating, selectedId, draftRule, isSanityDirty, draftSanity, loadRules, showToast]);
 
   const handleStatusAction = useCallback(async (action: 'activate' | 'pause' | 'stop') => {
     if (selectedId === null) return;
