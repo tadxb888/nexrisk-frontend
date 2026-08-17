@@ -1214,8 +1214,8 @@ export function HedgeRulesPage() {
     sessionStorage.setItem(SS_KEY, String(selectedId));
     const rule = rules.find(r => r.rule_id === selectedId);
     const isNewSelection = selectedId !== prevSelectedIdRef.current;
-    prevSelectedIdRef.current = selectedId;
     if (rule && (isNewSelection || !isRuleDirty)) {
+      prevSelectedIdRef.current = selectedId;
       setDraftRule(draftFromRule(rule));
       if (isNewSelection) {
         setIsRuleDirty(false);
