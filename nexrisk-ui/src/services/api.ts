@@ -2904,7 +2904,20 @@ export const alertThresholdsApi = {
 // fixAdmin() unwraps it and turns { success:false } into a thrown Error.
 // ════════════════════════════════════════════════════════════════════════════
 
-export type LpProviderType  = 'traderevolution' | 'lmax' | 'cmc' | 'onezero';
+/** Canonical provider_type as reported by GET /fix/admin/providers. Not a
+ *  closed union: the registered adapter set is a property of the running
+ *  fixbridge build, never of the frontend. */
+export type LpProviderType  = string;
+
+/** Row from GET /fix/admin/providers — the only source for the Add LP provider list. */
+export interface LpProviderInfo {
+  provider_type: string;
+  display_name: string;
+  status: 'production' | 'beta';
+  md_session: 'separate' | 'shared' | 'none';
+  requires_ssl: boolean;
+  provider_settings_keys: string[];
+}
 export type LpState         = 'DISCONNECTED' | 'STOPPED' | 'CONNECTING' | 'CONNECTED'
                             | 'DEGRADED' | 'QUARANTINED' | 'SESSION_ERROR';
 export type LpSessionState  = 'DISCONNECTED' | 'CONNECTING' | 'LOGGED_ON'
@@ -3101,6 +3114,11 @@ async function fixAdmin<T>(endpoint: string, init?: RequestInit): Promise<T> {
 const lpPath = (id: string) => `/api/v1/fix/admin/lp/${encodeURIComponent(id)}`;
 
 export const lpAdminApi = {
+  /** Adapters compiled into the running bridge. Drives the Add LP provider
+   *  picker and the per-provider settings inputs. */
+  providers: () =>
+    fixAdmin<{ providers: LpProviderInfo[] }>('/api/v1/fix/admin/providers'),
+
   /** List rows carry no session detail — pair with health() for the list view. */
   list: () =>
     fixAdmin<{ lps: LpListRow[]; total: number }>('/api/v1/fix/admin/lp'),

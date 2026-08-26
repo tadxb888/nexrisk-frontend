@@ -25,6 +25,7 @@ import {
   type LpUpdateBody,
   type LpSessionConfig,
   type LpProviderType,
+  type LpProviderInfo,
   type LpState,
   type LpSessionState,
   type LpHealthStatus,
@@ -143,19 +144,48 @@ interface IntendedChange {
 // ============================================================
 // CONSTANTS
 // ============================================================
-const PROVIDER_LABELS: Record<LpProviderType, string> = {
-  traderevolution: 'TraderEvolution',
-  lmax: 'LMAX',
-  cmc: 'CMC Markets',
-  onezero: 'oneZero',
-};
-
-const PROVIDER_BADGE: Record<LpProviderType, [string, string, string]> = {
+// Badge colours only. Names, status and settings keys come from the bridge
+// (GET /fix/admin/providers) via useProviders(); unknown types fall back to
+// NEUTRAL_BADGE.
+const PROVIDER_BADGE: Record<string, [string, string, string]> = {
   traderevolution: ['#a5c8f0', '#0f2035', '#1e4270'],
-  lmax:            ['#f0d0a5', '#2a1f0f', '#5a4020'],
   cmc:             ['#d4a5e0', '#1e1530', '#3d2860'],
   onezero:         ['#a5e0c8', '#0f2a20', '#1e5a40'],
 };
+const NEUTRAL_BADGE: [string, string, string] = ['#a0a0b0', '#2a2a2c', '#484848'];
+
+// ------------------------------------------------------------
+// Provider registry (fetched once per page load, shared by all consumers)
+// ------------------------------------------------------------
+let providersCache: LpProviderInfo[] | null = null;
+let providersInflight: Promise<LpProviderInfo[]> | null = null;
+
+function fetchProviders(): Promise<LpProviderInfo[]> {
+  if (providersCache) return Promise.resolve(providersCache);
+  if (!providersInflight) {
+    providersInflight = lpAdminApi.providers()
+      .then(r => { providersCache = r.providers; return providersCache; })
+      .finally(() => { providersInflight = null; });
+  }
+  return providersInflight;
+}
+
+function useProviders() {
+  const [providers, setProviders] = useState<LpProviderInfo[]>(providersCache ?? []);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchProviders()
+      .then(p => { if (alive) setProviders(p); })
+      .catch(e => { if (alive) setError(errMessage(e)); });
+    return () => { alive = false; };
+  }, []);
+  const labelOf = useCallback(
+    (t: string) => providers.find(p => p.provider_type === t)?.display_name ?? t,
+    [providers],
+  );
+  return { providers, labelOf, error };
+}
 
 const STATE_CFG: Record<LpState, { color: string; bg: string; border: string; label: string }> = {
   DISCONNECTED:  { color: '#a0a0b0', bg: '#2a2a2c', border: '#484848', label: 'Disconnected' },
@@ -414,11 +444,12 @@ function StateBadge({ state }: { state?: LpState }) {
 }
 
 function ProviderBadge({ type }: { type: LpProviderType }) {
-  const [color, bg, border] = PROVIDER_BADGE[type] ?? ['#a0a0b0', '#2a2a2c', '#484848'];
+  const { labelOf } = useProviders();
+  const [color, bg, border] = PROVIDER_BADGE[type] ?? NEUTRAL_BADGE;
   return (
     <span className="px-1.5 py-0.5 rounded text-xs font-semibold"
       style={{ color, backgroundColor: bg, border: `1px solid ${border}` }}>
-      {PROVIDER_LABELS[type] ?? type}
+      {labelOf(type)}
     </span>
   );
 }
@@ -697,22 +728,19 @@ interface CreateForm {
   t_host: string; t_port: string; t_sender: string; t_target: string; t_fix: string; t_hb: string;
   md_present: boolean;
   m_host: string; m_port: string; m_sender: string; m_target: string; m_depth: string;
-  account: string; security_exchange: string;
-  /** oneZero provider_settings keys read by OZAdapter. */
-  oz_margin_account: string; oz_taker_portfolio_id: string;
-  oz_on_behalf_of_comp_id: string; oz_sender_sub_id: string;
+  /** provider_settings values keyed by the selected provider's
+   *  provider_settings_keys. Rendered generically; no per-provider fields. */
+  ps: Record<string, string>;
 }
 
 function emptyCreateForm(): CreateForm {
   return {
-    lp_id: '', lp_name: '', provider_type: 'traderevolution',
+    lp_id: '', lp_name: '', provider_type: '',
     environment: 'SANDBOX', enabled: true, auto_connect: false,
     t_host: '', t_port: '', t_sender: '', t_target: '', t_fix: 'FIX.4.4', t_hb: '30',
     md_present: true,
     m_host: '', m_port: '', m_sender: '', m_target: '', m_depth: '1',
-    account: '', security_exchange: '',
-    oz_margin_account: '*', oz_taker_portfolio_id: '',
-    oz_on_behalf_of_comp_id: '', oz_sender_sub_id: '',
+    ps: {},
   };
 }
 
@@ -810,6 +838,7 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
   const idValid = /^[a-z0-9][a-z0-9-]{2,31}$/.test(f.lp_id);
   const missing: string[] = [];
   if (!idValid)   missing.push('LP ID');
+  if (!f.provider_type) missing.push('Provider');
   if (!f.lp_name) missing.push('Display name');
   if (!f.t_host)  missing.push('Trading host');
   if (!f.t_port)  missing.push('Trading port');
@@ -817,8 +846,26 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
   if (!f.t_target) missing.push('Trading TargetCompID');
   const canSave = missing.length === 0;
 
+  const { providers, error: provError } = useProviders();
+  const prov = providers.find(p => p.provider_type === f.provider_type);
   const [provColor] = PROVIDER_BADGE[f.provider_type] ?? ['#49b3b3'];
-  const isOz = f.provider_type === 'onezero';
+
+  const selectProvider = (p: LpProviderInfo) => {
+    setF(prev => ({
+      ...prev,
+      provider_type: p.provider_type,
+      md_present: p.md_session === 'separate',
+      ps: Object.fromEntries(p.provider_settings_keys.map(k => [k, prev.ps[k] ?? ''])),
+    }));
+  };
+  const updPs = (k: string, v: string) => setF(p => ({ ...p, ps: { ...p.ps, [k]: v } }));
+
+  // Default to the first production provider once the registry arrives.
+  useEffect(() => {
+    if (f.provider_type || providers.length === 0) return;
+    selectProvider(providers.find(p => p.status === 'production') ?? providers[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers]);
 
   const submit = async () => {
     setSaving(true); setError(null);
@@ -843,21 +890,9 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
             depth: Number(f.m_depth),
           },
         } : {}),
-        ...(f.provider_type === 'onezero' ? {
-          // Seed every key OZAdapter reads so the Configuration tab renders
-          // them for editing. Empty strings are deliberate placeholders.
-          provider_settings: {
-            margin_account:       f.oz_margin_account || '*',
-            taker_portfolio_id:   f.oz_taker_portfolio_id,
-            on_behalf_of_comp_id: f.oz_on_behalf_of_comp_id,
-            sender_sub_id:        f.oz_sender_sub_id,
-          },
-        } : (f.account || f.security_exchange ? {
-          provider_settings: {
-            ...(f.account ? { account: f.account } : {}),
-            ...(f.security_exchange ? { security_exchange: f.security_exchange } : {}),
-          },
-        } : {})),
+        // Send every key the adapter declares, even when empty, so the
+        // Configuration tab renders them for editing.
+        ...(Object.keys(f.ps).length ? { provider_settings: f.ps } : {}),
       });
       showToast(`${f.lp_name} created — set credentials before starting it`);
       onCreated();
@@ -896,20 +931,28 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
               <div>
                 <div className="text-text-secondary mb-1.5" style={{ fontSize: 11 }}>Provider <span className="text-text-muted">· fixed after creation</span></div>
                 <div className="grid grid-cols-2 gap-1.5">
-                  {(Object.keys(PROVIDER_LABELS) as LpProviderType[]).map(k => {
+                  {providers.map(p => {
+                    const k = p.provider_type;
                     const on = f.provider_type === k;
-                    const [c, bg, bd] = PROVIDER_BADGE[k];
+                    const [c, bg, bd] = PROVIDER_BADGE[k] ?? NEUTRAL_BADGE;
                     return (
-                      <button key={k} type="button" onClick={() => upd('provider_type', k)}
+                      <button key={k} type="button" onClick={() => selectProvider(p)}
                         className="px-2.5 py-2 rounded text-xs font-semibold text-left transition-colors"
                         style={on
                           ? { color: c, backgroundColor: bg, border: `1px solid ${bd}` }
                           : { color: '#8a8a94', backgroundColor: 'transparent', border: '1px solid #404040' }}>
-                        {PROVIDER_LABELS[k]}
+                        {p.display_name}
+                        {p.status === 'beta' && <span className="ml-1 font-normal opacity-70">· beta</span>}
                       </button>
                     );
                   })}
                 </div>
+                {providers.length === 0 && !provError && (
+                  <div className="text-text-muted mt-1.5" style={{ fontSize: 10 }}>Loading providers…</div>
+                )}
+                {provError && (
+                  <div className="mt-1.5" style={{ fontSize: 10, color: '#e0a5a5' }}>Provider list unavailable: {provError}</div>
+                )}
               </div>
 
               <CField label="LP ID" value={f.lp_id} required
@@ -962,6 +1005,7 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
                   </div>
                 </SessionCard>
 
+                {prov?.md_session !== 'shared' && (
                 <SessionCard title="Market data session" subtitle="Quotes and book depth" accent={provColor} muted={!f.md_present}
                   right={
                     <label className="flex items-center gap-2 text-xs text-text-secondary">
@@ -991,31 +1035,26 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
                     </div>
                   )}
                 </SessionCard>
+                )}
               </div>
 
               <div className="rounded px-4 py-3" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-sm font-semibold text-text-primary">
-                    {PROVIDER_LABELS[f.provider_type]} settings
+                    {prov?.display_name ?? f.provider_type} settings
                   </div>
                   <div className="text-text-muted" style={{ fontSize: 10 }}>
                     Optional · more keys can be added from the Configuration tab
                   </div>
                 </div>
-                {isOz ? (
+                {prov && prov.provider_settings_keys.length > 0 ? (
                   <div className="grid grid-cols-4 gap-3">
-                    <CField label="Margin account" value={f.oz_margin_account} placeholder="*"
-                      hint="PartyID on orders and position requests. * = all accounts on the session."
-                      onChange={v => upd('oz_margin_account', v)} />
-                    <CField label="Taker portfolio ID" value={f.oz_taker_portfolio_id} onChange={v => upd('oz_taker_portfolio_id', v)} />
-                    <CField label="OnBehalfOfCompID" value={f.oz_on_behalf_of_comp_id} onChange={v => upd('oz_on_behalf_of_comp_id', v)} />
-                    <CField label="SenderSubID" value={f.oz_sender_sub_id} onChange={v => upd('oz_sender_sub_id', v)} />
+                    {prov.provider_settings_keys.map(k => (
+                      <CField key={k} label={k} value={f.ps[k] ?? ''} onChange={v => updPs(k, v)} />
+                    ))}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-4 gap-3">
-                    <CField label="Account" value={f.account} onChange={v => upd('account', v)} />
-                    <CField label="Security exchange" value={f.security_exchange} onChange={v => upd('security_exchange', v)} />
-                  </div>
+                  <div className="text-text-muted" style={{ fontSize: 11 }}>This provider reads no settings.</div>
                 )}
               </div>
             </div>
@@ -1480,6 +1519,7 @@ function LPListView({ lps, healthMap, loading, error, busyId, onAdd, onReload, o
 // OVERVIEW TAB
 // ============================================================
 function OverviewTab({ config, health }: { config: LpConfig; health?: LpHealthDetail }) {
+  const { labelOf } = useProviders();
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div className="panel p-4">
@@ -1527,7 +1567,7 @@ function OverviewTab({ config, health }: { config: LpConfig; health?: LpHealthDe
           <SectionTitle>Record</SectionTitle>
           <div className="space-y-1">
             <Row label="LP ID"><span className="font-mono">{config.lp_id}</span></Row>
-            <Row label="Provider">{PROVIDER_LABELS[config.provider_type] ?? config.provider_type}</Row>
+            <Row label="Provider">{labelOf(config.provider_type)}</Row>
             <Row label="Environment">{config.environment}</Row>
             <Row label="Enabled">{config.enabled ? 'Yes' : 'No'}</Row>
             <Row label="Connect on start">{config.auto_connect ? 'Yes' : 'No'}</Row>
@@ -1572,6 +1612,7 @@ function ConfigTab({ config, live, onSaved, showToast }: {
 }) {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('lp_admin', 'EDIT');
+  const { labelOf } = useProviders();
 
   const stored = useMemo(() => configToForm(config), [config]);
   const [form, setForm] = useState<ConfigForm>(stored);
@@ -1716,7 +1757,7 @@ function ConfigTab({ config, live, onSaved, showToast }: {
           </div>
           <div>
             <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Provider</label>
-            <input className="input w-full text-sm" value={PROVIDER_LABELS[config.provider_type] ?? config.provider_type} disabled
+            <input className="input w-full text-sm" value={labelOf(config.provider_type)} disabled
               style={{ opacity: 0.5, cursor: 'not-allowed' }} />
             <div className="text-text-muted mt-1" style={{ fontSize: 10 }}>Immutable. Not sent on save.</div>
           </div>
