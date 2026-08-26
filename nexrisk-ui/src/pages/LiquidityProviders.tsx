@@ -716,6 +716,87 @@ function emptyCreateForm(): CreateForm {
   };
 }
 
+/** Segmented choice — replaces a <select> where there are ≤4 fixed options,
+ *  so the whole choice set is visible without opening anything. */
+function Seg<T extends string>({ value, options, onChange, danger }: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  /** option that should read as a warning when selected (PRODUCTION) */
+  danger?: T;
+}) {
+  return (
+    <div className="inline-flex rounded overflow-hidden" style={{ border: '1px solid #404040', backgroundColor: '#232225' }}>
+      {options.map((o, i) => {
+        const on = o.value === value;
+        const isDanger = on && danger === o.value;
+        return (
+          <button key={o.value} type="button" onClick={() => onChange(o.value)}
+            className="px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors"
+            style={{
+              color: isDanger ? '#ff9a9a' : on ? '#49b3b3' : '#8a8a94',
+              backgroundColor: isDanger ? '#2c1417' : on ? '#163a3a' : 'transparent',
+              borderLeft: i === 0 ? 'none' : '1px solid #404040',
+            }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Compact labelled input for the create dialog. Hints live in the
+ *  placeholder and the tooltip, not under the field, so a row of inputs is
+ *  one row tall. `required` draws a teal tick once the field has a value. */
+function CField({ label, value, onChange, placeholder, hint, mono = true, required, span }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  hint?: string;
+  mono?: boolean;
+  required?: boolean;
+  span?: number;
+}) {
+  const filled = value.trim().length > 0;
+  return (
+    <div style={span ? { gridColumn: `span ${span} / span ${span}` } : undefined}>
+      <label className="flex items-center justify-between text-text-secondary mb-1" style={{ fontSize: 11 }}>
+        <span>{label}</span>
+        {required && (
+          <span style={{ fontSize: 10, color: filled ? '#49b3b3' : '#6a6a72' }}>{filled ? '✓' : 'required'}</span>
+        )}
+      </label>
+      <input
+        className={clsx('input w-full text-sm', mono && 'font-mono')}
+        value={value}
+        placeholder={placeholder}
+        title={hint}
+        onChange={e => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function SessionCard({ title, subtitle, accent, right, children, muted }: {
+  title: string; subtitle: string; accent: string;
+  right?: React.ReactNode; children: React.ReactNode; muted?: boolean;
+}) {
+  return (
+    <div className="rounded flex flex-col"
+      style={{ backgroundColor: '#232225', border: '1px solid #404040', borderTop: `2px solid ${muted ? '#404040' : accent}`, opacity: muted ? 0.6 : 1 }}>
+      <div className="px-4 pt-3 pb-2 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-text-primary">{title}</div>
+          <div className="text-text-muted" style={{ fontSize: 11 }}>{subtitle}</div>
+        </div>
+        {right}
+      </div>
+      <div className="px-4 pb-4">{children}</div>
+    </div>
+  );
+}
+
 function CreateLPModal({ onClose, onCreated, showToast }: {
   onClose: () => void;
   onCreated: () => void;
@@ -727,7 +808,17 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
   const upd = <K extends keyof CreateForm>(k: K, v: CreateForm[K]) => setF(p => ({ ...p, [k]: v }));
 
   const idValid = /^[a-z0-9][a-z0-9-]{2,31}$/.test(f.lp_id);
-  const canSave = idValid && !!f.lp_name && !!f.t_host && !!f.t_port && !!f.t_sender && !!f.t_target;
+  const missing: string[] = [];
+  if (!idValid)   missing.push('LP ID');
+  if (!f.lp_name) missing.push('Display name');
+  if (!f.t_host)  missing.push('Trading host');
+  if (!f.t_port)  missing.push('Trading port');
+  if (!f.t_sender) missing.push('Trading SenderCompID');
+  if (!f.t_target) missing.push('Trading TargetCompID');
+  const canSave = missing.length === 0;
+
+  const [provColor] = PROVIDER_BADGE[f.provider_type] ?? ['#49b3b3'];
+  const isOz = f.provider_type === 'onezero';
 
   const submit = async () => {
     setSaving(true); setError(null);
@@ -780,125 +871,184 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,.6)' }}>
-      <div className="panel w-full max-w-2xl max-h-[90vh] overflow-y-auto" style={{ backgroundColor: '#2a2a2c' }}>
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <h2 className="text-base font-semibold text-text-primary">Add liquidity provider</h2>
-          <button onClick={onClose} className="p-1 hover:bg-surface-hover rounded"><IcoX /></button>
+      <div className="panel w-full max-h-[92vh] flex flex-col" style={{ maxWidth: 1120, backgroundColor: '#2a2a2c' }}>
+
+        {/* Header */}
+        <div className="px-5 py-3.5 border-b border-border flex items-center justify-between gap-4 flex-shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: provColor }} />
+            <h2 className="text-base font-semibold text-text-primary whitespace-nowrap">Add liquidity provider</h2>
+            <span className="text-text-muted truncate" style={{ fontSize: 11 }}>
+              Identity and FIX sessions now · passwords are set separately after the LP exists
+            </span>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-surface-hover rounded flex-shrink-0"><IcoX /></button>
         </div>
 
-        <div className="p-5 space-y-5">
+        {/* Body */}
+        <div className="p-5 overflow-y-auto space-y-4">
           {error && <ErrorPanel title="Could not create the LP" lines={[error]} onDismiss={() => setError(null)} />}
 
-          <div>
-            <SectionTitle>Identity</SectionTitle>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="LP ID" value={f.lp_id} stored={f.lp_id} mono
-                placeholder="e.g. lmax-demo"
-                hint="Lowercase letters, digits and hyphens. 3–32 characters. Cannot be changed later."
+          <div className="grid gap-4" style={{ gridTemplateColumns: '300px 1fr' }}>
+
+            {/* Identity rail */}
+            <div className="rounded p-4 space-y-4" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
+              <div>
+                <div className="text-text-secondary mb-1.5" style={{ fontSize: 11 }}>Provider <span className="text-text-muted">· fixed after creation</span></div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(Object.keys(PROVIDER_LABELS) as LpProviderType[]).map(k => {
+                    const on = f.provider_type === k;
+                    const [c, bg, bd] = PROVIDER_BADGE[k];
+                    return (
+                      <button key={k} type="button" onClick={() => upd('provider_type', k)}
+                        className="px-2.5 py-2 rounded text-xs font-semibold text-left transition-colors"
+                        style={on
+                          ? { color: c, backgroundColor: bg, border: `1px solid ${bd}` }
+                          : { color: '#8a8a94', backgroundColor: 'transparent', border: '1px solid #404040' }}>
+                        {PROVIDER_LABELS[k]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <CField label="LP ID" value={f.lp_id} required
+                placeholder="lmax-demo"
+                hint="Lowercase letters, digits and hyphens, 3–32 characters. Cannot be changed later."
                 onChange={v => upd('lp_id', v.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
-              <Field label="Display name" value={f.lp_name} stored={f.lp_name}
-                placeholder="e.g. LMAX Demo" onChange={v => upd('lp_name', v)} />
+              <CField label="Display name" value={f.lp_name} required mono={false}
+                placeholder="LMAX Demo" onChange={v => upd('lp_name', v)} />
+
               <div>
-                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Provider</label>
-                <select className="select w-full text-sm" value={f.provider_type}
-                  onChange={e => upd('provider_type', e.target.value as LpProviderType)}>
-                  {Object.entries(PROVIDER_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                </select>
-                <div className="text-text-muted mt-1" style={{ fontSize: 10 }}>Cannot be changed later.</div>
+                <div className="text-text-secondary mb-1.5" style={{ fontSize: 11 }}>Environment</div>
+                <Seg value={f.environment} danger="PRODUCTION"
+                  options={ENVIRONMENTS.map(e => ({ value: e, label: e === 'PRODUCTION' ? 'PROD' : e }))}
+                  onChange={v => upd('environment', v)} />
               </div>
-              <div>
-                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>Environment</label>
-                <select className="select w-full text-sm" value={f.environment}
-                  onChange={e => upd('environment', e.target.value)}>
-                  {ENVIRONMENTS.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
+
+              <div className="space-y-2 pt-1" style={{ borderTop: '1px solid #383838' }}>
+                <label className="flex items-center justify-between gap-2 text-xs text-text-secondary pt-2">
+                  Enabled <Toggle checked={f.enabled} onChange={v => upd('enabled', v)} />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-text-secondary">
+                  Connect on service start <Toggle checked={f.auto_connect} onChange={v => upd('auto_connect', v)} />
+                </label>
               </div>
             </div>
-            <div className="flex items-center gap-6 mt-3">
-              <label className="flex items-center gap-2 text-xs text-text-secondary">
-                <Toggle checked={f.enabled} onChange={v => upd('enabled', v)} /> Enabled
-              </label>
-              <label className="flex items-center gap-2 text-xs text-text-secondary">
-                <Toggle checked={f.auto_connect} onChange={v => upd('auto_connect', v)} /> Connect on service start
-              </label>
-            </div>
-          </div>
 
-          <div>
-            <SectionTitle>Trading session</SectionTitle>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Host" value={f.t_host} stored={f.t_host} mono onChange={v => upd('t_host', v)} />
-              <Field label="Port" value={f.t_port} stored={f.t_port} mono onChange={v => upd('t_port', v.replace(/\D/g, ''))} />
-              <Field label="SenderCompID" value={f.t_sender} stored={f.t_sender} mono
-                hint="Your side. The login the LP issued you."
-                onChange={v => upd('t_sender', v)} />
-              <Field label="TargetCompID" value={f.t_target} stored={f.t_target} mono
-                hint="Their side. The LP's trading gateway, e.g. TEORDER."
-                onChange={v => upd('t_target', v)} />
-              <div>
-                <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>FIX version</label>
-                <select className="select w-full text-sm" value={f.t_fix} onChange={e => upd('t_fix', e.target.value)}>
-                  {FIX_VERSIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
-              </div>
-              <Field label="Heartbeat (s)" value={f.t_hb} stored={f.t_hb} mono onChange={v => upd('t_hb', v.replace(/\D/g, ''))} />
-            </div>
-          </div>
+            {/* Sessions + provider settings */}
+            <div className="space-y-4 min-w-0">
+              <div className="grid grid-cols-2 gap-4">
+                <SessionCard title="Trading session" subtitle="Orders, executions, position reports" accent={provColor}
+                  right={<span className="px-1.5 py-0.5 rounded" style={{ fontSize: 10, color: '#49b3b3', backgroundColor: '#163a3a', border: '1px solid #2a6a6a' }}>required</span>}>
+                  <div className="grid grid-cols-3 gap-3">
+                    <CField label="Host" span={2} value={f.t_host} required placeholder="fix.lp.example.com" onChange={v => upd('t_host', v)} />
+                    <CField label="Port" value={f.t_port} required placeholder="443" onChange={v => upd('t_port', v.replace(/\D/g, ''))} />
+                    <CField label="SenderCompID" span={3} value={f.t_sender} required
+                      placeholder="Your side — the login the LP issued you"
+                      hint="Your side. The login the LP issued you."
+                      onChange={v => upd('t_sender', v)} />
+                    <CField label="TargetCompID" span={3} value={f.t_target} required
+                      placeholder="Their side — the trading gateway, e.g. TEORDER"
+                      hint="Their side. The LP's trading gateway, e.g. TEORDER."
+                      onChange={v => upd('t_target', v)} />
+                    <div className="col-span-2">
+                      <label className="block text-text-secondary mb-1" style={{ fontSize: 11 }}>FIX version</label>
+                      <select className="select w-full text-sm" value={f.t_fix} onChange={e => upd('t_fix', e.target.value)}>
+                        {FIX_VERSIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+                    <CField label="Heartbeat (s)" value={f.t_hb} onChange={v => upd('t_hb', v.replace(/\D/g, ''))} />
+                  </div>
+                </SessionCard>
 
-          <div>
-            <SectionTitle right={<Toggle checked={f.md_present} onChange={v => upd('md_present', v)} />}>
-              Market data session
-            </SectionTitle>
-            {f.md_present && (
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Host" value={f.m_host} stored={f.m_host} mono onChange={v => upd('m_host', v)} />
-                <Field label="Port" value={f.m_port} stored={f.m_port} mono onChange={v => upd('m_port', v.replace(/\D/g, ''))} />
-                <Field label="SenderCompID" value={f.m_sender} stored={f.m_sender} mono
-                  hint="Your side. The login the LP issued you."
-                  onChange={v => upd('m_sender', v)} />
-                <Field label="TargetCompID" value={f.m_target} stored={f.m_target} mono
-                  hint="Their side. The LP's price gateway, e.g. TEPRICE."
-                  onChange={v => upd('m_target', v)} />
-                <Field label="Book depth" value={f.m_depth} stored={f.m_depth} mono onChange={v => upd('m_depth', v.replace(/\D/g, ''))} />
+                <SessionCard title="Market data session" subtitle="Quotes and book depth" accent={provColor} muted={!f.md_present}
+                  right={
+                    <label className="flex items-center gap-2 text-xs text-text-secondary">
+                      {f.md_present ? 'On' : 'Off'} <Toggle checked={f.md_present} onChange={v => upd('md_present', v)} />
+                    </label>
+                  }>
+                  {f.md_present ? (
+                    <div className="grid grid-cols-3 gap-3">
+                      <CField label="Host" span={2} value={f.m_host} placeholder="Leave blank to skip the MD session" onChange={v => upd('m_host', v)} />
+                      <CField label="Port" value={f.m_port} placeholder="443" onChange={v => upd('m_port', v.replace(/\D/g, ''))} />
+                      <CField label="SenderCompID" span={3} value={f.m_sender}
+                        placeholder="Your side — the login the LP issued you"
+                        hint="Your side. The login the LP issued you."
+                        onChange={v => upd('m_sender', v)} />
+                      <CField label="TargetCompID" span={3} value={f.m_target}
+                        placeholder="Their side — the price gateway, e.g. TEPRICE"
+                        hint="Their side. The LP's price gateway, e.g. TEPRICE."
+                        onChange={v => upd('m_target', v)} />
+                      <div className="col-span-2 flex items-end pb-2 text-text-muted" style={{ fontSize: 10 }}>
+                        FIX version and heartbeat follow the trading session.
+                      </div>
+                      <CField label="Book depth" value={f.m_depth} placeholder="1" onChange={v => upd('m_depth', v.replace(/\D/g, ''))} />
+                    </div>
+                  ) : (
+                    <div className="text-text-muted py-6 text-center" style={{ fontSize: 11 }}>
+                      No market data session. Turn it on to stream prices from this LP.
+                    </div>
+                  )}
+                </SessionCard>
               </div>
-            )}
-          </div>
 
-          <div>
-            <SectionTitle>Provider settings</SectionTitle>
-            {f.provider_type === 'onezero' ? (
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Margin account" value={f.oz_margin_account} stored={f.oz_margin_account} mono
-                  hint="PartyID on orders and position requests. * = all accounts on the session."
-                  onChange={v => upd('oz_margin_account', v)} />
-                <Field label="Taker portfolio ID" value={f.oz_taker_portfolio_id} stored={f.oz_taker_portfolio_id} mono
-                  onChange={v => upd('oz_taker_portfolio_id', v)} />
-                <Field label="OnBehalfOfCompID" value={f.oz_on_behalf_of_comp_id} stored={f.oz_on_behalf_of_comp_id} mono
-                  onChange={v => upd('oz_on_behalf_of_comp_id', v)} />
-                <Field label="SenderSubID" value={f.oz_sender_sub_id} stored={f.oz_sender_sub_id} mono
-                  onChange={v => upd('oz_sender_sub_id', v)} />
+              <div className="rounded px-4 py-3" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-semibold text-text-primary">
+                    {PROVIDER_LABELS[f.provider_type]} settings
+                  </div>
+                  <div className="text-text-muted" style={{ fontSize: 10 }}>
+                    Optional · more keys can be added from the Configuration tab
+                  </div>
+                </div>
+                {isOz ? (
+                  <div className="grid grid-cols-4 gap-3">
+                    <CField label="Margin account" value={f.oz_margin_account} placeholder="*"
+                      hint="PartyID on orders and position requests. * = all accounts on the session."
+                      onChange={v => upd('oz_margin_account', v)} />
+                    <CField label="Taker portfolio ID" value={f.oz_taker_portfolio_id} onChange={v => upd('oz_taker_portfolio_id', v)} />
+                    <CField label="OnBehalfOfCompID" value={f.oz_on_behalf_of_comp_id} onChange={v => upd('oz_on_behalf_of_comp_id', v)} />
+                    <CField label="SenderSubID" value={f.oz_sender_sub_id} onChange={v => upd('oz_sender_sub_id', v)} />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-4 gap-3">
+                    <CField label="Account" value={f.account} onChange={v => upd('account', v)} />
+                    <CField label="Security exchange" value={f.security_exchange} onChange={v => upd('security_exchange', v)} />
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Account" value={f.account} stored={f.account} mono onChange={v => upd('account', v)} />
-                <Field label="Security exchange" value={f.security_exchange} stored={f.security_exchange} mono onChange={v => upd('security_exchange', v)} />
-              </div>
-            )}
-            <div className="text-text-muted mt-2" style={{ fontSize: 10 }}>
-              Further provider keys can be added from the Configuration tab once the LP exists.
             </div>
           </div>
         </div>
 
-        <div className="px-5 py-4 border-t border-border flex items-center justify-end gap-2">
-          <button onClick={onClose} className="btn btn-ghost text-xs border border-border px-4 py-1.5">Cancel</button>
-          <button onClick={submit} disabled={!canSave || saving}
-            className="btn text-xs px-4 py-1.5"
-            style={canSave && !saving
-              ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
-              : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
-            {saving ? 'Creating…' : 'Create LP'}
-          </button>
+        {/* Footer */}
+        <div className="px-5 py-3.5 border-t border-border flex items-center justify-between gap-4 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-wrap min-w-0" style={{ fontSize: 11 }}>
+            {canSave ? (
+              <span className="inline-flex items-center gap-1.5" style={{ color: '#66e07a' }}>
+                <IcoCheck /> Ready to create
+              </span>
+            ) : (
+              <>
+                <span className="text-text-muted">Still needed:</span>
+                {missing.map(m => (
+                  <span key={m} className="px-1.5 py-0.5 rounded font-mono"
+                    style={{ fontSize: 10, color: '#a0a0b0', backgroundColor: '#232225', border: '1px solid #484848' }}>{m}</span>
+                ))}
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button onClick={onClose} className="btn btn-ghost text-xs border border-border px-4 py-1.5">Cancel</button>
+            <button onClick={submit} disabled={!canSave || saving}
+              className="btn text-xs px-4 py-1.5"
+              style={canSave && !saving
+                ? { backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a' }
+                : { backgroundColor: '#2a2a2c', color: '#555', cursor: 'not-allowed', border: '1px solid #383838' }}>
+              {saving ? 'Creating…' : 'Create LP'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
