@@ -2904,7 +2904,7 @@ export const alertThresholdsApi = {
 // fixAdmin() unwraps it and turns { success:false } into a thrown Error.
 // ════════════════════════════════════════════════════════════════════════════
 
-export type LpProviderType  = 'traderevolution' | 'lmax' | 'cmc';
+export type LpProviderType  = 'traderevolution' | 'lmax' | 'cmc' | 'onezero';
 export type LpState         = 'DISCONNECTED' | 'STOPPED' | 'CONNECTING' | 'CONNECTED'
                             | 'DEGRADED' | 'QUARANTINED' | 'SESSION_ERROR';
 export type LpSessionState  = 'DISCONNECTED' | 'CONNECTING' | 'LOGGED_ON'

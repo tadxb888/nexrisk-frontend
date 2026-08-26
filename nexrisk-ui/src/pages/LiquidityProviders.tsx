@@ -147,12 +147,14 @@ const PROVIDER_LABELS: Record<LpProviderType, string> = {
   traderevolution: 'TraderEvolution',
   lmax: 'LMAX',
   cmc: 'CMC Markets',
+  onezero: 'oneZero',
 };
 
 const PROVIDER_BADGE: Record<LpProviderType, [string, string, string]> = {
   traderevolution: ['#a5c8f0', '#0f2035', '#1e4270'],
   lmax:            ['#f0d0a5', '#2a1f0f', '#5a4020'],
   cmc:             ['#d4a5e0', '#1e1530', '#3d2860'],
+  onezero:         ['#a5e0c8', '#0f2a20', '#1e5a40'],
 };
 
 const STATE_CFG: Record<LpState, { color: string; bg: string; border: string; label: string }> = {
@@ -696,6 +698,9 @@ interface CreateForm {
   md_present: boolean;
   m_host: string; m_port: string; m_sender: string; m_target: string; m_depth: string;
   account: string; security_exchange: string;
+  /** oneZero provider_settings keys read by OZAdapter. */
+  oz_margin_account: string; oz_taker_portfolio_id: string;
+  oz_on_behalf_of_comp_id: string; oz_sender_sub_id: string;
 }
 
 function emptyCreateForm(): CreateForm {
@@ -706,6 +711,8 @@ function emptyCreateForm(): CreateForm {
     md_present: true,
     m_host: '', m_port: '', m_sender: '', m_target: '', m_depth: '1',
     account: '', security_exchange: '',
+    oz_margin_account: '*', oz_taker_portfolio_id: '',
+    oz_on_behalf_of_comp_id: '', oz_sender_sub_id: '',
   };
 }
 
@@ -745,12 +752,21 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
             depth: Number(f.m_depth),
           },
         } : {}),
-        ...(f.account || f.security_exchange ? {
+        ...(f.provider_type === 'onezero' ? {
+          // Seed every key OZAdapter reads so the Configuration tab renders
+          // them for editing. Empty strings are deliberate placeholders.
+          provider_settings: {
+            margin_account:       f.oz_margin_account || '*',
+            taker_portfolio_id:   f.oz_taker_portfolio_id,
+            on_behalf_of_comp_id: f.oz_on_behalf_of_comp_id,
+            sender_sub_id:        f.oz_sender_sub_id,
+          },
+        } : (f.account || f.security_exchange ? {
           provider_settings: {
             ...(f.account ? { account: f.account } : {}),
             ...(f.security_exchange ? { security_exchange: f.security_exchange } : {}),
           },
-        } : {}),
+        } : {})),
       });
       showToast(`${f.lp_name} created — set credentials before starting it`);
       onCreated();
@@ -850,10 +866,24 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
 
           <div>
             <SectionTitle>Provider settings</SectionTitle>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Account" value={f.account} stored={f.account} mono onChange={v => upd('account', v)} />
-              <Field label="Security exchange" value={f.security_exchange} stored={f.security_exchange} mono onChange={v => upd('security_exchange', v)} />
-            </div>
+            {f.provider_type === 'onezero' ? (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Margin account" value={f.oz_margin_account} stored={f.oz_margin_account} mono
+                  hint="PartyID on orders and position requests. * = all accounts on the session."
+                  onChange={v => upd('oz_margin_account', v)} />
+                <Field label="Taker portfolio ID" value={f.oz_taker_portfolio_id} stored={f.oz_taker_portfolio_id} mono
+                  onChange={v => upd('oz_taker_portfolio_id', v)} />
+                <Field label="OnBehalfOfCompID" value={f.oz_on_behalf_of_comp_id} stored={f.oz_on_behalf_of_comp_id} mono
+                  onChange={v => upd('oz_on_behalf_of_comp_id', v)} />
+                <Field label="SenderSubID" value={f.oz_sender_sub_id} stored={f.oz_sender_sub_id} mono
+                  onChange={v => upd('oz_sender_sub_id', v)} />
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Account" value={f.account} stored={f.account} mono onChange={v => upd('account', v)} />
+                <Field label="Security exchange" value={f.security_exchange} stored={f.security_exchange} mono onChange={v => upd('security_exchange', v)} />
+              </div>
+            )}
             <div className="text-text-muted mt-2" style={{ fontSize: 10 }}>
               Further provider keys can be added from the Configuration tab once the LP exists.
             </div>
