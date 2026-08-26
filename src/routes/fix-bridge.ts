@@ -151,6 +151,17 @@ export async function fixBridgeRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // Registered adapters in the running bridge — drives the Add LP provider picker.
+  fastify.get(
+    '/fix/admin/providers',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get('/api/v1/fix/admin/providers');
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
   fastify.get(
     '/fix/admin/lp/:lp_id',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
