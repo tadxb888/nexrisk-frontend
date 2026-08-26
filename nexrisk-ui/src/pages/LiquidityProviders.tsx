@@ -633,10 +633,8 @@ function LPCard({ lp, health, busy, onDelete, onStart, onStop, onTest, onCredent
   const canEdit = hasPermission('lp_admin', 'EDIT');
   const live = isLiveState(health?.state);
   const hcfg = health ? HEALTH_CFG[health.health] : undefined;
-  const [color] = PROVIDER_BADGE[lp.provider_type] ?? ['#484848'];
-
   return (
-    <div className="panel p-4 space-y-3" style={{ borderLeft: `3px solid ${color}` }}>
+    <div className="p-4 pt-3 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <button onClick={onDetail}
@@ -885,10 +883,6 @@ function ProviderSelect({ providers, value, onSelect, loading, error }: {
   };
 
   const disabled = loading || !!error || providers.length === 0;
-  const StatusTag = ({ status }: { status: string }) => status === 'production' ? null : (
-    <span className="px-1 rounded uppercase tracking-wide flex-shrink-0"
-      style={{ fontSize: 9, color: '#e0a020', backgroundColor: '#2a2416', border: '1px solid #5a4a20' }}>{status}</span>
-  );
 
   return (
     <div ref={root} className="relative">
@@ -899,7 +893,6 @@ function ProviderSelect({ providers, value, onSelect, loading, error }: {
           <>
             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: selColor }} />
             <span className="truncate text-text-primary">{selected.display_name}</span>
-            <StatusTag status={selected.status} />
           </>
         ) : (
           <span className="text-text-muted">{loading ? 'Loading providers…' : error ? 'Provider list unavailable' : 'Select a provider'}</span>
@@ -930,15 +923,11 @@ function ProviderSelect({ providers, value, onSelect, loading, error }: {
                   <span className="text-sm" style={{ color: on ? '#49b3b3' : '#e0e0e0' }}>{p.display_name}</span>
                   <span className="font-mono text-text-muted ml-1 truncate" style={{ fontSize: 10 }}>{p.provider_type}</span>
                   <span className="ml-auto flex items-center gap-2">
-                    <StatusTag status={p.status} />
                     {on && <span style={{ color: '#49b3b3', fontSize: 11 }}>✓</span>}
                   </span>
                 </div>
               );
             })}
-          </div>
-          <div className="px-3 py-1.5 text-text-muted" style={{ fontSize: 10, borderTop: '1px solid #383838' }}>
-            {sorted.length} adapter{sorted.length === 1 ? '' : 's'} compiled into the running bridge
           </div>
         </div>
       )}
@@ -1554,7 +1543,136 @@ function TestModal({ lpId, lpName, onClose }: { lpId: string; lpName: string; on
 // ============================================================
 // LP LIST VIEW
 // ============================================================
-function LPListView({ lps, healthMap, loading, error, busyId, onAdd, onReload, onDelete, onStart, onStop, onTest, onCredentials, onDetail }: {
+// ============================================================
+// LIST — filter toolbar + collapsible rows
+// ============================================================
+type LpStatusBucket = 'connected' | 'stopped' | 'degraded' | 'paused';
+const STATUS_BUCKETS: { key: LpStatusBucket; label: string; color: string }[] = [
+  { key: 'connected', label: 'Connected', color: '#66e07a' },
+  { key: 'degraded',  label: 'Degraded',  color: '#e09a55' },
+  { key: 'stopped',   label: 'Stopped',   color: '#a0a0b0' },
+  { key: 'paused',    label: 'Paused',    color: '#6a6a72' },
+];
+const ENV_CHIPS: { key: string; label: string }[] = [
+  { key: 'PRODUCTION', label: 'Prod' },
+  { key: 'DEMO',       label: 'Demo' },
+  { key: 'SANDBOX',    label: 'Sandbox' },
+];
+
+/** Paused = record disabled by an admin; otherwise bucket on live state. */
+function statusBucket(lp: LpListRow, h?: LpHealthSummaryRow): LpStatusBucket {
+  if (lp.enabled === false) return 'paused';
+  switch (h?.state) {
+    case 'CONNECTED':
+    case 'CONNECTING': return 'connected';
+    case 'DEGRADED':   return 'degraded';
+    default:           return 'stopped';
+  }
+}
+
+// Filter and expand state live at module level so they survive the
+// list ↔ detail round trip without being written anywhere.
+const listMemory = {
+  status: new Set<LpStatusBucket>(['connected', 'degraded', 'stopped']),
+  env: new Set<string>(),                // empty = all environments
+  expanded: new Set<string>(),
+  search: '',
+};
+
+function Chip({ on, label, count, color, onClick }: {
+  on: boolean; label: string; count: number; color?: string; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick}
+      className="px-2 py-1 rounded flex items-center gap-1.5 transition-colors"
+      style={{
+        fontSize: 11,
+        color: on ? '#e0e0e0' : '#6a6a72',
+        backgroundColor: on ? '#2f2e32' : 'transparent',
+        border: `1px solid ${on ? '#4a4a50' : '#383838'}`,
+      }}>
+      {color && <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: on ? color : '#484848' }} />}
+      {label}
+      <span className="font-mono" style={{ fontSize: 10, color: on ? '#a0a0b0' : '#555' }}>{count}</span>
+    </button>
+  );
+}
+
+function LPRow({ lp, health, busy, expanded, onToggle, onDelete, onStart, onStop, onTest, onCredentials, onDetail, onPause, onEnable }: {
+  lp: LpListRow;
+  health?: LpHealthSummaryRow;
+  busy: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onDelete: () => void;
+  onStart: () => void;
+  onStop: () => void;
+  onTest: () => void;
+  onCredentials: () => void;
+  onDetail: () => void;
+  onPause: () => void;
+  onEnable: () => void;
+}) {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('lp_admin', 'EDIT');
+  const [color] = PROVIDER_BADGE[lp.provider_type] ?? ['#484848'];
+  const paused = lp.enabled === false;
+  const hcfg = health ? HEALTH_CFG[health.health] : undefined;
+
+  return (
+    <div className="panel overflow-hidden" style={{ borderLeft: `3px solid ${paused ? '#484848' : color}`, opacity: paused && !expanded ? 0.7 : 1 }}>
+      <div className="flex items-center gap-3 px-3 py-2 cursor-pointer select-none hover:bg-surface-hover" onClick={onToggle}>
+        <span className="text-text-muted flex-shrink-0" style={{ fontSize: 10, width: 10 }}>{expanded ? '▾' : '▸'}</span>
+        <button onClick={e => { e.stopPropagation(); onDetail(); }}
+          className="text-sm font-semibold text-text-primary hover:text-[#49b3b3] text-left truncate"
+          style={{ width: 220 }}>
+          {lp.lp_name}
+        </button>
+        <span className="font-mono text-text-muted truncate" style={{ fontSize: 11, width: 150 }}>{lp.lp_id}</span>
+        <ProviderBadge type={lp.provider_type} />
+        <EnvBadge env={lp.environment} />
+        <div className="flex items-center gap-3 ml-2">
+          <SessionDot state={health?.trading_state} label="Trading" />
+          <SessionDot state={health?.md_state} label="MD" />
+        </div>
+        <span className="ml-auto flex items-center gap-2 flex-shrink-0">
+          {paused && (
+            <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 10, color: '#8a8a94', backgroundColor: '#2a2a2c', border: '1px solid #484848' }}>PAUSED</span>
+          )}
+          {hcfg && (
+            <span className="px-1.5 py-0.5 rounded" style={{ fontSize: 10, color: hcfg.color, backgroundColor: hcfg.bg, border: `1px solid ${hcfg.border}` }}>
+              {health!.health}
+            </span>
+          )}
+          <StateBadge state={health?.state} />
+          {canEdit && (
+            paused ? (
+              <button onClick={e => { e.stopPropagation(); onEnable(); }} disabled={busy}
+                className="btn px-2 py-0.5" style={{ fontSize: 11, backgroundColor: '#163a3a', color: '#49b3b3', border: '1px solid #2a6a6a', opacity: busy ? 0.4 : 1 }}>
+                Enable
+              </button>
+            ) : (
+              <button onClick={e => { e.stopPropagation(); onPause(); }} disabled={busy}
+                title="Disable this LP. It stays configured and can be enabled again later."
+                className="btn btn-ghost border border-border px-2 py-0.5" style={{ fontSize: 11, opacity: busy ? 0.4 : 1 }}>
+                Pause
+              </button>
+            )
+          )}
+        </span>
+      </div>
+      {expanded && (
+        <div className="px-3 pb-3" style={{ borderTop: '1px solid #383838' }}>
+          <LPCard lp={lp} health={health} busy={busy}
+            onDetail={onDetail} onDelete={onDelete} onStart={onStart} onStop={onStop}
+            onTest={onTest} onCredentials={onCredentials} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LPListView({ lps, healthMap, loading, error, busyId, onAdd, onReload, onDelete, onStart, onStop, onTest, onCredentials, onDetail, onSetEnabled }: {
   lps: LpListRow[];
   healthMap: Record<string, LpHealthSummaryRow>;
   loading: boolean;
@@ -1568,17 +1686,63 @@ function LPListView({ lps, healthMap, loading, error, busyId, onAdd, onReload, o
   onTest: (lp: LpListRow) => void;
   onCredentials: (lp: LpListRow) => void;
   onDetail: (lp: LpListRow) => void;
+  onSetEnabled: (lp: LpListRow, enabled: boolean) => void;
 }) {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('lp_admin', 'EDIT');
 
+  const [status, setStatus] = useState(() => new Set(listMemory.status));
+  const [env, setEnv] = useState(() => new Set(listMemory.env));
+  const [expanded, setExpanded] = useState(() => new Set(listMemory.expanded));
+  const [search, setSearch] = useState(listMemory.search);
+  useEffect(() => { listMemory.status = status; listMemory.env = env; listMemory.expanded = expanded; listMemory.search = search; },
+    [status, env, expanded, search]);
+
+  const toggleIn = <T,>(set: Set<T>, v: T) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); return n; };
+
+  const buckets = useMemo(() => {
+    const m = new Map<string, LpStatusBucket>();
+    lps.forEach(lp => m.set(lp.lp_id, statusBucket(lp, healthMap[lp.lp_id])));
+    return m;
+  }, [lps, healthMap]);
+  const countStatus = (k: LpStatusBucket) => lps.filter(lp => buckets.get(lp.lp_id) === k).length;
+  const countEnv = (k: string) => lps.filter(lp => lp.environment === k).length;
+
+  const needle = search.trim().toLowerCase();
+  const shown = useMemo(() => lps.filter(lp =>
+    status.has(buckets.get(lp.lp_id)!) &&
+    (env.size === 0 || env.has(lp.environment)) &&
+    (!needle || lp.lp_name.toLowerCase().includes(needle) || lp.lp_id.includes(needle)),
+  ), [lps, buckets, status, env, needle]);
+
+  const hidden = lps.length - shown.length;
+  const allOpen = shown.length > 0 && shown.every(lp => expanded.has(lp.lp_id));
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-text-muted">
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-text-muted flex-shrink-0 mr-1">
           {loading ? 'Loading providers…' : `${lps.length} configured`}
         </span>
-        <div className="flex items-center gap-2">
+
+        {STATUS_BUCKETS.map(b => (
+          <Chip key={b.key} on={status.has(b.key)} label={b.label} color={b.color} count={countStatus(b.key)}
+            onClick={() => setStatus(s => toggleIn(s, b.key))} />
+        ))}
+        <span className="w-px h-4 mx-1" style={{ backgroundColor: '#404040' }} />
+        {ENV_CHIPS.map(e => (
+          <Chip key={e.key} on={env.size === 0 || env.has(e.key)} label={e.label} count={countEnv(e.key)}
+            onClick={() => setEnv(s => toggleIn(s, e.key))} />
+        ))}
+        <input className="input text-xs" style={{ width: 180, padding: '4px 8px' }} value={search}
+          placeholder="Search name or ID…" onChange={e => setSearch(e.target.value)} />
+        {hidden > 0 && <span className="text-text-muted" style={{ fontSize: 11 }}>{hidden} hidden</span>}
+
+        <div className="ml-auto flex items-center gap-2">
+          <button onClick={() => setExpanded(allOpen ? new Set() : new Set(shown.map(lp => lp.lp_id)))}
+            className="btn btn-ghost text-xs border border-border px-3 py-1.5">
+            {allOpen ? 'Collapse all' : 'Expand all'}
+          </button>
           <button onClick={onReload} className="btn btn-ghost text-xs border border-border px-3 py-1.5 flex items-center gap-1.5">
             <IcoRefresh /> Refresh
           </button>
@@ -1600,16 +1764,25 @@ function LPListView({ lps, healthMap, loading, error, busyId, onAdd, onReload, o
           <div className="text-xs text-text-secondary">Add one to start routing hedges to an external venue.</div>
         </div>
       )}
+      {!loading && !error && lps.length > 0 && shown.length === 0 && (
+        <div className="panel p-6 text-center text-xs text-text-secondary">
+          Nothing matches the current filters.
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {lps.map(lp => (
-          <LPCard key={lp.lp_id} lp={lp} health={healthMap[lp.lp_id]} busy={busyId === lp.lp_id}
+      <div className="space-y-1.5">
+        {shown.map(lp => (
+          <LPRow key={lp.lp_id} lp={lp} health={healthMap[lp.lp_id]} busy={busyId === lp.lp_id}
+            expanded={expanded.has(lp.lp_id)}
+            onToggle={() => setExpanded(s => toggleIn(s, lp.lp_id))}
             onDetail={() => onDetail(lp)}
             onDelete={() => onDelete(lp)}
             onStart={() => onStart(lp)}
             onStop={() => onStop(lp)}
             onTest={() => onTest(lp)}
-            onCredentials={() => onCredentials(lp)} />
+            onCredentials={() => onCredentials(lp)}
+            onPause={() => onSetEnabled(lp, false)}
+            onEnable={() => onSetEnabled(lp, true)} />
         ))}
       </div>
     </div>
@@ -2253,6 +2426,20 @@ export function LiquidityProvidersPage() {
     }
   };
 
+  const setEnabled = async (lp: LpListRow, enabled: boolean) => {
+    setBusyId(lp.lp_id);
+    try {
+      if (!enabled && isLiveState(healthMap[lp.lp_id]?.state)) await lpOpsApi.stop(lp.lp_id);
+      await lpAdminApi.update(lp.lp_id, { enabled });
+      showToast(enabled ? `${lp.lp_name} enabled — start it when ready` : `${lp.lp_name} paused`);
+      await loadList(); await loadHealth();
+    } catch (e) {
+      showToast(errMessage(e), 'warn');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const connected = useMemo(
     () => Object.values(healthMap).filter(h => h.state === 'CONNECTED').length,
     [healthMap]);
@@ -2314,7 +2501,8 @@ export function LiquidityProvidersPage() {
             onStop={lp => startStop(lp, 'stop')}
             onTest={lp => setTestFor(lp)}
             onCredentials={lp => setCredFor(lp)}
-            onDetail={lp => setSelectedId(lp.lp_id)} />
+            onDetail={lp => setSelectedId(lp.lp_id)}
+            onSetEnabled={setEnabled} />
         )}
       </div>
 
