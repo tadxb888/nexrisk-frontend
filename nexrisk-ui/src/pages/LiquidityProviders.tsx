@@ -825,6 +825,128 @@ function SessionCard({ title, subtitle, accent, right, children, muted }: {
   );
 }
 
+/** Friendly labels for provider_settings keys. The bridge only reports the
+ *  snake_case identifiers; anything not listed here is humanised. */
+const PS_LABELS: Record<string, string> = {
+  account:              'Account',
+  security_exchange:    'Security exchange',
+  md_security_exchange: 'MD security exchange',
+  clord_prefix:         'ClOrdID prefix',
+  brand:                'Brand',
+  margin_account:       'Margin account',
+  taker_portfolio_id:   'Taker portfolio ID',
+  on_behalf_of_comp_id: 'OnBehalfOfCompID',
+  sender_sub_id:        'SenderSubID',
+};
+const psLabel = (k: string) =>
+  PS_LABELS[k] ?? k.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+
+/** Searchable single-select over the bridge's adapter registry. Renders
+ *  only what the backend reports; no fallback list. */
+function ProviderSelect({ providers, value, onSelect, loading, error }: {
+  providers: LpProviderInfo[];
+  value: string;
+  onSelect: (p: LpProviderInfo) => void;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [cursor, setCursor] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+
+  const sorted = useMemo(
+    () => [...providers].sort((a, b) => a.display_name.localeCompare(b.display_name)),
+    [providers],
+  );
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? sorted.filter(p => p.display_name.toLowerCase().includes(needle) || p.provider_type.includes(needle))
+    : sorted;
+  const selected = providers.find(p => p.provider_type === value);
+  const [selColor] = PROVIDER_BADGE[value] ?? NEUTRAL_BADGE;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    search.current?.focus();
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+  useEffect(() => { setCursor(0); }, [needle]);
+
+  const choose = (p: LpProviderInfo) => { onSelect(p); setOpen(false); setQ(''); };
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, shown.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (shown[cursor]) choose(shown[cursor]); }
+    else if (e.key === 'Escape') { setOpen(false); setQ(''); }
+  };
+
+  const disabled = loading || !!error || providers.length === 0;
+  const StatusTag = ({ status }: { status: string }) => status === 'production' ? null : (
+    <span className="px-1 rounded uppercase tracking-wide flex-shrink-0"
+      style={{ fontSize: 9, color: '#e0a020', backgroundColor: '#2a2416', border: '1px solid #5a4a20' }}>{status}</span>
+  );
+
+  return (
+    <div ref={root} className="relative">
+      <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
+        className="input w-full text-sm flex items-center gap-2 text-left"
+        style={{ cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1 }}>
+        {selected ? (
+          <>
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: selColor }} />
+            <span className="truncate text-text-primary">{selected.display_name}</span>
+            <StatusTag status={selected.status} />
+          </>
+        ) : (
+          <span className="text-text-muted">{loading ? 'Loading providers…' : error ? 'Provider list unavailable' : 'Select a provider'}</span>
+        )}
+        <span className="ml-auto text-text-muted" style={{ fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 mt-1 rounded shadow-lg z-20 overflow-hidden"
+          style={{ backgroundColor: '#232225', border: '1px solid #484848' }}>
+          <div className="p-1.5" style={{ borderBottom: '1px solid #383838' }}>
+            <input ref={search} className="input w-full text-sm" value={q} placeholder="Search…"
+              onChange={e => setQ(e.target.value)} onKeyDown={onKey} />
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: 260 }} role="listbox">
+            {shown.length === 0 && (
+              <div className="px-3 py-3 text-text-muted" style={{ fontSize: 11 }}>No provider matches “{q}”.</div>
+            )}
+            {shown.map((p, i) => {
+              const [c] = PROVIDER_BADGE[p.provider_type] ?? NEUTRAL_BADGE;
+              const on = p.provider_type === value;
+              return (
+                <div key={p.provider_type} role="option" aria-selected={on}
+                  onMouseEnter={() => setCursor(i)} onMouseDown={e => { e.preventDefault(); choose(p); }}
+                  className="px-3 py-2 flex items-center gap-2 cursor-pointer"
+                  style={{ backgroundColor: i === cursor ? '#2f2e32' : 'transparent' }}>
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: c }} />
+                  <span className="text-sm" style={{ color: on ? '#49b3b3' : '#e0e0e0' }}>{p.display_name}</span>
+                  <span className="font-mono text-text-muted ml-1 truncate" style={{ fontSize: 10 }}>{p.provider_type}</span>
+                  <span className="ml-auto flex items-center gap-2">
+                    <StatusTag status={p.status} />
+                    {on && <span style={{ color: '#49b3b3', fontSize: 11 }}>✓</span>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="px-3 py-1.5 text-text-muted" style={{ fontSize: 10, borderTop: '1px solid #383838' }}>
+            {sorted.length} adapter{sorted.length === 1 ? '' : 's'} compiled into the running bridge
+          </div>
+        </div>
+      )}
+      {error && <div className="mt-1.5" style={{ fontSize: 10, color: '#e0a5a5' }}>Provider list unavailable: {error}</div>}
+    </div>
+  );
+}
+
 function CreateLPModal({ onClose, onCreated, showToast }: {
   onClose: () => void;
   onCreated: () => void;
@@ -929,30 +1051,9 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
             {/* Identity rail */}
             <div className="rounded p-4 space-y-4" style={{ backgroundColor: '#232225', border: '1px solid #404040' }}>
               <div>
-                <div className="text-text-secondary mb-1.5" style={{ fontSize: 11 }}>Provider <span className="text-text-muted">· fixed after creation</span></div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {providers.map(p => {
-                    const k = p.provider_type;
-                    const on = f.provider_type === k;
-                    const [c, bg, bd] = PROVIDER_BADGE[k] ?? NEUTRAL_BADGE;
-                    return (
-                      <button key={k} type="button" onClick={() => selectProvider(p)}
-                        className="px-2.5 py-2 rounded text-xs font-semibold text-left transition-colors"
-                        style={on
-                          ? { color: c, backgroundColor: bg, border: `1px solid ${bd}` }
-                          : { color: '#8a8a94', backgroundColor: 'transparent', border: '1px solid #404040' }}>
-                        {p.display_name}
-                        {p.status === 'beta' && <span className="ml-1 font-normal opacity-70">· beta</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-                {providers.length === 0 && !provError && (
-                  <div className="text-text-muted mt-1.5" style={{ fontSize: 10 }}>Loading providers…</div>
-                )}
-                {provError && (
-                  <div className="mt-1.5" style={{ fontSize: 10, color: '#e0a5a5' }}>Provider list unavailable: {provError}</div>
-                )}
+                <div className="text-text-secondary mb-1.5" style={{ fontSize: 11 }}>Provider</div>
+                <ProviderSelect providers={providers} value={f.provider_type} onSelect={selectProvider}
+                  loading={providers.length === 0 && !provError} error={provError} />
               </div>
 
               <CField label="LP ID" value={f.lp_id} required
@@ -1050,7 +1151,7 @@ function CreateLPModal({ onClose, onCreated, showToast }: {
                 {prov && prov.provider_settings_keys.length > 0 ? (
                   <div className="grid grid-cols-4 gap-3">
                     {prov.provider_settings_keys.map(k => (
-                      <CField key={k} label={k} value={f.ps[k] ?? ''} onChange={v => updPs(k, v)} />
+                      <CField key={k} label={psLabel(k)} value={f.ps[k] ?? ''} hint={k} onChange={v => updPs(k, v)} />
                     ))}
                   </div>
                 ) : (
