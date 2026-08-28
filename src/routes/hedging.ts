@@ -309,6 +309,25 @@ export async function hedgingRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  /**
+   * POST /hedge/positions/purge-escalated
+   * Bulk-acknowledges ALL unacknowledged escalations (every state, every rule).
+   * Rows are kept for audit; C++ also deletes the matching Redis keys.
+   * Responds { success, purged }.
+   */
+  fastify.post(
+    '/hedge/positions/purge-escalated',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('hedge_strat', 'EDIT')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.post(
+        '/api/v1/hedge/positions/purge-escalated',
+        request.body,
+      );
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    },
+  );
+
   // ══════════════════════════════════════════════════════════
   // Section 6 — LP Health  🟢
   // Polled every 5s by the frontend.
