@@ -50,6 +50,32 @@ function flushPositionFrames(): void {
   for (const frame of frames) sendToAll(frame);
 }
 
+// Build the mt5.position SNAPSHOT frame from REST (B-Book positions of every
+// enabled node). Called on each upstream (re)connect AND for each browser
+// connect: a snapshot cached at upstream-connect time goes stale as soon as a
+// position opens, and the browser's reconcile would then delete every row
+// opened since - visible as positions flashing up and vanishing.
+async function buildSnapshot(): Promise<string | null> {
+  try {
+    const nodesRes = await nexriskApi.get<{ nodes: { id: number; node_name: string; connection_status: string; is_enabled: boolean }[] }>('/api/v1/mt5/nodes');
+    if (!nodesRes.ok || !nodesRes.data) return null;
+    // Filter by is_enabled only — connection_status from backend is unreliable.
+    const connected = nodesRes.data.nodes.filter(n => n.is_enabled !== false);
+    const allPositions: unknown[] = [];
+    await Promise.allSettled(connected.map(async (node) => {
+      const posRes = await nexriskApi.get<{ positions: unknown[] }>(`/api/v1/mt5/nodes/${node.id}/books/B/positions`);
+      if (posRes.ok && posRes.data?.positions) {
+        posRes.data.positions.forEach(p => allPositions.push({ ...(p as object), nodeName: node.node_name }));
+      }
+    }));
+    fastifyRef?.log.info(`[MT5 WS] Snapshot ready — ${allPositions.length} positions`);
+    return JSON.stringify({ topic: 'mt5.position', type: 'SNAPSHOT', data: allPositions, timestamp_ms: Date.now() });
+  } catch (err) {
+    fastifyRef?.log.error(`[MT5 WS] Snapshot error: ${err}`);
+    return null;
+  }
+}
+
 function connectBackend() {
   if (backendWs && (backendWs.readyState === WebSocket.OPEN || backendWs.readyState === WebSocket.CONNECTING)) return;
   const url = backendWsUrl();
@@ -76,22 +102,11 @@ function connectBackend() {
     }));
 
     fastifyRef?.log.info('[MT5 WS] Backend connected — fetching snapshot');
-    try {
-      const nodesRes = await nexriskApi.get<{ nodes: { id: number; node_name: string; connection_status: string; is_enabled: boolean }[] }>
-('/api/v1/mt5/nodes');                                                                                                                           if (!nodesRes.ok || !nodesRes.data) return;
-      // Filter by is_enabled only — connection_status from backend is unreliable.
-      const connected = nodesRes.data.nodes.filter(n => n.is_enabled !== false);
-      const allPositions: unknown[] = [];
-      await Promise.allSettled(connected.map(async (node) => {
-        const posRes = await nexriskApi.get<{ positions: unknown[] }>(`/api/v1/mt5/nodes/${node.id}/books/B/positions`);
-        if (posRes.ok && posRes.data?.positions) {
-          posRes.data.positions.forEach(p => allPositions.push({ ...(p as object), nodeName: node.node_name }));
-        }
-      }));
-      lastSnapshot = JSON.stringify({ topic: 'mt5.position', type: 'SNAPSHOT', data: allPositions, timestamp_ms: Date.now() });
-      fastifyRef?.log.info(`[MT5 WS] Snapshot ready — ${allPositions.length} positions`);
-      sendToAll(lastSnapshot!);
-    } catch (err) { fastifyRef?.log.error(`[MT5 WS] Snapshot error: ${err}`); }
+    const snap = await buildSnapshot();
+    if (snap) {
+      lastSnapshot = snap;
+      sendToAll(snap);
+    }
   });
 
   backendWs.on('message', (data: WebSocket.RawData) => {
@@ -139,9 +154,13 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
     browserClients.add(socket);
     fastify.log.info(`[MT5 WS] Browser connected — total=${browserClients.size}`);
 
-    if (lastSnapshot && socket.readyState === WebSocket.OPEN) {
-      socket.send(lastSnapshot);
-    }
+    // Fresh snapshot per browser (see buildSnapshot). Fall back to the cached
+    // one only if REST is unavailable right now.
+    void buildSnapshot().then((snap) => {
+      const frame = snap ?? lastSnapshot;
+      if (snap) lastSnapshot = snap;
+      if (frame && socket.readyState === WebSocket.OPEN) socket.send(frame);
+    });
 
     socket.on('message', (data: Buffer) => {
       // Do not forward browser subscribe messages. The shared backend
