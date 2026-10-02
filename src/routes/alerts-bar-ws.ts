@@ -34,6 +34,29 @@ function backendWsUrl(): string {
 let backendWs: WebSocket | null = null;
 const browserClients = new Set<WebSocket>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Upstream liveness watchdog. A half-open TCP connection (the C++ side
+// restarted and the FIN/RST never arrived) raises no 'close' event, so without
+// this the BFF can sit on a dead upstream indefinitely - it once did for 32
+// days. Every WATCHDOG_INTERVAL_MS we send a protocol ping; any inbound frame
+// or pong counts as alive. Silence beyond UPSTREAM_SILENCE_MS terminates the
+// socket, which fires 'close' and the existing 3 s reconnect.
+const WATCHDOG_INTERVAL_MS = 10_000;
+const UPSTREAM_SILENCE_MS  = 45_000;
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+let lastUpstreamMs = 0;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+function checkUpstream(): void {
+  if (!backendWs || backendWs.readyState !== WebSocket.OPEN) return;
+  const silentMs = Date.now() - lastUpstreamMs;
+  if (silentMs > UPSTREAM_SILENCE_MS) {
+    fastifyRef?.log.warn(`[AlertsBar WS] Upstream silent ${Math.round(silentMs / 1000)}s — terminating to force reconnect`);
+    backendWs.terminate();
+    return;
+  }
+  try { backendWs.ping(); } catch { /* terminate path above handles a dead socket */ }
+}
 let fastifyRef: FastifyInstance | null = null;
 
 /**
@@ -62,9 +85,15 @@ function connectBackend() {
   }
   const url = backendWsUrl();
   fastifyRef?.log.info(`[AlertsBar WS] Connecting to backend ${url}`);
-  backendWs = new WebSocket(url);
+  backendWs = new WebSocket(url, { handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
+  lastUpstreamMs = Date.now();
+
+  backendWs.on('pong', () => {
+    lastUpstreamMs = Date.now();
+  });
 
   backendWs.on('ping', (data) => {
+    lastUpstreamMs = Date.now();
     backendWs?.pong(data);
   });
 
@@ -77,6 +106,7 @@ function connectBackend() {
   });
 
   backendWs.on('message', (data: WebSocket.RawData) => {
+    lastUpstreamMs = Date.now();
     // Handle backend-initiated keepalive pings without forwarding them.
     try {
       const msg = JSON.parse(data.toString()) as { type?: string };
@@ -109,6 +139,7 @@ function connectBackend() {
 export async function alertsBarWsRoutes(fastify: FastifyInstance): Promise<void> {
   fastifyRef = fastify;
   connectBackend();
+  if (!watchdogTimer) watchdogTimer = setInterval(checkUpstream, WATCHDOG_INTERVAL_MS);
 
   fastify.get(
     '/ws/v1/alerts-bar/events',
@@ -134,6 +165,7 @@ export async function alertsBarWsRoutes(fastify: FastifyInstance): Promise<void>
   );
 
   fastify.addHook('onClose', async () => {
+    if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
     if (reconnectTimer) clearTimeout(reconnectTimer);
     backendWs?.close();
   });
