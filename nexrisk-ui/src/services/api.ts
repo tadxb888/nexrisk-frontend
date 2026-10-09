@@ -750,8 +750,9 @@ export const mt5Api = {
 // cTrader Node Admin API
 // Same Node Registry as the MT5 nodes, separate route family
 // (/api/v1/ctrader/nodes). No per-node data or book routes exist for cTrader.
-// Live status is delivered over WebSocket (event not published yet) —
-// getNodeStatus is the seed for a page's initial load and must not be polled.
+// Live status is delivered over WebSocket, topic ctrader.node_status — see
+// connectCTraderNodeStatusWebSocket below. getNodeStatus is the seed for a
+// page's initial load and must not be polled.
 // ============================================
 
 export interface CTraderNodeAPI {
@@ -870,7 +871,8 @@ export const ctraderApi = {
       '/api/v1/ctrader/nodes'
     ),
 
-  // Initial-load seed only. Do not put this on a timer.
+  // Seed only: on page open, and again after the live socket was down.
+  // Do not put this on a timer.
   getNodeStatus: () =>
     fetchAPI<{
       nodes: CTraderNodeStatusAPI[];
@@ -959,6 +961,112 @@ export const ctraderApi = {
       { method: 'POST', body: JSON.stringify(data) }
     ),
 };
+
+// ── cTrader node live status — WebSocket topic ctrader.node_status ──────────
+// Same socket and same frame as the MT5 topics:
+//   { topic, type: 'SNAPSHOT' | 'EVENT', data, timestamp_ms }
+// For an event the kind is data.type (NODE_STATUS_CHANGE / NODE_TYPE_CHANGE).
+
+export const CTRADER_NODE_STATUS_TOPIC = 'ctrader.node_status';
+
+export interface CTraderNodeTypeChange {
+  node_id: number;
+  node_name: string;
+  new_type: string;
+}
+
+export type CTraderNodeWsEvent =
+  /** Every cTrader node with its full status object. Replaces the page's list. */
+  | { kind: 'snapshot'; nodes: CTraderNodeStatusAPI[] }
+  /** A node entered a new connection state. `node` is its full status object. */
+  | { kind: 'status'; nodeId: number; status: string; node?: CTraderNodeStatusAPI; timestampMs: number }
+  /** A STANDBY was promoted. Sent once, before the new MASTER starts connecting. */
+  | { kind: 'type_change'; promoted: CTraderNodeTypeChange; demoted?: CTraderNodeTypeChange; timestampMs: number };
+
+/**
+ * Managed connection to the cTrader node status topic. Reconnects every 5 s
+ * until the returned cleanup function is called.
+ *
+ * Snapshots: through the Fastify server the upstream subscription is shared,
+ * so a browser that connects later is not sent one — the caller seeds from
+ * ctraderApi.getNodeStatus() on open and after every 'open' that follows a
+ * 'closed'. A snapshot still arrives whenever the server re-subscribes
+ * upstream (C++ service restart), and on a direct connection to the service.
+ */
+export function connectCTraderNodeStatusWebSocket(
+  onEvent: (event: CTraderNodeWsEvent) => void,
+  onStatus?: (status: 'open' | 'closed') => void
+): () => void {
+  let ws: WebSocket | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
+
+  function connect() {
+    if (destroyed) return;
+    ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+
+    ws.onopen = () => {
+      onStatus?.('open');
+      // Exact topic name: a prefix would get the events but no snapshot. A
+      // subscribe replaces this connection's whole topic list, which is what
+      // we want — this socket is for this topic only. (Through the Fastify
+      // server the message is not forwarded; it fans out every topic.)
+      ws?.send(JSON.stringify({ type: 'subscribe', topics: [CTRADER_NODE_STATUS_TOPIC] }));
+    };
+
+    ws.onmessage = (ev: MessageEvent<string>) => {
+      // The shared socket also carries the MT5 position stream, whose frames
+      // run to about 1 MB. Drop everything that is not ours before parsing.
+      if (typeof ev.data !== 'string' || !ev.data.includes(CTRADER_NODE_STATUS_TOPIC)) return;
+      let env: { topic?: string; type?: string; data?: unknown; timestamp_ms?: number };
+      try { env = JSON.parse(ev.data); } catch { return; }
+      if (env.topic !== CTRADER_NODE_STATUS_TOPIC) return;
+      const data = env.data as Record<string, unknown> | undefined;
+      if (!data || typeof data !== 'object') return;
+
+      if (env.type === 'SNAPSHOT') {
+        if (Array.isArray(data.nodes)) {
+          onEvent({ kind: 'snapshot', nodes: data.nodes as CTraderNodeStatusAPI[] });
+        }
+        return;
+      }
+
+      const timestampMs = Number(data.timestamp_ms ?? env.timestamp_ms ?? 0) || 0;
+
+      if (data.type === 'NODE_STATUS_CHANGE' && typeof data.node_id === 'number' && typeof data.status === 'string') {
+        const node = data.node && typeof data.node === 'object' ? (data.node as CTraderNodeStatusAPI) : undefined;
+        onEvent({ kind: 'status', nodeId: data.node_id, status: data.status, node, timestampMs });
+        return;
+      }
+
+      if (data.type === 'NODE_TYPE_CHANGE' && data.promoted && typeof data.promoted === 'object') {
+        onEvent({
+          kind: 'type_change',
+          promoted: data.promoted as CTraderNodeTypeChange,
+          demoted: data.demoted && typeof data.demoted === 'object' ? (data.demoted as CTraderNodeTypeChange) : undefined,
+          timestampMs,
+        });
+      }
+    };
+
+    ws.onerror = () => ws?.close();
+    ws.onclose = () => {
+      onStatus?.('closed');
+      if (!destroyed) retryTimer = setTimeout(connect, 5000);
+    };
+  }
+
+  connect();
+
+  return () => {
+    destroyed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (ws) {
+      ws.onclose = null;
+      ws.close(1000, 'Client disconnecting');
+    }
+  };
+}
 
 // ============================================
 // Symbol Mapping API

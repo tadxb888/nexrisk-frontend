@@ -5,14 +5,19 @@
 // Sibling of NodeManagement.tsx (MT5 Servers); API: /api/v1/ctrader/nodes.
 //
 // Status model — WebSocket-first, no polling:
-//   • The status route seeds the page once when it opens (and again only when
-//     the operator presses Reload).
-//   • Every write route answers with the node's state at that moment, and
-//     connect waits for the outcome — the page updates from those responses.
-//   • Changes that happen by themselves (lost connection, a retry that
-//     succeeds, a login refused later) will arrive as a WebSocket event. That
-//     event is not published yet. When its spec lands, feed it through
-//     patchNode() below. Do NOT bridge the gap with a timer.
+//   • Seed: the status route, read when the page opens, when the live socket
+//     comes back after a drop, and when the operator presses Reload.
+//   • Live: topic ctrader.node_status. NODE_STATUS_CHANGE replaces a node's
+//     row with the status object it carries; NODE_TYPE_CHANGE moves the
+//     MASTER / STANDBY types on a promotion; a SNAPSHOT replaces the list.
+//   • Every write route also answers with the node's state at that moment.
+//     Events and responses race, so a response (or a seed read) never
+//     overwrites the connection state of a node that received an event while
+//     the request was in flight — the event is the newer of the two.
+//   • Creating, editing and deleting a node is not announced on the topic.
+//     This page has its own responses; a node changed from another session
+//     shows up with the next seed or snapshot.
+//   • No timer reads status. Do not add one.
 //
 // Not here on purpose: books / groups / symbols tabs (no cTrader routes) and
 // the cluster map (cTrader nodes are not in the /cluster/nodes feed yet).
@@ -21,6 +26,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import {
   ctraderApi,
+  connectCTraderNodeStatusWebSocket,
   type CTraderNodeAPI,
   type CTraderNodeStatusAPI,
   type CTraderConnectResult,
@@ -220,11 +226,13 @@ const NO_LIVE_DETAIL = {
 /**
  * Fold a Node Object (answer of create / update) into a row. The Node Object
  * has no live detail; what we held is kept only while the status is unchanged.
+ *
+ * keepConnection: an event for this node arrived while the request was in
+ * flight, so the row's connection state is newer than the response's. Take
+ * the registry fields from the response and leave the connection state alone.
  */
-function fromNodeObject(n: CTraderNodeAPI, prev?: CTNode): CTNode {
-  const sameStatus = prev && prev.connection_status === n.connection_status;
-  return {
-    ...(sameStatus ? prev : { ...NO_LIVE_DETAIL }),
+function fromNodeObject(n: CTraderNodeAPI, prev?: CTNode, keepConnection = false): CTNode {
+  const registry = {
     id: n.id,
     node_name: n.node_name,
     node_type: n.node_type as NodeType,
@@ -234,10 +242,35 @@ function fromNodeObject(n: CTraderNodeAPI, prev?: CTNode): CTNode {
     manager_login: n.manager_login,
     is_enabled: n.is_enabled,
     is_master: n.is_master,
+  };
+  if (prev && keepConnection) return { ...prev, ...registry };
+  const sameStatus = prev && prev.connection_status === n.connection_status;
+  return {
+    ...(sameStatus ? prev : { ...NO_LIVE_DETAIL }),
+    ...registry,
     connection_status: n.connection_status as ConnStatus,
     last_connected_at: n.last_connected_at ?? '',
     last_error: n.last_error ?? '',
   } as CTNode;
+}
+
+/**
+ * Row from the status object of a NODE_STATUS_CHANGE event. The CONNECTED
+ * event is sent before the server version, the first round trip and the
+ * counters are known, and nothing announces them later — so for those fields
+ * keep what the row already holds (for example the version a connect response
+ * gave) instead of blanking it.
+ */
+function fromEventNode(s: CTraderNodeStatusAPI, prev: CTNode): CTNode {
+  const next = fromStatus(s);
+  if (next.connection_status !== 'CONNECTED') return next;
+  return {
+    ...next,
+    server_version:   next.server_version   || prev.server_version,
+    permission_count: next.permission_count || prev.permission_count,
+    rtt_ms:           next.rtt_ms           || prev.rtt_ms,
+    sessions:         next.sessions         || prev.sessions,
+  };
 }
 
 function emptyForm(hasMaster: boolean): FormData {
@@ -989,8 +1022,7 @@ function PromoteModal({ standbyNode, masterNode, onClose, onConfirm }: {
             )}
             {result?.status !== 'CONNECTED' && (
               <p className="text-text-secondary">
-                It connects in the background. Live status for cTrader nodes is not pushed to this page yet —
-                press Reload on the page to see the outcome.
+                It connects in the background; its card updates as the connection proceeds.
                 {result?.demotedName && <> If it ends in ERROR, promote <strong>{result.demotedName}</strong> back.</>}
               </p>
             )}
@@ -1046,6 +1078,8 @@ export function CTraderNodesPage() {
   const [tests,     setTests]     = useState<Record<number, TestOutcome>>({});
   const [slowCount, setSlowCount] = useState(0);
   const [notice,    setNotice]    = useState<Notice | null>(null);
+  // Live socket: nothing is shown until it has opened once.
+  const [live,      setLive]      = useState<'connecting' | 'live' | 'offline'>('connecting');
 
   const [formModal,       setFormModal]       = useState<{ mode: 'add' | 'edit'; node?: CTNode } | null>(null);
   const [deleteModal,     setDeleteModal]     = useState<CTNode | null>(null);
@@ -1061,10 +1095,29 @@ export function CTraderNodesPage() {
   }, []);
   useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
 
-  /** Single place a node row changes. The WebSocket node event plugs in here. */
   const patchNode = useCallback((id: number, fn: (n: CTNode) => CTNode) => {
     setNodes(prev => prev.map(n => (n.id === id ? fn(n) : n)));
   }, []);
+
+  // A test result describes the node as it was: drop it when the node changes.
+  const clearTests = useCallback((...ids: number[]) =>
+    setTests(prev => {
+      if (!ids.some(id => id in prev)) return prev;
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
+    }), []);
+  const clearTest = (node: CTNode) => clearTests(node.id);
+
+  // ── Ordering between live events and HTTP answers ─────────
+  // eventSeq counts the live messages seen per node. A request notes the count
+  // when it starts; if the count has moved by the time its answer arrives, an
+  // event overtook it and the row's connection state is the newer one.
+  const eventSeq    = useRef(new Map<number, number>());
+  const lastEventMs = useRef(new Map<number, number>());
+  const seqOf = (id: number) => eventSeq.current.get(id) ?? 0;
+  const nodesRef = useRef<CTNode[]>([]);
+  nodesRef.current = nodes;
 
   const setNodeBusy = (id: number, op?: 'connect' | 'disconnect' | 'test') =>
     setBusy(prev => {
@@ -1079,11 +1132,20 @@ export function CTraderNodesPage() {
   }, []);
   const slowFull = slowCount >= MAX_SLOW_REQUESTS;
 
-  // ── Seed load: once on open, and on Reload. Never on a timer. ──
+  // ── Seed load: on open, after the live socket was down, and on Reload.
+  //    Never on a timer. ──
   const load = useCallback(async () => {
+    const seqAtStart = new Map(eventSeq.current);
     try {
       const res = await ctraderApi.getNodeStatus();
-      setNodes((res.nodes ?? []).map(fromStatus));
+      const fresh = (res.nodes ?? []).map(fromStatus);
+      setNodes(prev => fresh.map(f => {
+        // A node that received an event while this read was in flight keeps
+        // its row: the event is newer than the read.
+        const overtaken = (eventSeq.current.get(f.id) ?? 0) !== (seqAtStart.get(f.id) ?? 0);
+        const cur = overtaken ? prev.find(p => p.id === f.id) : undefined;
+        return cur ?? f;
+      }));
       setLoadError(null);
     } catch (e) {
       setLoadError(errText(e, 'Failed to load cTrader nodes'));
@@ -1097,22 +1159,83 @@ export function CTraderNodesPage() {
 
   const reload = () => { setReloading(true); void load(); };
 
+  // ── Live status: topic ctrader.node_status ────────────────
+  useEffect(() => {
+    let openedBefore = false;
+    return connectCTraderNodeStatusWebSocket(
+      (e) => {
+        if (e.kind === 'snapshot') {
+          // The whole list, in order with the events on this socket.
+          for (const s of e.nodes) eventSeq.current.set(s.node_id, seqOf(s.node_id) + 1);
+          setNodes(e.nodes.map(fromStatus));
+          setLoading(false);
+          setLoadError(null);
+          return;
+        }
+
+        if (e.kind === 'status') {
+          // Events of one node arrive in order; ignore a straggler anyway.
+          const last = lastEventMs.current.get(e.nodeId) ?? 0;
+          if (e.timestampMs && e.timestampMs < last) return;
+          if (e.timestampMs) lastEventMs.current.set(e.nodeId, e.timestampMs);
+          eventSeq.current.set(e.nodeId, seqOf(e.nodeId) + 1);
+
+          const shown = nodesRef.current.find(n => n.id === e.nodeId);
+          if (shown && shown.connection_status !== e.status) clearTests(e.nodeId);
+
+          // Only rows the page already shows are touched. An id it does not
+          // show is not added: the last event of a deleted node is its
+          // DISCONNECTED, and that must not bring the node back.
+          patchNode(e.nodeId, n => (e.node
+            ? fromEventNode(e.node, n)
+            : { ...n, connection_status: e.status as ConnStatus }));
+          return;
+        }
+
+        // Promotion: both types move in one update. The connection states of
+        // the two nodes come in their own NODE_STATUS_CHANGE events.
+        const { promoted, demoted } = e;
+        setNodes(prev => prev.map(n => {
+          if (n.id === promoted.node_id) return { ...n, node_type: promoted.new_type as NodeType, is_master: promoted.new_type === 'MASTER' };
+          if (demoted && n.id === demoted.node_id) return { ...n, node_type: demoted.new_type as NodeType, is_master: demoted.new_type === 'MASTER' };
+          return n;
+        }));
+        clearTests(promoted.node_id, ...(demoted ? [demoted.node_id] : []));
+      },
+      (status) => {
+        if (status === 'closed') { setLive('offline'); return; }
+        setLive('live');
+        // Events sent while the socket was down are lost, and a browser that
+        // reconnects through the server is not sent a snapshot: read the seed.
+        if (openedBefore) void load();
+        openedBefore = true;
+      },
+    );
+    // seqOf only reads a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, patchNode, clearTests]);
+
   const connected = nodes.filter(n => n.connection_status === 'CONNECTED').length;
   const master    = nodes.find(n => n.node_type === 'MASTER');
   const standby   = nodes.find(n => n.node_type === 'STANDBY');
-  // Nodes left mid-attempt by a response: their outcome is a later status change.
-  const awaiting  = nodes.some(n => !busy[n.id]
-    && (n.connection_status === 'CONNECTING' || n.connection_status === 'RECONNECTING'));
 
   // ── Connect ───────────────────────────────────────────────
   const doConnect = async (node: CTNode) => {
     setNodeBusy(node.id, 'connect');
+    const seq0 = seqOf(node.id);
     try {
       const res: CTraderConnectResult = await runSlow(() => ctraderApi.connectNode(node.id));
-      patchNode(node.id, n => ({
+      // The attempt's events normally arrive before this answer. When they
+      // did, the row is already current; the answer only adds the server
+      // version, which the CONNECTED event does not carry yet.
+      const overtaken = seqOf(node.id) !== seq0;
+      patchNode(node.id, n => overtaken
+        ? (n.connection_status === 'CONNECTED' && !n.server_version && res.server_version
+            ? { ...n, server_version: res.server_version }
+            : n)
+        : ({
         ...n,
         connection_status: res.connection_status as ConnStatus,
-        // The 202 text still tells the reader to poll; it is not shown.
         message: res.pending ? '' : (res.message ?? ''),
         last_error_code: res.last_error_code ?? '',
         last_error: res.last_error ?? '',
@@ -1124,7 +1247,7 @@ export function CTraderNodesPage() {
       if (res.success) {
         say(`${node.node_name} connected`);
       } else if (res.pending) {
-        say(`${node.node_name} is still connecting after 12 seconds. The attempt continues in the background.`, 'warn');
+        say(`${node.node_name} is still connecting after 12 seconds. The attempt continues; its card updates when it ends.`, 'warn');
       } else {
         const reason = res.last_error || res.message || 'Connection failed';
         say(`${node.node_name}: ${reason}${res.will_retry ? ' It keeps retrying by itself.' : ''}`, 'error');
@@ -1140,13 +1263,16 @@ export function CTraderNodesPage() {
   // ── Disconnect ────────────────────────────────────────────
   const doDisconnect = async (node: CTNode) => {
     setNodeBusy(node.id, 'disconnect');
+    const seq0 = seqOf(node.id);
     try {
       const res = await ctraderApi.disconnectNode(node.id);
-      patchNode(node.id, n => ({
-        ...n, ...NO_LIVE_DETAIL,
-        connection_status: (res.connection_status as ConnStatus) ?? 'DISCONNECTED',
-        last_error: '',
-      }));
+      if (seqOf(node.id) === seq0) {
+        patchNode(node.id, n => ({
+          ...n, ...NO_LIVE_DETAIL,
+          connection_status: (res.connection_status as ConnStatus) ?? 'DISCONNECTED',
+          last_error: '',
+        }));
+      }
       clearTests(node.id);
       if (res.warning) say(res.warning, 'warn');
       else if (res.was_running === false) say(`${node.node_name} was not running`);
@@ -1176,20 +1302,10 @@ export function CTraderNodesPage() {
     }
   };
 
-  // A test result describes the node as it was: drop it when the node changes.
-  const clearTests = (...ids: number[]) =>
-    setTests(prev => {
-      if (!ids.some(id => id in prev)) return prev;
-      const next = { ...prev };
-      for (const id of ids) delete next[id];
-      return next;
-    });
-  const clearTest = (node: CTNode) => clearTests(node.id);
-
   // ── Create ────────────────────────────────────────────────
   // Create with auto_connect off, then connect: the connect route waits for the
-  // login and answers with the outcome, where auto_connect would leave the node
-  // in CONNECTING with nothing to tell the page how it ended.
+  // login and answers with the outcome, so a refused login is reported to the
+  // operator who just typed the settings, not only shown on the card.
   const handleCreate = async (form: FormData) => {
     const res = await ctraderApi.createNode({
       node_name:              form.node_name.trim(),
@@ -1226,8 +1342,10 @@ export function CTraderNodesPage() {
       say('No changes to save');
       return;
     }
+    const seq0 = seqOf(orig.id);
     const res = await ctraderApi.updateNode(orig.id, patch);
-    patchNode(orig.id, n => fromNodeObject(res.node, n));
+    const overtaken = seqOf(orig.id) !== seq0;
+    patchNode(orig.id, n => fromNodeObject(res.node, n, overtaken));
     clearTests(orig.id);
     setFormModal(null);
     say(`Node "${res.node.node_name}" updated`);
@@ -1236,12 +1354,21 @@ export function CTraderNodesPage() {
   // ── Promote a STANDBY to MASTER ───────────────────────────
   const handlePromote = async () => {
     if (!promoteModal) throw new Error('No node selected');
-    const res = await ctraderApi.updateNode(promoteModal.id, { node_type: 'MASTER' });
-    // One request, two nodes: apply both in a single update.
+    const promotedId = promoteModal.id;
+    const masterId   = master?.id;
+    const seqPromoted0 = seqOf(promotedId);
+    const seqMaster0   = masterId !== undefined ? seqOf(masterId) : 0;
+    const res = await ctraderApi.updateNode(promotedId, { node_type: 'MASTER' });
+    // One request, two nodes: apply both in a single update. The same change
+    // also arrives as events (DISCONNECTED, NODE_TYPE_CHANGE, CONNECTING ...);
+    // where those got here first, only the types are taken from the answer.
     setNodes(prev => prev.map(n => {
-      if (n.id === res.node.id) return fromNodeObject(res.node, n);
+      if (n.id === res.node.id) return fromNodeObject(res.node, n, seqOf(n.id) !== seqPromoted0);
       if (res.demoted_node_id !== undefined && n.id === res.demoted_node_id) {
-        return { ...n, ...NO_LIVE_DETAIL, node_type: 'STANDBY', is_master: false, connection_status: 'DISCONNECTED', last_error: '' };
+        const overtaken = n.id === masterId && seqOf(n.id) !== seqMaster0;
+        return overtaken
+          ? { ...n, node_type: 'STANDBY', is_master: false }
+          : { ...n, ...NO_LIVE_DETAIL, node_type: 'STANDBY', is_master: false, connection_status: 'DISCONNECTED', last_error: '' };
       }
       return n;
     }));
@@ -1293,6 +1420,15 @@ export function CTraderNodesPage() {
                 )}
               </div>
             )}
+            {live !== 'connecting' && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-text-muted"
+                title={live === 'live'
+                  ? 'Status changes arrive as they happen'
+                  : 'The live connection is down. Status shown may be out of date; it is read again when the connection returns.'}>
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: live === 'live' ? GREEN : YELLOW }} />
+                {live === 'live' ? 'Live' : 'Live updates offline'}
+              </span>
+            )}
             <button onClick={reload} disabled={loading || reloading}
               title="Read the current status of every cTrader node again"
               className="btn btn-ghost text-xs border border-border px-2.5 py-1"
@@ -1317,13 +1453,6 @@ export function CTraderNodesPage() {
               <IcoX size={12} />
             </button>
           </div>
-        )}
-
-        {awaiting && !loading && (
-          <Callout tone="info">
-            A node is still connecting or retrying. Status changes that happen by themselves are not
-            pushed to this page yet — press Reload to see the latest.
-          </Callout>
         )}
 
         {loading ? (

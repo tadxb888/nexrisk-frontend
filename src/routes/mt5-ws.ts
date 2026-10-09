@@ -123,7 +123,10 @@ function connectBackend() {
     // receive everything and filter client-side.
     backendWs?.send(JSON.stringify({
       type: 'subscribe',
+      // 'ctrader.node_status' must be the exact topic name: a prefix would
+      // receive the events but not the snapshot sent on subscribe.
       topics: ['mt5.position', 'mt5.node_status', 'mt5.deal',
+               'ctrader.node_status',
                'portfolio.summary.today', 'portfolio.summary.month',
                'portfolio.exposure.symbols',
                'quote',
