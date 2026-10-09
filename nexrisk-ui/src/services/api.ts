@@ -747,6 +747,220 @@ export const mt5Api = {
 };
 
 // ============================================
+// cTrader Node Admin API
+// Same Node Registry as the MT5 nodes, separate route family
+// (/api/v1/ctrader/nodes). No per-node data or book routes exist for cTrader.
+// Live status is delivered over WebSocket (event not published yet) —
+// getNodeStatus is the seed for a page's initial load and must not be polled.
+// ============================================
+
+export interface CTraderNodeAPI {
+  id: number;
+  node_name: string;
+  node_type: string;
+  platform: string;
+  server_address: string;
+  plant_id: string;
+  environment: string;
+  manager_login: number;
+  reconnect_interval_sec: number;
+  heartbeat_interval_sec: number;
+  is_enabled: boolean;
+  is_master: boolean;
+  connection_status: string;
+  last_connected_at: string;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  has_password: boolean;
+}
+
+export interface CTraderNodeStatusAPI {
+  node_id: number;
+  node_name: string;
+  node_type: string;
+  platform: string;
+  server_address: string;
+  plant_id: string;
+  environment: string;
+  manager_login: number;
+  is_master: boolean;
+  is_primary: boolean;
+  is_enabled: boolean;
+  connection_status: string;
+  message: string;
+  last_error_code: string;
+  last_error: string;
+  last_connected_at: string;
+  server_version: string;
+  permission_count: number;
+  rtt_ms: number;
+  connected_at_ms: number;
+  last_inbound_at_ms: number;
+  next_retry_at_ms: number;
+  server_time_offset_ms: number;
+  connect_attempts: number;
+  sessions: number;
+  frames_in: number;
+  frames_out: number;
+}
+
+export interface CTraderConnectResult {
+  success: boolean;
+  pending: boolean;
+  will_retry: boolean;
+  node_id: number;
+  connection_status: string;
+  message: string;
+  last_error_code: string;
+  last_error: string;
+  server_version: string;
+  next_retry_at_ms: number;
+}
+
+export interface CTraderTestResult {
+  success: boolean;
+  state: string;
+  message: string;
+  error_code: string;
+  server_version: string;
+  permission_count: number;
+  rtt_ms: number;
+  latency_ms: number;
+  used_live_connection: boolean;
+  node_id?: number;
+  server_address: string;
+  plant_id: string;
+  environment: string;
+  manager_login: number;
+}
+
+export interface CTraderNodeCreate {
+  node_name: string;
+  node_type: string;
+  server_address: string;
+  plant_id: string;
+  environment: string;
+  manager_login: number;
+  password: string;
+  reconnect_interval_sec?: number;
+  heartbeat_interval_sec?: number;
+  is_enabled?: boolean;
+  auto_connect?: boolean;
+  created_by?: string;
+}
+
+export type CTraderNodeUpdate = Partial<{
+  node_name: string;
+  node_type: string;
+  server_address: string;
+  plant_id: string;
+  environment: string;
+  manager_login: number;
+  password: string;
+  reconnect_interval_sec: number;
+  heartbeat_interval_sec: number;
+  is_enabled: boolean;
+}>;
+
+export const ctraderApi = {
+  getNodes: () =>
+    fetchAPI<{ nodes: CTraderNodeAPI[]; total: number; connected_count: number; generated_at: string }>(
+      '/api/v1/ctrader/nodes'
+    ),
+
+  // Initial-load seed only. Do not put this on a timer.
+  getNodeStatus: () =>
+    fetchAPI<{
+      nodes: CTraderNodeStatusAPI[];
+      total: number;
+      connected_count: number;
+      primary_node_id: number;
+      primary_connected: boolean;
+      generated_at: string;
+    }>('/api/v1/ctrader/nodes/status'),
+
+  getNode: (id: number) =>
+    fetchAPI<CTraderNodeAPI>(`/api/v1/ctrader/nodes/${id}`),
+
+  createNode: (data: CTraderNodeCreate) =>
+    fetchAPI<{ success: boolean; message: string; node: CTraderNodeAPI }>(
+      '/api/v1/ctrader/nodes',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+
+  // Send only the fields that change: a change to a connection setting
+  // restarts the node. {"node_type":"MASTER"} on a STANDBY is the promotion.
+  updateNode: (id: number, data: CTraderNodeUpdate) =>
+    fetchAPI<{
+      success: boolean;
+      message: string;
+      node: CTraderNodeAPI;
+      demoted_node_id?: number;
+      demoted_node_name?: string;
+    }>(
+      `/api/v1/ctrader/nodes/${id}`,
+      { method: 'PUT', body: JSON.stringify(data) }
+    ),
+
+  deleteNode: (id: number) =>
+    fetchAPI<{ success: boolean; message: string; deleted_id: number; deleted_name: string }>(
+      `/api/v1/ctrader/nodes/${id}`,
+      { method: 'DELETE' }
+    ),
+
+  // Waits up to ~13 s. 200 connected, 202 still connecting and 502 first
+  // attempt failed all carry the same result object, so the 502 is an answer
+  // here, not a thrown error. Anything else (404, 409, 429, ...) throws with
+  // the operator-readable text.
+  connectNode: async (id: number): Promise<CTraderConnectResult> => {
+    const response = await fetch(`${API_BASE}/api/v1/ctrader/nodes/${id}/connect`, {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'include',
+    });
+    const body = await response.json().catch(() => null);
+    if (body && typeof body.connection_status === 'string') return body as CTraderConnectResult;
+    throw new Error(body?.error || `HTTP ${response.status}`);
+  },
+
+  disconnectNode: (id: number) =>
+    fetchAPI<{
+      success: boolean;
+      was_running: boolean;
+      node_id: number;
+      connection_status: string;
+      message: string;
+      warning?: string;
+    }>(
+      `/api/v1/ctrader/nodes/${id}/disconnect`,
+      { method: 'POST' }
+    ),
+
+  // Waits up to ~17 s. Always 200 when the node exists; success is in the body.
+  testNode: (id: number) =>
+    fetchAPI<CTraderTestResult>(
+      `/api/v1/ctrader/nodes/${id}/test`,
+      { method: 'POST' }
+    ),
+
+  // Waits up to ~17 s. Opens a second session for the manager — for a stored
+  // node prefer testNode, which reuses the live connection.
+  testRaw: (data: {
+    server_address: string;
+    plant_id: string;
+    environment: string;
+    manager_login: number;
+    password: string;
+  }) =>
+    fetchAPI<CTraderTestResult>(
+      '/api/v1/ctrader/nodes/test',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+};
+
+// ============================================
 // Symbol Mapping API
 // ============================================
 export interface SymbolMappingRecord {

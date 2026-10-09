@@ -20,7 +20,7 @@
 //   Execution           — hedging, fills, pricing, routing, LP + symbol config
 //   Market Intelligence — trader behaviour, predictions, policy
 //   Reports             — audit logs + operational reports
-//   Settings            — system, users, MT5 servers
+//   Settings            — system, users, MT5 + cTrader servers
 // ============================================
 
 export interface SubItem {
@@ -93,6 +93,9 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/settings',    label: 'System Settings', module: 'settings' },
       { path: '/users',       label: 'Users & Roles',   module: 'users' },
       { path: '/mt5-servers', label: 'MT5 Servers',     module: 'mt5_servers' },
+      // cTrader nodes share the mt5_servers module until C++ RBAC grants a
+      // module of their own; a new key here would hide the page from everyone.
+      { path: '/ctrader-servers', label: 'cTrader Servers', module: 'mt5_servers' },
       { path: '/alert-thresholds', label: 'Alert Thresholds', module: 'alert_thresholds' },
     ],
   },

@@ -1,6 +1,12 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { nexriskApi } from '../services/nexrisk-api.js';
+import { nexriskApi, nexriskFetch } from '../services/nexrisk-api.js';
+import { config } from '../config.js';
+
+// cTrader connect and test wait on the remote server by design: connect answers
+// in up to ~13 s, test in up to ~17 s. The proxy must outlast both whatever
+// NEXRISK_API_TIMEOUT_MS is set to, so these routes never use less than 25 s.
+const CTRADER_SLOW_TIMEOUT_MS = Math.max(config.nexriskApiTimeoutMs, 25_000);
 
 // ── Path / query schemas ──────────────────────────────────────
 
@@ -188,6 +194,170 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const response = await nexriskApi.post(`/api/v1/mt5/nodes/${id}/test`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  // ── cTrader Node Registry ──────────────────────────────────
+  // Same Node Registry as the MT5 nodes, separate route family. Plain proxies:
+  // the C++ service validates and its error text is written for the operator.
+  // Gated on the mt5_servers module until a cTrader module exists in RBAC.
+  // Live status arrives over WebSocket (event not published yet) — the status
+  // route below is a seed for the page's initial load, not something to poll.
+
+  const ctraderRead  = { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] };
+  const ctraderWrite = { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] };
+
+  /**
+   * GET /api/v1/ctrader/nodes
+   */
+  fastify.get(
+    '/ctrader/nodes',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = listNodesQuery.parse(request.query);
+      const response = await nexriskApi.get('/api/v1/ctrader/nodes', {
+        enabled_only: query.enabled_only,
+        type:         query.type,
+      });
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/ctrader/nodes/status
+   * NOTE: registered before /ctrader/nodes/:id so "status" is not read as an id.
+   */
+  fastify.get(
+    '/ctrader/nodes/status',
+    ctraderRead,
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get('/api/v1/ctrader/nodes/status');
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * POST /api/v1/ctrader/nodes/test
+   * Test settings that are not stored. Waits up to ~17 s.
+   * NOTE: registered before /ctrader/nodes/:id/* routes.
+   */
+  fastify.post(
+    '/ctrader/nodes/test',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskFetch('/api/v1/ctrader/nodes/test', {
+        method: 'POST', body: request.body, timeout: CTRADER_SLOW_TIMEOUT_MS,
+      });
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * POST /api/v1/ctrader/nodes
+   */
+  fastify.post(
+    '/ctrader/nodes',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.post('/api/v1/ctrader/nodes', request.body);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.code(201).send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/ctrader/nodes/:id
+   */
+  fastify.get(
+    '/ctrader/nodes/:id',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.get(`/api/v1/ctrader/nodes/${id}`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * PUT /api/v1/ctrader/nodes/:id
+   * Partial update. {"node_type":"MASTER"} on a STANDBY is the promotion.
+   */
+  fastify.put(
+    '/ctrader/nodes/:id',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.put(`/api/v1/ctrader/nodes/${id}`, request.body);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * DELETE /api/v1/ctrader/nodes/:id
+   */
+  fastify.delete(
+    '/ctrader/nodes/:id',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.delete(`/api/v1/ctrader/nodes/${id}`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * POST /api/v1/ctrader/nodes/:id/connect
+   * Waits up to ~13 s. The status code is part of the answer and is passed
+   * through as received: 200 connected, 202 still connecting, 502 first attempt
+   * failed (the 502 body is the same connect result object, not an error object).
+   */
+  fastify.post(
+    '/ctrader/nodes/:id/connect',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskFetch(`/api/v1/ctrader/nodes/${id}/connect`, {
+        method: 'POST', timeout: CTRADER_SLOW_TIMEOUT_MS,
+      });
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.code(response.status).send(response.data);
+    }
+  );
+
+  /**
+   * POST /api/v1/ctrader/nodes/:id/disconnect
+   */
+  fastify.post(
+    '/ctrader/nodes/:id/disconnect',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.post(`/api/v1/ctrader/nodes/${id}/disconnect`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * POST /api/v1/ctrader/nodes/:id/test
+   * Tests a stored node without changing its state. Waits up to ~17 s.
+   */
+  fastify.post(
+    '/ctrader/nodes/:id/test',
+    ctraderWrite,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskFetch(`/api/v1/ctrader/nodes/${id}/test`, {
+        method: 'POST', timeout: CTRADER_SLOW_TIMEOUT_MS,
+      });
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.send(response.data);
     }

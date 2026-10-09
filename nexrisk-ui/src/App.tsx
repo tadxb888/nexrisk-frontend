@@ -41,6 +41,8 @@ import {
   SettingsPage,
   // MT5
   NodeManagementPage,
+  // cTrader
+  CTraderNodesPage,
   SymbolMappingPage,
   RouteSanityPage,
   // Admin
@@ -134,6 +136,7 @@ function App() {
 
               {/* ─── System ───────────────────────────── */}
               <Route path="/mt5-servers"   element={<NodeManagementPage />} />
+              <Route path="/ctrader-servers" element={<CTraderNodesPage />} />
               <Route path="/infra"         element={<NetworkClusterPage />} />
               <Route path="/alert-thresholds" element={<AlertThresholdsPage />} />
 
