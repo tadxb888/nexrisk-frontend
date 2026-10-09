@@ -1035,7 +1035,7 @@ function DisconnectMasterModal({ node, onClose, onConfirm }: {
 // ============================================================
 export function CTraderNodesPage() {
   const { hasPermission } = useAuth();
-  // Same permission module as MT5 Servers until a cTrader module exists.
+  // Same permission module as MT5 Servers, by design: access to one is access to both.
   const canEdit = hasPermission('mt5_servers', 'EDIT');
 
   const [nodes,     setNodes]     = useState<CTNode[]>([]);
@@ -1203,7 +1203,7 @@ export function CTraderNodesPage() {
       heartbeat_interval_sec: Number(form.heartbeat_interval_sec),
       is_enabled:             form.is_enabled,
       auto_connect:           false,
-      created_by:             'admin', // same as the MT5 nodes page
+      // created_by is stamped by the server from the session.
     });
     setFormModal(null);
     if (!res.node || typeof res.node.id !== 'number') {

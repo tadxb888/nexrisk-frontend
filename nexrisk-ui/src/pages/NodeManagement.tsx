@@ -1877,7 +1877,7 @@ export function NodeManagementPage() {
           reconnect_interval_sec: Number(form.reconnect_interval_sec) || 5,
           heartbeat_interval_sec: Number(form.heartbeat_interval_sec) || 30,
           is_enabled:             form.is_enabled,
-          created_by:             'admin',
+          // created_by is stamped by the server from the session.
         });
         // Reload full list to get the complete node object back
         await loadNodes();

@@ -848,7 +848,7 @@ export interface CTraderNodeCreate {
   heartbeat_interval_sec?: number;
   is_enabled?: boolean;
   auto_connect?: boolean;
-  created_by?: string;
+  // created_by is not sent from the browser: the server stamps it from the session.
 }
 
 export type CTraderNodeUpdate = Partial<{

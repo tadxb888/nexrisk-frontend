@@ -8,6 +8,23 @@ import { config } from '../config.js';
 // NEXRISK_API_TIMEOUT_MS is set to, so these routes never use less than 25 s.
 const CTRADER_SLOW_TIMEOUT_MS = Math.max(config.nexriskApiTimeoutMs, 25_000);
 
+/**
+ * Body for a node create, with the creator stamped here: created_by is the
+ * signed-in user's e-mail from the session. Whatever the browser sent in that
+ * field is replaced, so the stored creator cannot be chosen by the client.
+ * A body that is not a JSON object goes through untouched and the C++ service
+ * answers it with its own 400.
+ */
+function withCreator(request: FastifyRequest): unknown {
+  const body = request.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const stamped: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  delete stamped.created_by;
+  const email = request.nexriskUser?.email;
+  if (email) stamped.created_by = email;
+  return stamped;
+}
+
 // ── Path / query schemas ──────────────────────────────────────
 
 const nodeIdParams = z.object({
@@ -105,7 +122,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     '/mt5/nodes',
     { preHandler: [fastify.authenticate, fastify.requireCapability('config.write'), fastify.requirePermission('mt5_servers', 'EDIT')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const response = await nexriskApi.post('/api/v1/mt5/nodes', request.body);
+      const response = await nexriskApi.post('/api/v1/mt5/nodes', withCreator(request));
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.code(201).send(response.data);
     }
@@ -202,7 +219,8 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
   // ── cTrader Node Registry ──────────────────────────────────
   // Same Node Registry as the MT5 nodes, separate route family. Plain proxies:
   // the C++ service validates and its error text is written for the operator.
-  // Gated on the mt5_servers module until a cTrader module exists in RBAC.
+  // Gated on the mt5_servers module by design: whoever may manage MT5 servers
+  // may manage cTrader servers. There is no separate cTrader module.
   // Live status arrives over WebSocket (event not published yet) — the status
   // route below is a seed for the page's initial load, not something to poll.
 
@@ -264,7 +282,7 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     '/ctrader/nodes',
     ctraderWrite,
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const response = await nexriskApi.post('/api/v1/ctrader/nodes', request.body);
+      const response = await nexriskApi.post('/api/v1/ctrader/nodes', withCreator(request));
       if (!response.ok) return reply.code(response.status).send(response.error);
       return reply.code(201).send(response.data);
     }
