@@ -192,6 +192,9 @@ function fmtClock(ms: number) {
   return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+/** Milliseconds for display: one decimal. The API sends measurements such as 18.9984. */
+const fmtMs = (ms: number) => (Math.round(ms * 10) / 10).toFixed(1);
+
 const errText = (e: unknown, fallback: string) => (e instanceof Error && e.message) || fallback;
 
 function fromStatus(s: CTraderNodeStatusAPI): CTNode {
@@ -452,8 +455,8 @@ function TestLine({ outcome }: { outcome: TestOutcome }) {
   return (
     <span style={{ color: GREEN }}>
       {prefix}{res.message || 'Connection test passed'}
-      <span className="font-mono"> · {res.latency_ms} ms</span>
-      {res.rtt_ms > 0 && <span className="font-mono"> · RTT {res.rtt_ms} ms</span>}
+      <span className="font-mono"> · {Math.round(res.latency_ms)} ms</span>
+      {res.rtt_ms > 0 && <span className="font-mono"> · RTT {fmtMs(res.rtt_ms)} ms</span>}
       {res.server_version && <span className="font-mono"> · v{res.server_version}</span>}
       {res.used_live_connection && <span> · live connection</span>}
     </span>
@@ -533,7 +536,7 @@ function NodeCard({ node, canEdit, busy, slowFull, testOutcome, onEdit, onDelete
             <span className="font-mono text-text-secondary">
               {[
                 node.server_version && `v${node.server_version}`,
-                node.rtt_ms > 0 && `RTT ${node.rtt_ms} ms`,
+                node.rtt_ms > 0 && `RTT ${fmtMs(node.rtt_ms)} ms`,
                 node.permission_count > 0 && `${node.permission_count} permissions`,
               ].filter(Boolean).join(' · ')}
             </span>
@@ -1405,7 +1408,7 @@ export function CTraderNodesPage() {
           <div className="flex items-center gap-4">
             {!loading && !loadError && (
               <div className="flex items-center gap-3 text-xs text-text-muted">
-                <span><span className="text-text-primary font-mono">{nodes.length}</span> nodes</span>
+                <span><span className="text-text-primary font-mono">{nodes.length}</span> {nodes.length === 1 ? 'node' : 'nodes'}</span>
                 <span className="opacity-30">·</span>
                 <span>
                   <span className="font-mono" style={{ color: connected > 0 ? GREEN : '#a0a0b0' }}>{connected}</span> connected
