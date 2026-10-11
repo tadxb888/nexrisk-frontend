@@ -293,6 +293,8 @@ export function BottomBar() {
         }
         return;
       }
+      // The end of a data load says nothing about the connection.
+      if (e.kind === 'data_sync') return;
       // Status change. Only the MASTER matters here: a first MASTER that was
       // just created is adopted from its first event, and the old MASTER's
       // DISCONNECTED during a promotion (its type already reads STANDBY) is

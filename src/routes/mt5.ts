@@ -406,6 +406,120 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // ── cTrader node data ──────────────────────────────────────
+  // What a connected cTrader node has loaded from its server: groups, symbols,
+  // traders and open positions (NexRisk_cTrader_Node_Data_API v1.0). The four
+  // GETs are answered by the service from memory; none is slow. A list that
+  // could not be loaded is a 200 with `state: "FAILED"`, not an HTTP error —
+  // statuses and bodies are passed through as they come. Bodies are sent raw
+  // (no snakeToCamel).
+
+  // Ids and logins run to 18 digits, beyond what a JS number holds exactly:
+  // they are checked and forwarded as text.
+  const ctraderId   = z.string().regex(/^\d{1,18}$/);
+  const ctraderPage = {
+    limit:  z.coerce.number().int().min(1).max(10_000).optional(),
+    offset: z.coerce.number().int().min(0).max(2_147_483_647).optional(),
+  };
+  const ctraderSymbolsQuery   = z.object({ include_archived: z.enum(['true', 'false', '1', '0']).optional() });
+  const ctraderTradersQuery   = z.object({ login: ctraderId.optional(), group_id: ctraderId.optional(), ...ctraderPage });
+  const ctraderPositionsQuery = z.object({
+    book:   z.string().regex(/^[abAB]$/).optional(),
+    login:  ctraderId.optional(),
+    symbol: z.string().min(1).max(64).optional(),
+    ...ctraderPage,
+  });
+
+  /** Only the parameters that were given are forwarded. */
+  const given = (query: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(query).filter(([, v]) => v !== undefined));
+
+  /**
+   * GET /api/v1/ctrader/nodes/:id/groups
+   * Trader groups of the node, ordered by name.
+   */
+  fastify.get(
+    '/ctrader/nodes/:id/groups',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.get(`/api/v1/ctrader/nodes/${id}/groups`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/ctrader/nodes/:id/symbols
+   * Symbols of the node, ordered by name. ?include_archived=true adds archived ones.
+   */
+  fastify.get(
+    '/ctrader/nodes/:id/symbols',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const query = ctraderSymbolsQuery.parse(request.query);
+      const response = await nexriskApi.get(`/api/v1/ctrader/nodes/${id}/symbols`, given(query));
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/ctrader/nodes/:id/traders
+   * Trader accounts, ordered by login. Filters: login, group_id. Paged with
+   * limit (1-10000, default 1000) and offset.
+   */
+  fastify.get(
+    '/ctrader/nodes/:id/traders',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const query = ctraderTradersQuery.parse(request.query);
+      const response = await nexriskApi.get(`/api/v1/ctrader/nodes/${id}/traders`, given(query));
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/ctrader/nodes/:id/positions
+   * Open positions, newest first, each with its cTrader book (A or B).
+   * Filters: book, login, symbol. Paged with limit and offset.
+   */
+  fastify.get(
+    '/ctrader/nodes/:id/positions',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const query = ctraderPositionsQuery.parse(request.query);
+      const response = await nexriskApi.get(`/api/v1/ctrader/nodes/${id}/positions`, given(query));
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * POST /api/v1/ctrader/nodes/:id/data/refresh
+   * Asks the node to load its four lists again. Answers at once with 202; the
+   * end of the load is announced by a NODE_DATA_SYNC event on topic
+   * ctrader.node_status. 429: a load ended less than 3 s ago. 503: the node is
+   * not connected.
+   *
+   * It reads from cTrader and changes nothing there, so it needs the same
+   * rights as viewing the lists, not the rights to change a node.
+   */
+  fastify.post(
+    '/ctrader/nodes/:id/data/refresh',
+    ctraderRead,
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = nodeIdParams.parse(request.params);
+      const response = await nexriskApi.post(`/api/v1/ctrader/nodes/${id}/data/refresh`);
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      return reply.code(response.status).send(response.data);
+    }
+  );
+
   // ── Node Data ──────────────────────────────────────────────
 
   /**

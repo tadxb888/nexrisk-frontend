@@ -19,8 +19,15 @@
 //     shows up with the next seed or snapshot.
 //   • No timer reads status. Do not add one.
 //
-// Not here on purpose: books / groups / symbols tabs (no cTrader routes) and
-// the cluster map (cTrader nodes are not in the /cluster/nodes feed yet).
+// Node data (API v1.3 + NexRisk_cTrader_Node_Data_API v1.0): each started node
+// loads its groups, symbols, traders and open positions after every login.
+// The card summarises the status object's `data` block; "View" opens the
+// lists (CTraderNodeData.tsx). NODE_DATA_SYNC announces the start and the end
+// of a load and carries the node's full status object.
+//
+// Not here on purpose: book assignment (no cTrader routes — the book of a
+// position is set by cTrader) and the cluster map (cTrader nodes are not in
+// the /cluster/nodes feed yet).
 // ============================================
 
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
@@ -32,8 +39,10 @@ import {
   type CTraderConnectResult,
   type CTraderTestResult,
   type CTraderNodeUpdate,
+  type CTraderNodeData,
 } from '@/services/api';
 import { useAuth } from '@/stores/AuthContext';
+import { CTraderNodeDataModal } from './CTraderNodeData';
 
 // ============================================================
 // ICONS — SVG only, no emojis
@@ -110,6 +119,8 @@ interface CTNode {
   rtt_ms: number;
   next_retry_at_ms: number;
   sessions: number;
+  /** What the node has loaded from cTrader; null when it is not started. */
+  data: CTraderNodeData | null;
 }
 
 interface FormData {
@@ -218,12 +229,14 @@ function fromStatus(s: CTraderNodeStatusAPI): CTNode {
     rtt_ms: s.rtt_ms ?? 0,
     next_retry_at_ms: s.next_retry_at_ms ?? 0,
     sessions: s.sessions ?? 0,
+    data: s.data ?? null,
   };
 }
 
 const NO_LIVE_DETAIL = {
   message: '', last_error_code: '', server_version: '',
   permission_count: 0, rtt_ms: 0, next_retry_at_ms: 0, sessions: 0,
+  data: null,
 };
 
 /**
@@ -466,7 +479,43 @@ function TestLine({ outcome }: { outcome: TestOutcome }) {
 // ============================================================
 // NODE CARD
 // ============================================================
-function NodeCard({ node, canEdit, busy, slowFull, testOutcome, onEdit, onDelete, onConnect, onDisconnect, onTest, onPromote, onClearTest }: {
+/** The node's data block in one line, and what is wrong with it if anything. */
+function DataLine({ data }: { data: CTraderNodeData }) {
+  const lists = ['groups', 'symbols', 'traders', 'positions'] as const;
+  const troubled = lists.filter(k => data[k].state === 'FAILED' || data[k].state === 'INCOMPLETE');
+  const counts = (
+    <>
+      <span className="font-mono text-text-primary">{data.positions.count}</span> open position{data.positions.count === 1 ? '' : 's'}
+      {' '}(<span className="font-mono">A {data.positions_book_a} · B {data.positions_book_b}</span>)
+      {' · '}<span className="font-mono text-text-primary">{data.traders.count}</span> traders
+      {' · '}<span className="font-mono text-text-primary">{data.symbols.count}</span> symbols
+    </>
+  );
+
+  if (data.state === 'SYNCING' && data.sync_count === 0) return <span className="text-text-secondary">Loading from cTrader…</span>;
+  return (
+    <span className="text-text-secondary leading-snug">
+      {counts}
+      {data.state === 'SYNCING' && <span> · reloading…</span>}
+      {data.state === 'OFFLINE' && data.synced_at_ms > 0 && (
+        <span style={{ color: YELLOW }}> · from <span className="font-mono">{fmtClock(data.synced_at_ms)}</span>, not connected</span>
+      )}
+      {data.state === 'DEFERRED' && (
+        <span style={{ color: YELLOW }}>
+          {' · '}loading postponed{data.next_sync_at_ms > 0 && <> until <span className="font-mono">{fmtClock(data.next_sync_at_ms)}</span></>}
+        </span>
+      )}
+      {(data.state === 'PARTIAL' || data.state === 'FAILED') && troubled.length > 0 && (
+        <span style={{ color: data.state === 'FAILED' ? RED : YELLOW }}
+          title={troubled.map(k => `${k}: ${data[k].error_code}${data[k].error ? ` — ${data[k].error}` : ''}`).join('\n')}>
+          {' · '}{troubled.map(k => `${k} ${data[k].state === 'INCOMPLETE' ? 'incomplete' : (data[k].error_code || 'failed')}`).join(', ')}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function NodeCard({ node, canEdit, busy, slowFull, testOutcome, onEdit, onDelete, onConnect, onDisconnect, onTest, onPromote, onClearTest, onViewData }: {
   node: CTNode;
   canEdit: boolean;
   busy?: 'connect' | 'disconnect' | 'test';
@@ -479,6 +528,7 @@ function NodeCard({ node, canEdit, busy, slowFull, testOutcome, onEdit, onDelete
   onTest:       (n: CTNode) => void;
   onPromote:    (n: CTNode) => void;
   onClearTest:  (n: CTNode) => void;
+  onViewData:   (n: CTNode) => void;
 }) {
   const st        = node.connection_status;
   const isMaster  = node.node_type === 'MASTER';
@@ -540,6 +590,19 @@ function NodeCard({ node, canEdit, busy, slowFull, testOutcome, onEdit, onDelete
                 node.permission_count > 0 && `${node.permission_count} permissions`,
               ].filter(Boolean).join(' · ')}
             </span>
+          </div>
+        )}
+
+        {/* What the node has loaded from cTrader. A node that is not started holds no data. */}
+        {node.data && (
+          <div className="flex items-start gap-2">
+            <span className="text-text-muted w-14 flex-shrink-0">Data</span>
+            <span className="flex-1 min-w-0"><DataLine data={node.data} /></span>
+            <button onClick={() => onViewData(node)}
+              className="btn btn-ghost text-xs border border-border px-2 py-0.5 flex-shrink-0"
+              aria-label={`View data of ${node.node_name}`}>
+              View
+            </button>
           </div>
         )}
 
@@ -1088,6 +1151,10 @@ export function CTraderNodesPage() {
   const [deleteModal,     setDeleteModal]     = useState<CTNode | null>(null);
   const [promoteModal,    setPromoteModal]    = useState<CTNode | null>(null);
   const [disconnectModal, setDisconnectModal] = useState<CTNode | null>(null);
+  // The data view follows its node by id, so it sees the node's live state.
+  const [dataNodeId,      setDataNodeId]      = useState<number | null>(null);
+  // Per node: goes up each time the node announces the end of a data load.
+  const [syncTicks,       setSyncTicks]       = useState<Record<number, number>>({});
 
   // Success notices clear themselves; warnings and errors stay until dismissed.
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1195,6 +1262,18 @@ export function CTraderNodesPage() {
           return;
         }
 
+        if (e.kind === 'data_sync') {
+          // A data load started or finished. The event carries the node's full
+          // status object; the open data view reloads on a final state.
+          const last = lastEventMs.current.get(e.nodeId) ?? 0;
+          if (e.timestampMs && e.timestampMs < last) return;
+          if (e.timestampMs) lastEventMs.current.set(e.nodeId, e.timestampMs);
+          eventSeq.current.set(e.nodeId, seqOf(e.nodeId) + 1);
+          if (e.node) { const status = e.node; patchNode(e.nodeId, n => fromEventNode(status, n)); }
+          if (e.state !== 'SYNCING') setSyncTicks(prev => ({ ...prev, [e.nodeId]: (prev[e.nodeId] ?? 0) + 1 }));
+          return;
+        }
+
         // Promotion: both types move in one update. The connection states of
         // the two nodes come in their own NODE_STATUS_CHANGE events.
         const { promoted, demoted } = e;
@@ -1220,6 +1299,7 @@ export function CTraderNodesPage() {
 
   const connected = nodes.filter(n => n.connection_status === 'CONNECTED').length;
   const master    = nodes.find(n => n.node_type === 'MASTER');
+  const dataNode  = dataNodeId !== null ? nodes.find(n => n.id === dataNodeId) : undefined;
   const standby   = nodes.find(n => n.node_type === 'STANDBY');
 
   // ── Connect ───────────────────────────────────────────────
@@ -1489,7 +1569,8 @@ export function CTraderNodesPage() {
                 onDisconnect={handleDisconnect}
                 onTest={n => void doTest(n)}
                 onPromote={n => setPromoteModal(n)}
-                onClearTest={clearTest} />
+                onClearTest={clearTest}
+                onViewData={n => setDataNodeId(n.id)} />
             ))}
           </div>
         )}
@@ -1507,6 +1588,10 @@ export function CTraderNodesPage() {
       {promoteModal && (
         <PromoteModal standbyNode={promoteModal} masterNode={master}
           onClose={() => setPromoteModal(null)} onConfirm={handlePromote} />
+      )}
+      {dataNode && (
+        <CTraderNodeDataModal node={dataNode} syncTick={syncTicks[dataNode.id] ?? 0} liveOk={live === 'live'}
+          onClose={() => setDataNodeId(null)} />
       )}
       {disconnectModal && (
         <DisconnectMasterModal node={disconnectModal}

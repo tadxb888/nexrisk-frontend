@@ -749,7 +749,9 @@ export const mt5Api = {
 // ============================================
 // cTrader Node Admin API
 // Same Node Registry as the MT5 nodes, separate route family
-// (/api/v1/ctrader/nodes). No per-node data or book routes exist for cTrader.
+// (/api/v1/ctrader/nodes). Per-node data (groups, symbols, traders, open
+// positions) is a snapshot loaded at login and on refresh — see the
+// "cTrader node data" block below. There are no book routes for cTrader.
 // Live status is delivered over WebSocket, topic ctrader.node_status — see
 // connectCTraderNodeStatusWebSocket below. getNodeStatus is the seed for a
 // page's initial load and must not be polled.
@@ -805,7 +807,212 @@ export interface CTraderNodeStatusAPI {
   sessions: number;
   frames_in: number;
   frames_out: number;
+  /** Messages received per cTrader message type. Diagnostic, not for display. */
+  frames_by_type?: Record<string, number>;
+  /** What the node has loaded from cTrader. null for a node that is not started. */
+  data?: CTraderNodeData | null;
 }
+
+// ── cTrader node data (NexRisk_cTrader_Node_Data_API v1.0) ──────────────────
+// Each connected node loads four lists right after every login and again on
+// refresh, and serves them from memory. They are a snapshot, not a live feed.
+
+export type CTraderFeedState = 'OFFLINE' | 'SYNCING' | 'READY' | 'PARTIAL' | 'FAILED' | 'DEFERRED';
+export type CTraderListState = 'NOT_LOADED' | 'READY' | 'INCOMPLETE' | 'FAILED';
+
+/** One list inside the node's data block. */
+export interface CTraderNodeDataList {
+  state: CTraderListState;
+  stale: boolean;
+  count: number;
+  synced_at_ms: number;
+  duration_ms: number;
+  pages: number;
+  error_code: string;
+  error: string;
+}
+
+/** `data` of the node status object. */
+export interface CTraderNodeData {
+  state: CTraderFeedState;
+  trigger: string;
+  sync_count: number;
+  sync_started_at_ms: number;
+  synced_at_ms: number;
+  duration_ms: number;
+  next_sync_at_ms: number;
+  positions_book_a: number;
+  positions_book_b: number;
+  assets: CTraderNodeDataList;
+  groups: CTraderNodeDataList;
+  symbols: CTraderNodeDataList;
+  traders: CTraderNodeDataList;
+  positions: CTraderNodeDataList;
+}
+
+/** Fields every list answer starts with. */
+export interface CTraderListAnswer {
+  node_id: number;
+  platform: 'CTRADER';
+  feed_state: CTraderFeedState;
+  state: CTraderListState;
+  stale: boolean;
+  synced_at_ms: number;
+  error_code: string;
+  error: string;
+  total: number;
+  generated_at: string;
+}
+
+export interface CTraderGroup {
+  group_id: number;
+  group: string;
+  description: string;
+  enabled: boolean;
+  has_access: boolean;
+  is_dealing_desk: boolean;
+  margin_stopout: number | null;
+}
+export interface CTraderGroupsAnswer extends CTraderListAnswer { groups: CTraderGroup[] }
+
+export interface CTraderSymbol {
+  symbol_id: number;
+  symbol: string;
+  description: string;
+  digits: number;
+  pip_position: number;
+  contract_size: number;
+  currency_base: string;
+  currency_profit: string;
+  base_asset_id: number;
+  quote_asset_id: number;
+  enabled: boolean;
+  trading_mode: string;
+  archived: boolean;
+}
+export interface CTraderSymbolsAnswer extends CTraderListAnswer { symbols: CTraderSymbol[]; include_archived: boolean }
+
+export interface CTraderPaging { returned: number; limit: number; offset: number }
+
+export interface CTraderTrader {
+  trader_id: number;
+  login: number;
+  name: string;
+  email: string;
+  group_id: number;
+  group: string;
+  balance: number;
+  currency: string;
+  leverage: number;
+  account_type: string;
+  access_rights: string;
+  swap_free: boolean;
+  limited_risk: boolean;
+  broker_name: string;
+  registration: number;       // epoch seconds
+  registration_ms: number;
+  last_update_ms: number;
+}
+export interface CTraderTradersAnswer extends CTraderListAnswer, CTraderPaging { traders: CTraderTrader[] }
+
+export interface CTraderPosition {
+  position_id: number;
+  trader_id: number;
+  login: number | null;
+  group_id: number;
+  group: string;
+  symbol_id: number;
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  volume_lots: number | null;
+  volume: number;
+  price_open: number;
+  /** null for now: the service will compute it from cTrader quotes. */
+  price_current: number | null;
+  price_sl: number | null;
+  price_tp: number | null;
+  /** null for now, as price_current. */
+  profit: number | null;
+  swap: number;
+  commission: number;
+  used_margin: number;
+  currency: string;
+  book: 'A' | 'B';
+  time_create: number;        // epoch seconds
+  time_update: number;        // epoch seconds
+  time_create_ms: number;
+  time_update_ms: number;
+  comment: string;
+  label: string;
+}
+export interface CTraderPositionsAnswer extends CTraderListAnswer, CTraderPaging {
+  positions: CTraderPosition[];
+  total_book_a: number;
+  total_book_b: number;
+}
+
+export interface CTraderRefreshAnswer {
+  node_id: number;
+  platform: 'CTRADER';
+  started: boolean;
+  message: string;
+  data: Partial<CTraderNodeData> | null;
+  generated_at: string;
+}
+
+/** A refused request, with the HTTP status the display depends on (503, 429, ...). */
+export class CTraderApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'CTraderApiError';
+    this.status = status;
+  }
+}
+
+async function ctraderFetch<T>(path: string, method: 'GET' | 'POST' = 'GET'): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { method, cache: 'no-store', credentials: 'include' });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new CTraderApiError(body?.error || `HTTP ${response.status}`, response.status);
+  return body as T;
+}
+
+function queryOf(params: Record<string, string | number | boolean | undefined | null>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
+  }
+  const text = q.toString();
+  return text ? `?${text}` : '';
+}
+
+/**
+ * The four lists of a cTrader node and their refresh. A GET is answered from
+ * the service's memory — it never calls cTrader — and says when its rows were
+ * loaded (`synced_at_ms`). A list that failed to load is still a 200, with
+ * `state: 'FAILED'`. A node that is not started throws CTraderApiError 503.
+ */
+export const ctraderDataApi = {
+  getGroups: (id: number) =>
+    ctraderFetch<CTraderGroupsAnswer>(`/api/v1/ctrader/nodes/${id}/groups`),
+
+  getSymbols: (id: number, includeArchived = false) =>
+    ctraderFetch<CTraderSymbolsAnswer>(
+      `/api/v1/ctrader/nodes/${id}/symbols${queryOf({ include_archived: includeArchived ? 'true' : undefined })}`,
+    ),
+
+  getTraders: (id: number, p: { login?: string; group_id?: number; limit?: number; offset?: number } = {}) =>
+    ctraderFetch<CTraderTradersAnswer>(`/api/v1/ctrader/nodes/${id}/traders${queryOf(p)}`),
+
+  getPositions: (id: number, p: { book?: 'A' | 'B'; login?: string; symbol?: string; limit?: number; offset?: number } = {}) =>
+    ctraderFetch<CTraderPositionsAnswer>(`/api/v1/ctrader/nodes/${id}/positions${queryOf(p)}`),
+
+  // Answers at once (202). The end of the load is the NODE_DATA_SYNC event on
+  // topic ctrader.node_status — do not give the spinner a timeout of its own.
+  // Throws 429 within 3 s of the end of the last load, 503 when not connected.
+  refresh: (id: number) =>
+    ctraderFetch<CTraderRefreshAnswer>(`/api/v1/ctrader/nodes/${id}/data/refresh`, 'POST'),
+};
 
 export interface CTraderConnectResult {
   success: boolean;
@@ -972,7 +1179,8 @@ export const ctraderApi = {
 // ── cTrader node live status — WebSocket topic ctrader.node_status ──────────
 // Same socket and same frame as the MT5 topics:
 //   { topic, type: 'SNAPSHOT' | 'EVENT', data, timestamp_ms }
-// For an event the kind is data.type (NODE_STATUS_CHANGE / NODE_TYPE_CHANGE).
+// For an event the kind is data.type (NODE_STATUS_CHANGE / NODE_TYPE_CHANGE /
+// NODE_DATA_SYNC).
 
 export const CTRADER_NODE_STATUS_TOPIC = 'ctrader.node_status';
 
@@ -988,7 +1196,14 @@ export type CTraderNodeWsEvent =
   /** A node entered a new connection state. `node` is its full status object. */
   | { kind: 'status'; nodeId: number; status: string; node?: CTraderNodeStatusAPI; timestampMs: number }
   /** A STANDBY was promoted. Sent once, before the new MASTER starts connecting. */
-  | { kind: 'type_change'; promoted: CTraderNodeTypeChange; demoted?: CTraderNodeTypeChange; timestampMs: number };
+  | { kind: 'type_change'; promoted: CTraderNodeTypeChange; demoted?: CTraderNodeTypeChange; timestampMs: number }
+  /**
+   * A data load of the node started (`state` SYNCING) or finished (READY,
+   * PARTIAL, FAILED). `node` is its full status object, with the `data` block.
+   * A load abandoned because the connection was lost sends none: the 'status'
+   * event away from CONNECTED is its end.
+   */
+  | { kind: 'data_sync'; nodeId: number; state: string; node?: CTraderNodeStatusAPI; timestampMs: number };
 
 /**
  * Turn one raw frame of the shared event socket into a cTrader node event, or
@@ -1013,6 +1228,11 @@ export function parseCTraderNodeFrame(raw: unknown): CTraderNodeWsEvent | null {
   if (data.type === 'NODE_STATUS_CHANGE' && typeof data.node_id === 'number' && typeof data.status === 'string') {
     const node = data.node && typeof data.node === 'object' ? (data.node as CTraderNodeStatusAPI) : undefined;
     return { kind: 'status', nodeId: data.node_id, status: data.status, node, timestampMs };
+  }
+
+  if (data.type === 'NODE_DATA_SYNC' && typeof data.node_id === 'number' && typeof data.state === 'string') {
+    const node = data.node && typeof data.node === 'object' ? (data.node as CTraderNodeStatusAPI) : undefined;
+    return { kind: 'data_sync', nodeId: data.node_id, state: data.state, node, timestampMs };
   }
 
   if (data.type === 'NODE_TYPE_CHANGE' && data.promoted && typeof data.promoted === 'object') {
