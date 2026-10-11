@@ -264,8 +264,7 @@ export function BBookPage() {
   // positions the cTrader MASTER holds in memory: a snapshot, read when the
   // page opens and again each time that node announces the end of a data load
   // (NODE_DATA_SYNC). Nothing is polled. Only the two MASTER nodes count.
-  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('cTrader');
-  const platformSettled = useRef(false);            // default applied, or the operator chose
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('All');   // default: All
   const [gridReady,   setGridReady]   = useState(false);
   const [mt5MasterUp, setMt5MasterUp] = useState<boolean | null>(null);   // null: not known yet
   // undefined: not known yet · null: no cTrader MASTER
@@ -580,15 +579,6 @@ export function BBookPage() {
 
   const mt5Active = mt5MasterUp === true;
   const ctActive  = !!ctMaster && ctMaster.status === 'CONNECTED';
-
-  // Default platform: cTrader. If its master is not connected the default
-  // falls to MT5, and to All when neither master is. Applied once, when both
-  // states are known; after that the choice is the operator's.
-  useEffect(() => {
-    if (platformSettled.current || mt5MasterUp === null || ctMaster === undefined) return;
-    platformSettled.current = true;
-    if (!ctActive) setPlatformFilter(mt5Active ? 'MT5' : 'All');
-  }, [mt5MasterUp, ctMaster, ctActive, mt5Active]);
 
   // Counts, stats and the empty-state text follow a platform change at once.
   useEffect(() => { pullFromGrid(); }, [platformFilter, pullFromGrid]);
@@ -983,7 +973,7 @@ export function BBookPage() {
         <select
           id="bbook-platform"
           value={platformFilter}
-          onChange={(e) => { platformSettled.current = true; setPlatformFilter(e.target.value as PlatformFilter); }}
+          onChange={(e) => setPlatformFilter(e.target.value as PlatformFilter)}
           aria-label="Platform"
           className="w-[150px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
         >
