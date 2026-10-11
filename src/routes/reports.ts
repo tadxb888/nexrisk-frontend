@@ -34,7 +34,9 @@ export async function reportsRoutes(fastify: FastifyInstance): Promise<void> {
         try {
           const { statusCode, headers, body } = await undiciRequest(upstream, {
             method: 'GET',
-            headers: { Accept: 'text/csv' },
+            // Same trust header nexriskApi adds on the JSON path. The C++ service
+            // answers 401 without it.
+            headers: { Accept: 'text/csv', 'X-Internal-Secret': config.internalSecret },
             bodyTimeout: config.nexriskApiTimeoutMs,
             headersTimeout: config.nexriskApiTimeoutMs,
           });
