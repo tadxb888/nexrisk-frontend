@@ -48,6 +48,36 @@ function cs(...defs: (string | ColDef)[]): ColDef[] {
   return defs.map(d => (typeof d === 'string' ? col(d) : d));
 }
 
+// ── Trading platform (MT5 / cTrader) ─────────────────────────
+// The API sends "MT5", "CTRADER" or null (a message that belongs to no hedge
+// in a deployment without a MASTER). A null is an empty cell, not a platform.
+const PLATFORM_LABEL: Record<string, string> = { MT5: 'MT5', CTRADER: 'cTrader' };
+function platformLabel(v: unknown): string {
+  if (v == null || v === '') return '';
+  return PLATFORM_LABEL[String(v).toUpperCase()] ?? String(v);
+}
+const PLATFORM_BADGE: Record<string, { fg: string; bg: string }> = {
+  MT5:     { fg: '#a5c8f0', bg: 'rgba(165,200,240,0.16)' },
+  CTRADER: { fg: '#4ecdc4', bg: 'rgba(78,205,196,0.18)' },
+};
+const platformCol = (field = 'platform'): ColDef => ({
+  field, headerName: 'Platform', minWidth: 110,
+  // Column filter and sort work on what is shown ("cTrader"), not the wire value.
+  filterValueGetter: (p) => platformLabel(p.data?.[field]),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cellRenderer: (p: any) => {
+    const label = platformLabel(p.value);
+    if (!label) return '';
+    const c = PLATFORM_BADGE[String(p.value).toUpperCase()] ?? { fg: '#ccc', bg: 'rgba(160,160,160,0.18)' };
+    return (
+      <span style={{
+        display: 'inline-block', padding: '1px 8px', borderRadius: 999,
+        fontSize: '11px', fontWeight: 600, backgroundColor: c.bg, color: c.fg,
+      }}>{label}</span>
+    );
+  },
+});
+
 // ── Types ────────────────────────────────────────────────────
 type ResponseShape = 'paginated' | 'profitability' | 'health-escalations' | 'raw-data' | 'json-config' | 'lp-volume';
 
@@ -59,6 +89,10 @@ interface ReportDef {
   id: string; label: string; description: string; category: string; path: string;
   filters: FilterDef[]; columns: ColDef[]; secondaryColumns?: ColDef[];
   responseShape: ResponseShape; csvSupported: boolean; defaultLimit: number; note?: string;
+  /** Row-detail labels for fields whose name would mislead if shown as it is. */
+  fieldLabels?: Record<string, string>;
+  /** Text for a run that matched nothing, given the filters that run was made with. */
+  emptyMessage?: (ranFilters: Record<string, string>) => string;
 }
 interface Category { id: string; label: string; color: string; reports: ReportDef[]; }
 interface PaginationState { total: number; limit: number; offset: number; }
@@ -137,9 +171,22 @@ const CATEGORIES: Category[] = [
           { type: 'select', id: 'direction', label: 'Direction', options: [
             { value: '', label: 'All' }, { value: 'sent', label: 'Sent' }, { value: 'received', label: 'Received' },
           ]},
+          // All sends no platform parameter: rows of both platforms, and rows with none.
+          { type: 'select', id: 'platform', label: 'Platform', options: [
+            { value: '', label: 'All' }, { value: 'MT5', label: 'MT5' }, { value: 'CTRADER', label: 'cTrader' },
+          ]},
         ],
         // Fewer columns — detail visible in panel
-        columns: cs('id', 'lp_id', 'direction', 'msg_type', col('msg_type_name', { minWidth: 130 }), ts('session_ts'), col('clord_id', { minWidth: 160 }), 'symbol', 'exec_type', 'ord_status', 'login_id'),
+        columns: cs('id', platformCol(), 'lp_id', 'direction', 'msg_type', col('msg_type_name', { minWidth: 130 }), ts('session_ts'), col('clord_id', { minWidth: 160 }), 'symbol', 'exec_type', 'ord_status', 'login_id'),
+        // The node fields keep their mt5_ names but hold a cTrader node on a cTrader row.
+        fieldLabels: { mt5_node_id: 'Node ID', mt5_node_name: 'Node' },
+        // An empty platform view is a normal result, not an error.
+        emptyMessage: (ran) => {
+          const who = platformLabel(ran.platform);
+          const narrowed = Object.keys(ran).some(k => k !== 'platform');
+          if (narrowed) return who ? `No FIX messages for ${who} match these filters` : 'No FIX messages match these filters';
+          return who ? `No FIX messages for ${who} in the last 24 hours` : 'No FIX messages in the last 24 hours';
+        },
       },
       {
         id: 'execution-rejections', label: 'Rejections', category: 'execution',
@@ -438,11 +485,13 @@ function RowDetailPanel({
   row,
   reportLabel,
   categoryColor,
+  fieldLabels,
   onClose,
 }: {
   row: Record<string, unknown>;
   reportLabel: string;
   categoryColor: string;
+  fieldLabels?: Record<string, string>;
   onClose: () => void;
 }) {
   return (
@@ -462,7 +511,7 @@ function RowDetailPanel({
       {/* Fields */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {Object.entries(row).map(([key, val]) => {
-          const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          const label = fieldLabels?.[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
           const { text, isLong } = fmtPanelValue(val);
           return (
             <div key={key}>
@@ -1156,6 +1205,8 @@ export function ReportsPage() {
   const [loading, setLoading]                 = useState(false);
   const [error, setError]                     = useState<string | null>(null);
   const [hasRun, setHasRun]                   = useState(false);
+  // The filters the shown result was fetched with (the controls may have moved since).
+  const [ranFilters, setRanFilters]           = useState<Record<string, string>>({});
   // New state
   const [activeDateQuick, setActiveDateQuick] = useState<number | null>(null);
   const [selectedRow, setSelectedRow]         = useState<Record<string, unknown> | null>(null);
@@ -1198,6 +1249,7 @@ export function ReportsPage() {
     setPagination(null);
     setError(null);
     setHasRun(false);
+    setRanFilters({});
     setActiveDateQuick(null);
     setSelectedRow(null);
   }
@@ -1217,9 +1269,11 @@ export function ReportsPage() {
     setSelectedRow(null);
 
     const sp = new URLSearchParams();
+    const sent: Record<string, string> = {};
     for (const [k, v] of Object.entries(filterValues)) {
-      if (v && v.trim()) sp.set(k, v.trim());
+      if (v && v.trim()) { sp.set(k, v.trim()); sent[k] = v.trim(); }
     }
+    setRanFilters(sent);
     const shape = selectedReport.responseShape;
     const isPaged = shape === 'paginated' || shape === 'profitability' || shape === 'health-escalations';
     if (isPaged && selectedReport.defaultLimit > 0) {
@@ -1352,9 +1406,11 @@ export function ReportsPage() {
     if (shape === 'paginated') {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const rows: any[] = responseData.data ?? [];
+      const emptyText = selectedReport.emptyMessage?.(ranFilters);
       return (
         <div className="flex-1 min-h-0">
-          <AgGridReact {...gridProps} rowData={rows} columnDefs={selectedReport.columns} />
+          <AgGridReact {...gridProps} rowData={rows} columnDefs={selectedReport.columns}
+            {...(emptyText ? { overlayNoRowsTemplate: emptyText } : {})} />
         </div>
       );
     }
@@ -1607,6 +1663,7 @@ export function ReportsPage() {
                   row={selectedRow}
                   reportLabel={selectedReport.label}
                   categoryColor={category.color}
+                  fieldLabels={selectedReport.fieldLabels}
                   onClose={() => setSelectedRow(null)}
                 />
               )}
