@@ -489,7 +489,9 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
    */
   fastify.get(
     '/ctrader/nodes/:id/positions',
-    ctraderRead,
+    // Same right as the MT5 position routes: these rows are shown on the
+    // B-Book page next to the MT5 ones, to the same people.
+    { preHandler: [fastify.authenticate, fastify.requireCapability('positions.read')] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = nodeIdParams.parse(request.params);
       const query = ctraderPositionsQuery.parse(request.query);

@@ -6,7 +6,11 @@ import { themeQuartz } from 'ag-grid-community';
 import { clsx } from 'clsx';
 
 import { BBookCharts } from '@/components/charts/BBookCharts';
-import { mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAPI, type BBookWsEvent } from '@/services/api';
+import {
+  mt5Api, connectBBookWebSocket, type MT5PositionWithNode, type MT5NodeAPI, type BBookWsEvent,
+  ctraderApi, ctraderDataApi, CTraderApiError, connectSystemHealthWebSocket,
+  type CTraderPosition, type CTraderNodeWsEvent,
+} from '@/services/api';
 import { fmtHdrMoney, fmtHdrCompact, pnlColor, usePortfolioStats } from '@/stores/PortfolioStatsContext';
 import { CardsPeriodToggle } from '@/components/portfolio/CardsPeriodToggle';
 
@@ -25,8 +29,12 @@ const gridTheme = themeQuartz.withParams({
 // ======================
 // TYPES
 // ======================
+export type BBookPlatform = 'MT5' | 'cTrader';
+type PlatformFilter = 'All' | BBookPlatform;
+
 export interface BBookPosition {
-  login: number;
+  platform: BBookPlatform;
+  login: number;       // 0 when cTrader holds no account for the position
   symbol: string;
   position_id: number;
   time: string;        // ISO string (derived from time_create unix seconds)
@@ -35,8 +43,8 @@ export interface BBookPosition {
   price_open: number;
   sl: number | null;   // price_sl — 0 mapped to null
   tp: number | null;   // price_tp — 0 mapped to null
-  price_current: number;
-  profit: number;
+  price_current: number | null;   // null: cTrader does not send it yet
+  profit: number | null;          // null: cTrader does not send it yet
   swap: number;
   commission: number;
   hedge: 'No' | 'Rule' | 'Manual';   // reserved for future hedge logic
@@ -60,6 +68,7 @@ type WsStatus = 'connecting' | 'live' | 'reconnecting' | 'error';
 // ======================
 function mapPosition(raw: MT5PositionWithNode): BBookPosition {
   return {
+    platform:      'MT5',
     login:         raw.login,
     symbol:        raw.symbol,
     position_id:   raw.position_id,
@@ -77,6 +86,34 @@ function mapPosition(raw: MT5PositionWithNode): BBookPosition {
     lp:            null,
     group:         '',
     server:        raw.nodeName,
+  };
+}
+
+/**
+ * A cTrader open position (book B) as a B-Book row. Field names match MT5's by
+ * design of the Node Data API, so the mapping mirrors mapPosition. What cTrader
+ * does not send stays empty: current price and profit are null, never 0.
+ */
+function mapCTraderPosition(raw: CTraderPosition, nodeName: string): BBookPosition {
+  return {
+    platform:      'cTrader',
+    login:         raw.login ?? 0,
+    symbol:        raw.symbol || `#${raw.symbol_id}`,
+    position_id:   raw.position_id,
+    time:          new Date(raw.time_create * 1000).toISOString(),
+    type:          raw.action === 'BUY' ? 'SELL' : 'BUY',  // broker takes opposite side
+    volume:        raw.volume_lots ?? 0,
+    price_open:    raw.price_open,
+    price_current: raw.price_current,
+    sl:            raw.price_sl,
+    tp:            raw.price_tp,
+    profit:        raw.profit === null ? null : -raw.profit,  // broker P&L is inverse of client
+    swap:          raw.swap,
+    commission:    raw.commission,
+    hedge:         'No',
+    lp:            null,
+    group:         raw.group,
+    server:        nodeName,
   };
 }
 
@@ -100,7 +137,12 @@ const fmtPrice = (p: ValueFormatterParams) => {
   return Number(v).toFixed(5);
 };
 
-const getRowId = (r: BBookPosition) => `${r.position_id}|${r.login}|${r.symbol}`;
+// MT5 ids are unchanged; cTrader rows carry a prefix so the two platforms'
+// position ids can never meet.
+const getRowId = (r: BBookPosition) =>
+  r.platform === 'cTrader'
+    ? `CT|${r.position_id}|${r.login}|${r.symbol}`
+    : `${r.position_id}|${r.login}|${r.symbol}`;
 
 // Stable empty reference for the grid's rowData. The grid row model is the
 // source of truth for live rows and is fed exclusively via transactions, so
@@ -217,6 +259,23 @@ export function BBookPage() {
   const [wsStatus,          setWsStatus]          = useState<WsStatus>('connecting');
   const [error,             setError]             = useState<string | null>(null);
 
+  // ── Platforms ───────────────────────────────────────────────
+  // MT5 rows are live (topic mt5.position). cTrader rows are the B-book
+  // positions the cTrader MASTER holds in memory: a snapshot, read when the
+  // page opens and again each time that node announces the end of a data load
+  // (NODE_DATA_SYNC). Nothing is polled. Only the two MASTER nodes count.
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('cTrader');
+  const platformSettled = useRef(false);            // default applied, or the operator chose
+  const [gridReady,   setGridReady]   = useState(false);
+  const [mt5MasterUp, setMt5MasterUp] = useState<boolean | null>(null);   // null: not known yet
+  // undefined: not known yet · null: no cTrader MASTER
+  const [ctMaster,    setCtMaster]    = useState<{ id: number; name: string; status: string } | null | undefined>(undefined);
+  const [ctTick,      setCtTick]      = useState(0);                      // bump = read cTrader positions again
+  const [ctLoadedAt,  setCtLoadedAt]  = useState<number | null>(null);
+  const [ctNote,      setCtNote]      = useState<string | null>(null);
+  const ctMasterRef = useRef(ctMaster);
+  ctMasterRef.current = ctMaster;
+
   // Filter state
   const [groupInput,   setGroupInput]   = useState('');
   const [symbolInput,  setSymbolInput]  = useState('');
@@ -241,16 +300,19 @@ export function BBookPage() {
 
   // Toolbar filter values mirrored into a ref so the grid's external-filter
   // callbacks always read current values without being re-bound on each render.
-  const filtersRef = useRef({ group: '', symbol: '', server: '' });
+  const filtersRef = useRef<{ group: string; symbol: string; server: string; platform: PlatformFilter }>(
+    { group: '', symbol: '', server: '', platform: 'cTrader' },
+  );
   useEffect(() => {
-    filtersRef.current = { group: groupInput, symbol: symbolInput, server: filterServer };
+    filtersRef.current = { group: groupInput, symbol: symbolInput, server: filterServer, platform: platformFilter };
     gridRef.current?.api?.onFilterChanged();
-  }, [groupInput, symbolInput, filterServer]);
+  }, [groupInput, symbolInput, filterServer, platformFilter]);
 
   // Does a row pass the toolbar filters. Mirrors the previous React-side filter
   // exactly; reads filtersRef so it never goes stale inside the grid callback.
   const rowPassesFilters = useCallback((p: BBookPosition): boolean => {
-    const { group, symbol, server } = filtersRef.current;
+    const { group, symbol, server, platform } = filtersRef.current;
+    if (platform !== 'All' && p.platform !== platform) return false;
     const gTerm = group.trim().toUpperCase();
     const sTerm = symbol.trim().toUpperCase();
     if (gTerm) {
@@ -261,7 +323,9 @@ export function BBookPage() {
     if (sTerm && !p.symbol.toUpperCase().includes(sTerm)) return false;
     // filterServer is empty only during initial load (before the master node
     // resolves). In that window everything shows; then it narrows to the node.
-    if (server !== '' && p.server !== server) return false;
+    // It narrows the MT5 rows to the MT5 master; cTrader rows are read from
+    // the cTrader master only, so they need no such narrowing.
+    if (p.platform === 'MT5' && server !== '' && p.server !== server) return false;
     return true;
   }, []);
 
@@ -276,8 +340,10 @@ export function BBookPage() {
         // page still renders something sensible.
         const master = connected.find(n => n.is_master) ?? connected[0];
         if (master) setFilterServer(prev => prev === '' ? master.node_name : prev);
+        // First word on the MT5 master; the health feed below keeps it current.
+        setMt5MasterUp(prev => prev ?? connected.some(n => n.is_master));
       })
-      .catch(() => { /* non-fatal — node badges just won't show */ });
+      .catch(() => { setMt5MasterUp(prev => prev ?? false); /* non-fatal — node badges just won't show */ });
   }, []);
 
   // ── Slow read-back from the grid (charts / stats / dropdowns / overlays) ──
@@ -305,7 +371,8 @@ export function BBookPage() {
   // rows no longer present. applyTransaction preserves sort, filters, column
   // state, selection and scroll position — so a reconnect snapshot does not
   // disturb the user's grid state.
-  const reconcile = useCallback((rows: BBookPosition[]) => {
+  // A reconcile covers ONE platform: rows of the other platform are left alone.
+  const reconcile = useCallback((rows: BBookPosition[], platform: BBookPlatform = 'MT5') => {
     const api = gridRef.current?.api;
     if (!api) return;
 
@@ -318,7 +385,7 @@ export function BBookPage() {
 
     api.forEachNode(node => {
       const id = node.id;
-      if (id !== undefined && !incoming.has(id) && node.data) remove.push(node.data);
+      if (id !== undefined && node.data && node.data.platform === platform && !incoming.has(id)) remove.push(node.data);
     });
     incoming.forEach((row, id) => {
       (api.getRowNode(id) ? update : add).push(row);
@@ -326,9 +393,12 @@ export function BBookPage() {
 
     api.applyTransaction({ add, update, remove });
 
-    const m = new Map<number, string>();
-    incoming.forEach((row, id) => m.set(row.position_id, id));
-    pidToRowIdRef.current = m;
+    // The index serves the MT5 live events only (they carry a bare position_id).
+    if (platform === 'MT5') {
+      const m = new Map<number, string>();
+      incoming.forEach((row, id) => m.set(row.position_id, id));
+      pidToRowIdRef.current = m;
+    }
 
     pullFromGrid();   // reflect the seed/reconcile immediately (sync transaction)
   }, [pullFromGrid]);
@@ -395,6 +465,134 @@ export function BBookPage() {
     }
   }, [reconcile]);
 
+  // ── cTrader B-book positions ─────────────────────────────────────────────
+  // Read from the cTrader MASTER, a page at a time, and reconciled into the
+  // grid as their own platform. A node that is not started holds no data
+  // (503): its rows are cleared.
+  const ctRequestNo = useRef(0);
+  const loadCTrader = useCallback(async () => {
+    const master = ctMasterRef.current;
+    if (master === undefined || !gridRef.current?.api) return;
+    const mine = ++ctRequestNo.current;
+    if (master === null) { reconcile([], 'cTrader'); setCtLoadedAt(null); setCtNote(null); return; }
+    try {
+      const rows: BBookPosition[] = [];
+      let offset = 0;
+      let loadedAt = 0;
+      let note: string | null = null;
+      for (;;) {
+        const res = await ctraderDataApi.getPositions(master.id, { book: 'B', limit: 1000, offset });
+        if (mine !== ctRequestNo.current) return;
+        loadedAt = res.synced_at_ms;
+        if (res.state === 'FAILED') note = `cTrader positions failed to load (${res.error_code || 'UNKNOWN_ERROR'})`;
+        else if (res.state === 'INCOMPLETE') note = 'cTrader positions may be missing records';
+        else if (res.stale) note = 'cTrader positions are stale: the node is not connected';
+        for (const p of res.positions ?? []) rows.push(mapCTraderPosition(p, master.name));
+        offset += res.returned;
+        if (!res.returned || offset >= res.total) break;
+      }
+      reconcile(rows, 'cTrader');
+      setCtLoadedAt(loadedAt || null);
+      setCtNote(note);
+    } catch (e) {
+      if (mine !== ctRequestNo.current) return;
+      if (e instanceof CTraderApiError && e.status === 503) {
+        reconcile([], 'cTrader');
+        setCtLoadedAt(null);
+        setCtNote(null);
+      } else {
+        setCtNote(`cTrader positions could not be read: ${e instanceof Error && e.message ? e.message : 'request failed'}`);
+      }
+    }
+  }, [reconcile]);
+
+  useEffect(() => {
+    if (gridReady && ctMaster !== undefined) void loadCTrader();
+  }, [gridReady, ctMaster?.id, ctTick, loadCTrader]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Master state of both platforms, live ─────────────────────────────────
+  // One socket: system.health says whether the MT5 master is connected (the
+  // same source as the bottom bar), and topic ctrader.node_status carries the
+  // cTrader master's state and the end of its data loads.
+  useEffect(() => {
+    let cancelled = false;
+    let events = 0;
+    let openedBefore = false;
+
+    const seedCTraderMaster = () => {
+      const at = events;
+      ctraderApi.getMaster()
+        .then((res) => {
+          if (cancelled || events !== at) return;      // an event overtook the read
+          const m = res.master;
+          setCtMaster(m ? { id: m.node_id, name: m.node_name, status: m.connection_status } : null);
+          setCtTick(t => t + 1);
+        })
+        .catch(() => { if (!cancelled) setCtMaster(prev => (prev === undefined ? null : prev)); });
+    };
+
+    const onCTraderEvent = (e: CTraderNodeWsEvent) => {
+      events += 1;
+      if (e.kind === 'snapshot') {
+        const m = e.nodes.find(n => n.is_master || n.node_type === 'MASTER');
+        setCtMaster(m ? { id: m.node_id, name: m.node_name, status: m.connection_status } : null);
+        setCtTick(t => t + 1);
+        return;
+      }
+      if (e.kind === 'type_change') {
+        if (e.promoted.new_type === 'MASTER') {
+          setCtMaster({ id: e.promoted.node_id, name: e.promoted.node_name, status: 'CONNECTING' });
+          setCtTick(t => t + 1);
+        }
+        return;
+      }
+      const node = e.node;
+      const current = ctMasterRef.current;
+      if (node) {
+        if (node.node_type !== 'MASTER' && !node.is_master) return;
+        setCtMaster({ id: node.node_id, name: node.node_name, status: node.connection_status });
+      } else if (e.kind === 'status' && current && current.id === e.nodeId) {
+        setCtMaster({ ...current, status: e.status });
+      } else if (!current || current.id !== e.nodeId) {
+        return;
+      }
+      // A state change, or the end of a data load: read the positions again.
+      // (The start of a load changes nothing that is held.)
+      if (e.kind === 'status' || e.state !== 'SYNCING') setCtTick(t => t + 1);
+    };
+
+    seedCTraderMaster();
+    const stop = connectSystemHealthWebSocket(
+      (p) => {
+        const up = !!p.master?.connected;
+        setMt5MasterUp(prev => (prev === up ? prev : up));
+      },
+      (status) => {
+        if (status !== 'open') return;
+        // Events sent while the socket was down are lost: read the master again.
+        if (openedBefore) seedCTraderMaster();
+        openedBefore = true;
+      },
+      onCTraderEvent,
+    );
+    return () => { cancelled = true; stop(); };
+  }, []);
+
+  const mt5Active = mt5MasterUp === true;
+  const ctActive  = !!ctMaster && ctMaster.status === 'CONNECTED';
+
+  // Default platform: cTrader. If its master is not connected the default
+  // falls to MT5, and to All when neither master is. Applied once, when both
+  // states are known; after that the choice is the operator's.
+  useEffect(() => {
+    if (platformSettled.current || mt5MasterUp === null || ctMaster === undefined) return;
+    platformSettled.current = true;
+    if (!ctActive) setPlatformFilter(mt5Active ? 'MT5' : 'All');
+  }, [mt5MasterUp, ctMaster, ctActive, mt5Active]);
+
+  // Counts, stats and the empty-state text follow a platform change at once.
+  useEffect(() => { pullFromGrid(); }, [platformFilter, pullFromGrid]);
+
   // Slow refresh so price drift reflects in charts/stats between structural
   // changes. Structural changes (seed/reconnect) update immediately via
   // reconcile -> pullFromGrid; this timer just keeps prices reasonably fresh.
@@ -413,7 +611,9 @@ export function BBookPage() {
   // COLUMN DEFINITIONS
   // ======================
   const columnDefs = useMemo<ColDef<BBookPosition>[]>(() => [
-    { field: 'login',       headerName: 'Login ID',   filter: 'agNumberColumnFilter', width: 120, pinned: 'left' },
+    { field: 'platform',    headerName: 'Platform',   filter: 'agSetColumnFilter',    width: 105, pinned: 'left', filterParams: { values: ['MT5', 'cTrader'] } },
+    { field: 'login',       headerName: 'Login ID',   filter: 'agNumberColumnFilter', width: 120, pinned: 'left',
+      valueFormatter: (p) => (p.value === 0 ? '—' : String(p.value ?? '')) },
     { field: 'symbol',      headerName: 'Symbol',     filter: 'agSetColumnFilter',    width: 110, pinned: 'left' },
     { field: 'position_id', headerName: 'Position ID', filter: 'agNumberColumnFilter', width: 120 },
     {
@@ -457,7 +657,8 @@ export function BBookPage() {
       // rather than recreated per tick — this is the hot column and the main
       // source of the residual tooltip/fiber retention.
       valueFormatter: (p) => {
-        const v = (p.value as number) ?? 0;
+        if (p.value === null || p.value === undefined) return '—';   // not sent (cTrader)
+        const v = p.value as number;
         return (v >= 0 ? '$' : '-$') + Math.abs(v).toFixed(2);
       },
       cellStyle: (p) => {
@@ -507,6 +708,9 @@ export function BBookPage() {
     // detached-cell retention seen in heap snapshots. Native tooltips are
     // browser-managed and cannot leak.
     enableBrowserTooltips: true,
+    // The page draws its own empty-state text over the grid; the grid's
+    // "No Rows To Show" would print on top of it.
+    suppressNoRowsOverlay: true,
     statusBar: {
       statusPanels: [
         { statusPanel: 'agTotalAndFilteredRowCountComponent' },
@@ -519,8 +723,8 @@ export function BBookPage() {
   // External (toolbar) filter — runs inside the grid so live transaction
   // updates are filtered in place without ever re-binding rowData.
   const isExternalFilterPresent = useCallback(() => {
-    const { group, symbol, server } = filtersRef.current;
-    return group.trim() !== '' || symbol.trim() !== '' || server !== '';
+    const { group, symbol, server, platform } = filtersRef.current;
+    return group.trim() !== '' || symbol.trim() !== '' || server !== '' || platform !== 'All';
   }, []);
   const doesExternalFilterPass = useCallback(
     (node: IRowNode<BBookPosition>) => (node.data ? rowPassesFilters(node.data) : true),
@@ -531,6 +735,7 @@ export function BBookPage() {
     // Grid API now exists — seed it from REST. The WS SNAPSHOT will reconcile
     // on top once the socket connects.
     fetchPositions();
+    setGridReady(true);     // the cTrader rows are read once the grid can take them
     setTimeout(() => gridRef.current?.api?.autoSizeAllColumns(), 0);
   }, [fetchPositions]);
 
@@ -556,7 +761,7 @@ export function BBookPage() {
   // ======================
   const stats = useMemo(() => {
     const src = filteredPositions;
-    const totalPnL  = src.reduce((s, p) => s + p.profit, 0);
+    const totalPnL  = src.reduce((s, p) => s + (p.profit ?? 0), 0);
     const totalSwap = src.reduce((s, p) => s + (p.swap ?? 0), 0);
     const totalComm = src.reduce((s, p) => s + (p.commission ?? 0), 0);
     const totalLots = src.reduce((s, p) => s + p.volume, 0);
@@ -578,6 +783,33 @@ export function BBookPage() {
   }, [filteredPositions]);
 
   const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '';
+
+  // The charts sum profit; a position without one counts as nothing there.
+  const chartPositions = useMemo(
+    () => filteredPositions.map(p => ({ ...p, profit: p.profit ?? 0 })),
+    [filteredPositions],
+  );
+
+  // What an empty grid means, in words. null = there are rows to show.
+  const emptyState = useMemo<{ title: string; hint: string } | null>(() => {
+    if (error || filteredPositions.length > 0) return null;
+    if (rowCount === 0 && wsStatus !== 'live' && platformFilter !== 'cTrader') return null;   // still connecting
+    if (hasActiveFilters && rowCount > 0) return { title: 'No positions match the filters', hint: '' };
+    if (platformFilter === 'cTrader') {
+      if (ctMaster === undefined) return null;                                               // not known yet
+      return {
+        title: 'No open B-Book positions on cTrader',
+        hint: ctMaster === null ? 'No cTrader MASTER node is configured.'
+          : ctMaster.status !== 'CONNECTED' ? `${ctMaster.name} is not connected.`
+          : `${ctMaster.name} holds none. cTrader positions are read when the node loads its data, not tick by tick.`,
+      };
+    }
+    const mt5Hint = activeNodes.length > 0
+      ? 'Assign MT5 groups to the B-Book in Node Management, or there are no open positions.'
+      : 'No connected MT5 nodes found. Go to Node Management to connect your MT5 server.';
+    if (platformFilter === 'MT5') return { title: 'No open B-Book positions on MT5', hint: mt5Hint };
+    return { title: 'No positions in B-Book', hint: mt5Hint };
+  }, [error, filteredPositions.length, rowCount, wsStatus, platformFilter, hasActiveFilters, ctMaster, activeNodes.length]);
 
   // ── Period-scoped derived values for the B-Book card ─────────────────────
   // Source: usePortfolioStats() — the same hook the Portfolio page uses.
@@ -745,6 +977,21 @@ export function BBookPage() {
       <div className="px-4 py-1.5 border-b border-[#505050] flex items-center gap-4" style={{ backgroundColor: '#2a292c' }}>
         <span className="text-[10px] text-[#666] uppercase tracking-wider font-medium">Filters</span>
 
+        {/* Platform — only the two MASTER nodes count. A platform whose master
+            is not connected cannot be chosen. */}
+        <label htmlFor="bbook-platform" className="text-xs text-[#d2d6e2]" style={{ marginRight: -8 }}>Platform</label>
+        <select
+          id="bbook-platform"
+          value={platformFilter}
+          onChange={(e) => { platformSettled.current = true; setPlatformFilter(e.target.value as PlatformFilter); }}
+          aria-label="Platform"
+          className="w-[150px] bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#49b3b3]"
+        >
+          <option value="All">All</option>
+          <option value="MT5" disabled={!mt5Active}>{mt5Active ? 'MT5' : 'MT5 (not connected)'}</option>
+          <option value="cTrader" disabled={!ctActive}>{ctActive ? 'cTrader' : 'cTrader (not connected)'}</option>
+        </select>
+
         <div className="relative">
           <input
             type="text"
@@ -795,8 +1042,22 @@ export function BBookPage() {
           </button>
         )}
 
+        {/* cTrader rows are a snapshot: say when it was taken, and any fault. */}
+        {platformFilter !== 'MT5' && (ctLoadedAt !== null || ctNote) && (
+          <span className="text-xs ml-auto" style={{ color: ctNote ? '#e0a020' : '#d2d6e2' }}>
+            {ctNote ?? (
+              <>cTrader positions as of{' '}
+                <span className="font-mono text-white">
+                  {new Date(ctLoadedAt as number).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                {' '}· not live
+              </>
+            )}
+          </span>
+        )}
+
         {hasActiveFilters && (
-          <span className="text-[10px] text-[#49b3b3] font-mono ml-auto">
+          <span className={clsx('text-[10px] text-[#49b3b3] font-mono', !(platformFilter !== 'MT5' && (ctLoadedAt !== null || ctNote)) && 'ml-auto')}>
             {filteredPositions.length} of {positions.length} positions
           </span>
         )}
@@ -836,15 +1097,11 @@ export function BBookPage() {
           )}
 
           {/* Empty state */}
-          {wsStatus === 'live' && !error && rowCount === 0 && (
+          {emptyState && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-center gap-2"
-                 style={{ backgroundColor: '#232326' }}>
-              <p className="text-[#999] text-sm">No positions in B-Book</p>
-              <p className="text-[#666] text-xs">
-                {activeNodes.length > 0
-                  ? 'Assign MT5 groups to the B-Book in Node Management, or there are no open positions.'
-                  : 'No connected MT5 nodes found. Go to Node Management to connect your MT5 server.'}
-              </p>
+                 style={{ backgroundColor: '#232326', top: 36 }}>
+              <p className="text-[#d2d6e2] text-sm">{emptyState.title}</p>
+              {emptyState.hint && <p className="text-[#d2d6e2] text-xs">{emptyState.hint}</p>}
             </div>
           )}
         </div>
@@ -858,7 +1115,7 @@ export function BBookPage() {
           style={{ backgroundColor: '#232326' }}
         >
           <BBookCharts
-            positions={filteredPositions}
+            positions={chartPositions}
             collapsed={chartsCollapsed}
             onToggle={() => setChartsCollapsed(!chartsCollapsed)}
           />
