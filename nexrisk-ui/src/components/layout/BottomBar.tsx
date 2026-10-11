@@ -4,9 +4,14 @@
 // Subscribes to the `system.health` WebSocket topic via the BFF and renders
 // a row of cells across the bottom of the app:
 //
-//   [Master cell] [Status cell] [CPU] [Mem] [Disk] [MT5] [LP] [Loss] [Time]
+//   [Master-MT5 cell] [Status cell] [Master-cTrader cell] [Status cell]
+//   [CPU] [Mem] [Disk] [MT5] [LP] [Loss] [Time]
 //
-// The Master + Status cells share a combined connection state machine:
+// The cTrader pair is shown only when cTrader has a MASTER. Its name and state
+// are seeded once from GET /api/v1/ctrader/master and then follow the
+// ctrader.node_status events that arrive on this same socket. No polling.
+//
+// The Master-MT5 + Status cells share a combined connection state machine:
 //
 //   connected    — WS open, master.connected: true
 //   offline      — WS open, master.connected: false (MT5 master node down)
@@ -28,6 +33,8 @@ import { useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import {
   connectSystemHealthWebSocket,
+  ctraderApi,
+  type CTraderNodeWsEvent,
   type SystemHealthPayload,
   type SystemHealthThreshold,
   type SystemHealthWsStatus,
@@ -106,6 +113,10 @@ function colorForState(state: MetricState): string {
 // ── MetricCell ──────────────────────────────────────────────────────────────
 interface MetricCellProps {
   label:    string;
+  /** Shown instead of `label` below 1536 px when `compact` is set. */
+  shortLabel?: string;
+  /** The bar carries the extra cTrader cells: use the short label on narrower screens. */
+  compact?: boolean;
   value:    number | null;
   unit:     string;
   state:    MetricState;
@@ -114,19 +125,24 @@ interface MetricCellProps {
   title?:   string;
 }
 
-function MetricCell({ label, value, unit, state, pulsing, dp, title }: MetricCellProps) {
+function MetricCell({ label, shortLabel, compact, value, unit, state, pulsing, dp, title }: MetricCellProps) {
   const color = colorForState(state);
   const showDash = state === 'no_data' || state === 'stale' || value == null;
+  const shorten = !!compact && !!shortLabel;
   return (
     <div
       className={clsx(
-        'flex-1 flex items-center justify-center gap-1.5 border-r',
+        'flex-1 flex items-center justify-center gap-1.5 border-r whitespace-nowrap',
         pulsing && 'nexrisk-alert-pulse',
       )}
       style={{ borderColor: COLOR_DIVIDER }}
-      title={title}
+      title={shorten && title ? `${label}\n\n${title}` : title}
     >
-      <span style={{ color: COLOR_LABEL }}>{label}</span>
+      <span style={{ color: COLOR_LABEL }}>
+        {shorten
+          ? (<><span className="hidden 2xl:inline">{label}</span><span className="2xl:hidden">{shortLabel}</span></>)
+          : label}
+      </span>
       <span
         className="font-mono"
         style={{ color, fontWeight: state === 'alert' ? 700 : 400 }}
@@ -175,6 +191,34 @@ function deriveConnState(
   return 'connected';
 }
 
+// ── cTrader MASTER ──────────────────────────────────────────────────────────
+// The five connection states of a cTrader node, in the bar's vocabulary.
+// "Offline" has the same meaning as for MT5: the platform is up, this node is
+// not connected. "Disconnected" stays reserved for the browser's own socket.
+interface CTraderMaster { id: number; name: string; status: string; }
+
+interface CTraderConnConfig { dotColor: string; statusText: string; statusColor: string; bold: boolean; tooltip: string; }
+
+function ctraderConn(status: string): CTraderConnConfig {
+  switch (status) {
+    case 'CONNECTED':
+      return { dotColor: COLOR_PILL_GREEN, statusText: 'Connected', statusColor: COLOR_OK, bold: false,
+        tooltip: 'Master cTrader node is online.' };
+    case 'CONNECTING':
+      return { dotColor: COLOR_WARN, statusText: 'Connecting', statusColor: COLOR_WARN, bold: false,
+        tooltip: 'The master cTrader node is connecting.' };
+    case 'RECONNECTING':
+      return { dotColor: COLOR_WARN, statusText: 'Reconnecting', statusColor: COLOR_WARN, bold: true,
+        tooltip: 'The connection to the master cTrader node failed or was lost. It retries by itself.\n\nDetails: Settings → cTrader Servers.' };
+    case 'ERROR':
+      return { dotColor: COLOR_PILL_RED, statusText: 'Error', statusColor: COLOR_ALERT, bold: true,
+        tooltip: 'The master cTrader server refused the login or the manager\'s rights. It does not retry.\n\nCorrect the node in Settings → cTrader Servers.' };
+    default:
+      return { dotColor: COLOR_PILL_RED, statusText: 'Offline', statusColor: COLOR_ALERT, bold: true,
+        tooltip: 'The master cTrader node is not connected: it was stopped or is disabled.\n\nConnect it in Settings → cTrader Servers.' };
+  }
+}
+
 // ── Tooltip helpers ─────────────────────────────────────────────────────────
 function formatThreshold(value: number, unit: string): string {
   return unit === '%' ? `${value}${unit}` : `${value} ${unit}`;
@@ -211,8 +255,58 @@ export function BottomBar() {
   // Scoped diagnostic — first frame only, per the notification-milestone pattern.
   const loggedFirstFrameRef = useRef<boolean>(false);
 
+  // cTrader MASTER: null until known, and when cTrader has none.
+  const [ctMaster, setCtMaster] = useState<CTraderMaster | null>(null);
+  // Counts the cTrader events seen. A seed read that an event overtook is
+  // older than that event and is dropped.
+  const ctEventSeqRef = useRef(0);
+  const everOpenedRef = useRef(false);
+
   // ── WebSocket lifecycle ───────────────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false;
+
+    // Seed: once when the bar mounts, and again when the socket comes back
+    // after a drop (events sent meanwhile are lost). Never on a timer.
+    const seedCTraderMaster = () => {
+      const seqAtStart = ctEventSeqRef.current;
+      ctraderApi.getMaster()
+        .then((res) => {
+          if (cancelled || ctEventSeqRef.current !== seqAtStart) return;
+          const m = res.master;
+          setCtMaster(m ? { id: m.node_id, name: m.node_name, status: m.connection_status } : null);
+        })
+        .catch(() => { /* unknown: the cells stay as they are; events still update them */ });
+    };
+
+    const onCTraderEvent = (e: CTraderNodeWsEvent) => {
+      ctEventSeqRef.current += 1;
+      if (e.kind === 'snapshot') {
+        const m = e.nodes.find(n => n.is_master || n.node_type === 'MASTER');
+        setCtMaster(m ? { id: m.node_id, name: m.node_name, status: m.connection_status } : null);
+        return;
+      }
+      if (e.kind === 'type_change') {
+        // Promotion. The new MASTER's own CONNECTING event follows this one.
+        if (e.promoted.new_type === 'MASTER') {
+          setCtMaster({ id: e.promoted.node_id, name: e.promoted.node_name, status: 'CONNECTING' });
+        }
+        return;
+      }
+      // Status change. Only the MASTER matters here: a first MASTER that was
+      // just created is adopted from its first event, and the old MASTER's
+      // DISCONNECTED during a promotion (its type already reads STANDBY) is
+      // ignored. A deleted MASTER is not announced; it clears on the next seed.
+      const node = e.node;
+      if (node) {
+        if (node.node_type !== 'MASTER' && !node.is_master) return;
+        setCtMaster({ id: node.node_id, name: node.node_name, status: node.connection_status });
+        return;
+      }
+      setCtMaster(prev => (prev && prev.id === e.nodeId ? { ...prev, status: e.status } : prev));
+    };
+
+    seedCTraderMaster();
     const cleanup = connectSystemHealthWebSocket(
       (p) => {
         if (!loggedFirstFrameRef.current) {
@@ -223,9 +317,16 @@ export function BottomBar() {
         if (p.master.connected) lastSeenOnlineRef.current = p.as_of;
         setPayload(p);
       },
-      (status) => setWsStatus(status),
+      (status) => {
+        setWsStatus(status);
+        if (status === 'open') {
+          if (everOpenedRef.current) seedCTraderMaster();
+          everOpenedRef.current = true;
+        }
+      },
+      onCTraderEvent,
     );
-    return cleanup;
+    return () => { cancelled = true; cleanup(); };
   }, []);
 
   // ── Detect transitions INTO alert and trigger the pulse ───────────────────
@@ -297,10 +398,16 @@ export function BottomBar() {
   if (connState === 'disconnected') {
     masterDisplay = '—';
   } else if (payload!.master.name) {
-    masterDisplay = `Master: ${payload!.master.name}`;
+    masterDisplay = `Master-MT5: ${payload!.master.name}`;
   } else {
-    masterDisplay = 'No master configured';
+    masterDisplay = 'No MT5 master configured';
   }
+
+  // cTrader MASTER cells. Like every other cell, no stale value while the
+  // socket is down: the pair shows dashes until it is back.
+  const ctConn = ctMaster ? ctraderConn(ctMaster.status) : null;
+  // With the cTrader pair in the bar the metric cells get less room.
+  const compact = !!ctMaster;
 
   // Connection-state tooltip, shared by both left cells
   let connTooltip: string;
@@ -351,12 +458,12 @@ export function BottomBar() {
     >
       {/* ── Master cell — dot + master node name ──────────────────────────── */}
       <div
-        className="flex items-center gap-1.5 px-3 border-r"
+        className="flex items-center gap-1.5 px-3 border-r whitespace-nowrap"
         style={{ borderColor: COLOR_DIVIDER }}
         title={connTooltip}
       >
         <span
-          className="w-2 h-2 rounded-full"
+          className="w-2 h-2 rounded-full flex-shrink-0"
           style={{ backgroundColor: connConfig.dotColor }}
         />
         <span
@@ -381,16 +488,50 @@ export function BottomBar() {
         </span>
       </div>
 
+      {/* ── cTrader MASTER — same pair of cells; absent when cTrader has none ── */}
+      {ctMaster && ctConn && (
+        <>
+          <div
+            className="flex items-center gap-1.5 px-3 border-r min-w-0"
+            style={{ borderColor: COLOR_DIVIDER }}
+            title={live ? `${ctMaster.name}\n\n${ctConn.tooltip}` : connTooltip}
+          >
+            <span
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: live ? ctConn.dotColor : '#808080' }}
+            />
+            <span
+              className="font-mono truncate"
+              style={{ color: live ? COLOR_OK : COLOR_MUTED, maxWidth: 'min(260px, 16vw)' }}
+            >
+              {live ? `Master-cTrader: ${ctMaster.name}` : '—'}
+            </span>
+          </div>
+          <div
+            className="flex items-center px-3 border-r"
+            style={{ borderColor: COLOR_DIVIDER }}
+            title={live ? ctConn.tooltip : connTooltip}
+          >
+            <span style={{
+              color: live ? ctConn.statusColor : COLOR_MUTED,
+              fontWeight: live && ctConn.bold ? 600 : 400,
+            }}>
+              {live ? ctConn.statusText : '—'}
+            </span>
+          </div>
+        </>
+      )}
+
       {/* ── Six metric cells — flex-1 each, evenly distributed ────────────── */}
       <MetricCell
-        label="CPU Saturation" unit="%" dp={1}
+        label="CPU Saturation" shortLabel="CPU Sat." compact={compact} unit="%" dp={1}
         value={m?.cpu_saturation_pct ?? null}
         state={cpuState}
         pulsing={pulseKeys.has('cpu_saturation_pct')}
         title={buildMetricTooltip(TIP_CPU, cpuState, t?.cpu_saturation_pct, '%')}
       />
       <MetricCell
-        label="Mem Pressure" unit="%" dp={1}
+        label="Mem Pressure" shortLabel="Mem" compact={compact} unit="%" dp={1}
         value={m?.memory_pressure_pct ?? null}
         state={memState}
         pulsing={pulseKeys.has('memory_pressure_pct')}
@@ -418,7 +559,7 @@ export function BottomBar() {
         title={lpTitle}
       />
       <MetricCell
-        label="Packet Loss" unit="%" dp={2}
+        label="Packet Loss" shortLabel="Pkt Loss" compact={compact} unit="%" dp={2}
         value={m?.packet_loss_pct ?? null}
         state={lossState}
         pulsing={pulseKeys.has('packet_loss_pct')}

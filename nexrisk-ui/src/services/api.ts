@@ -886,6 +886,13 @@ export const ctraderApi = {
   getNode: (id: number) =>
     fetchAPI<CTraderNodeAPI>(`/api/v1/ctrader/nodes/${id}`),
 
+  // Name and connection state of the cTrader MASTER, readable by every
+  // signed-in user (the footer). Seed only, like getNodeStatus.
+  getMaster: () =>
+    fetchAPI<{ master: { node_id: number; node_name: string; connection_status: string } | null }>(
+      '/api/v1/ctrader/master'
+    ),
+
   createNode: (data: CTraderNodeCreate) =>
     fetchAPI<{ success: boolean; message: string; node: CTraderNodeAPI }>(
       '/api/v1/ctrader/nodes',
@@ -984,6 +991,42 @@ export type CTraderNodeWsEvent =
   | { kind: 'type_change'; promoted: CTraderNodeTypeChange; demoted?: CTraderNodeTypeChange; timestampMs: number };
 
 /**
+ * Turn one raw frame of the shared event socket into a cTrader node event, or
+ * null when the frame is not one. The shared socket also carries the MT5
+ * position stream, whose frames run to about 1 MB, so anything that is not
+ * ours is dropped before it is parsed.
+ */
+export function parseCTraderNodeFrame(raw: unknown): CTraderNodeWsEvent | null {
+  if (typeof raw !== 'string' || !raw.includes(CTRADER_NODE_STATUS_TOPIC)) return null;
+  let env: { topic?: string; type?: string; data?: unknown; timestamp_ms?: number };
+  try { env = JSON.parse(raw); } catch { return null; }
+  if (env.topic !== CTRADER_NODE_STATUS_TOPIC) return null;
+  const data = env.data as Record<string, unknown> | undefined;
+  if (!data || typeof data !== 'object') return null;
+
+  if (env.type === 'SNAPSHOT') {
+    return Array.isArray(data.nodes) ? { kind: 'snapshot', nodes: data.nodes as CTraderNodeStatusAPI[] } : null;
+  }
+
+  const timestampMs = Number(data.timestamp_ms ?? env.timestamp_ms ?? 0) || 0;
+
+  if (data.type === 'NODE_STATUS_CHANGE' && typeof data.node_id === 'number' && typeof data.status === 'string') {
+    const node = data.node && typeof data.node === 'object' ? (data.node as CTraderNodeStatusAPI) : undefined;
+    return { kind: 'status', nodeId: data.node_id, status: data.status, node, timestampMs };
+  }
+
+  if (data.type === 'NODE_TYPE_CHANGE' && data.promoted && typeof data.promoted === 'object') {
+    return {
+      kind: 'type_change',
+      promoted: data.promoted as CTraderNodeTypeChange,
+      demoted: data.demoted && typeof data.demoted === 'object' ? (data.demoted as CTraderNodeTypeChange) : undefined,
+      timestampMs,
+    };
+  }
+  return null;
+}
+
+/**
  * Managed connection to the cTrader node status topic. Reconnects every 5 s
  * until the returned cleanup function is called.
  *
@@ -1015,38 +1058,8 @@ export function connectCTraderNodeStatusWebSocket(
     };
 
     ws.onmessage = (ev: MessageEvent<string>) => {
-      // The shared socket also carries the MT5 position stream, whose frames
-      // run to about 1 MB. Drop everything that is not ours before parsing.
-      if (typeof ev.data !== 'string' || !ev.data.includes(CTRADER_NODE_STATUS_TOPIC)) return;
-      let env: { topic?: string; type?: string; data?: unknown; timestamp_ms?: number };
-      try { env = JSON.parse(ev.data); } catch { return; }
-      if (env.topic !== CTRADER_NODE_STATUS_TOPIC) return;
-      const data = env.data as Record<string, unknown> | undefined;
-      if (!data || typeof data !== 'object') return;
-
-      if (env.type === 'SNAPSHOT') {
-        if (Array.isArray(data.nodes)) {
-          onEvent({ kind: 'snapshot', nodes: data.nodes as CTraderNodeStatusAPI[] });
-        }
-        return;
-      }
-
-      const timestampMs = Number(data.timestamp_ms ?? env.timestamp_ms ?? 0) || 0;
-
-      if (data.type === 'NODE_STATUS_CHANGE' && typeof data.node_id === 'number' && typeof data.status === 'string') {
-        const node = data.node && typeof data.node === 'object' ? (data.node as CTraderNodeStatusAPI) : undefined;
-        onEvent({ kind: 'status', nodeId: data.node_id, status: data.status, node, timestampMs });
-        return;
-      }
-
-      if (data.type === 'NODE_TYPE_CHANGE' && data.promoted && typeof data.promoted === 'object') {
-        onEvent({
-          kind: 'type_change',
-          promoted: data.promoted as CTraderNodeTypeChange,
-          demoted: data.demoted && typeof data.demoted === 'object' ? (data.demoted as CTraderNodeTypeChange) : undefined,
-          timestampMs,
-        });
-      }
+      const event = parseCTraderNodeFrame(ev.data);
+      if (event) onEvent(event);
     };
 
     ws.onerror = () => ws?.close();
@@ -2993,6 +3006,8 @@ export type SystemHealthWsStatus = 'open' | 'closed' | 'error';
 export function connectSystemHealthWebSocket(
   onPayload: (payload: SystemHealthPayload) => void,
   onStatus?: (status: SystemHealthWsStatus) => void,
+  /** cTrader node events, taken from this same socket rather than a second one. */
+  onCTraderNodeEvent?: (event: CTraderNodeWsEvent) => void,
 ): () => void {
   let ws: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3012,10 +3027,17 @@ export function connectSystemHealthWebSocket(
       attempt = 0;
       onStatus?.('open');
       // Polite no-op: BFF fans out everything regardless. Kept for parity.
-      ws?.send(JSON.stringify({ type: 'subscribe', topics: ['system.health'] }));
+      ws?.send(JSON.stringify({
+        type: 'subscribe',
+        topics: onCTraderNodeEvent ? ['system.health', CTRADER_NODE_STATUS_TOPIC] : ['system.health'],
+      }));
     };
 
     ws.onmessage = (ev: MessageEvent<string>) => {
+      if (onCTraderNodeEvent) {
+        const event = parseCTraderNodeFrame(ev.data);
+        if (event) { onCTraderNodeEvent(event); return; }
+      }
       let env: { topic?: string; type?: string; data?: unknown };
       try { env = JSON.parse(ev.data); } catch { return; }
       if (env.topic !== 'system.health') return;

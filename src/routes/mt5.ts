@@ -259,6 +259,31 @@ export async function mt5Routes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/v1/ctrader/master
+   * Name and connection state of the cTrader MASTER, for the footer that every
+   * signed-in user sees. Deliberately not gated on config.read: it returns the
+   * same two facts the footer already shows for the MT5 master and nothing
+   * else (no address, plant or login). { master: null } when cTrader has none.
+   */
+  fastify.get(
+    '/ctrader/master',
+    { preHandler: [fastify.authenticate] },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<{
+        nodes?: { node_id: number; node_name: string; is_master?: boolean; connection_status: string }[];
+        primary_node_id?: number;
+      }>('/api/v1/ctrader/nodes/status');
+      if (!response.ok) return reply.code(response.status).send(response.error);
+      const nodes = response.data?.nodes ?? [];
+      const primaryId = response.data?.primary_node_id ?? 0;
+      const m = nodes.find(n => n.node_id === primaryId) ?? nodes.find(n => n.is_master);
+      return reply.send({
+        master: m ? { node_id: m.node_id, node_name: m.node_name, connection_status: m.connection_status } : null,
+      });
+    }
+  );
+
+  /**
    * POST /api/v1/ctrader/nodes/test
    * Test settings that are not stored. Waits up to ~17 s.
    * NOTE: registered before /ctrader/nodes/:id/* routes.
