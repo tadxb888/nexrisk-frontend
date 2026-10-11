@@ -1414,6 +1414,13 @@ export function connectPortfolioWebSocket(
  *  Lot values are BROKER VIEW (client BUY → broker short, etc.). */
 export interface PortfolioExposureSymbolRow {
   symbol:            string;
+  /** Trading platform the row belongs to: 'MT5' | 'CTRADER'. Not sent yet —
+   *  a row without it is the MT5 book. With it, a symbol held on both
+   *  platforms arrives as two rows. (Risk Radar backend brief, section 3.) */
+  platform?:         string;
+  /** Platform-neutral instrument id, when the two platforms name the same
+   *  instrument differently. Not sent yet; `symbol` is used when absent. */
+  instrument?:       string;
   /** Timestamp the broadcaster computed this row. Same as parent `as_of`. */
   snapshot_time:     string;
   /** Sum of broker-side long lots across A+B+C for this symbol. */
@@ -1443,6 +1450,10 @@ export interface PortfolioExposureSymbolRow {
 export interface PortfolioExposureSymbolsData {
   /** ISO 8601 UTC. Moment the broadcaster built this snapshot. */
   as_of:     string;
+  /** Platforms this snapshot covers, e.g. ['MT5', 'CTRADER']. Not sent yet.
+   *  Lets a consumer tell "no exposure on cTrader" from "cTrader not in the
+   *  feed". (Risk Radar backend brief, section 3.) */
+  platforms?: string[];
   totals: {
     a_book_net_lots: number;
     b_book_net_lots: number;
@@ -1491,6 +1502,83 @@ export function connectPortfolioExposureWebSocket(
     ws.close(1000, 'Client disconnecting');
   };
 }
+
+// ============================================================================
+// Risk Radar — live feed
+//
+// One managed socket for the Risk Radar page. Today it carries the per-symbol
+// exposure snapshot (Exposure layer); the Flow toxicity and Liquidity layers
+// add their topics to RISK_RADAR_TOPICS when the service publishes them.
+//
+// The events socket also carries the position stream, whose frames run to
+// about 1 MB, so anything that is not ours is dropped before it is parsed.
+// Reconnects by itself (1 s → 2 s → 4 s … capped at 30 s).
+// ============================================================================
+
+export const RISK_RADAR_EXPOSURE_TOPIC = 'portfolio.exposure.symbols';
+const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC];
+
+/**
+ * One-shot snapshot the Exposure layer opens with — same shape as the topic,
+ * unwrapped. Served under the cockpit module, so it is readable by anyone who
+ * can open Risk Radar.
+ */
+export async function getRiskRadarExposure(): Promise<PortfolioExposureSymbolsData> {
+  return fetchAPI<PortfolioExposureSymbolsData>('/api/v1/risk-radar/exposure');
+}
+
+export function connectRiskRadarWebSocket(
+  onExposure: (data: PortfolioExposureSymbolsData) => void,
+  onStatus?: (status: 'open' | 'closed') => void,
+): () => void {
+  let ws: WebSocket | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retries = 0;
+  let destroyed = false;
+
+  function connect() {
+    if (destroyed) return;
+    ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
+
+    ws.onopen = () => {
+      retries = 0;
+      onStatus?.('open');
+      ws?.send(JSON.stringify({ type: 'subscribe', topics: RISK_RADAR_TOPICS }));
+    };
+
+    ws.onmessage = (ev: MessageEvent<string>) => {
+      const raw = ev.data;
+      if (typeof raw !== 'string' || !raw.includes(RISK_RADAR_EXPOSURE_TOPIC)) return;
+      try {
+        const envelope = JSON.parse(raw);
+        if (envelope.topic !== RISK_RADAR_EXPOSURE_TOPIC || envelope.type !== 'SNAPSHOT') return;
+        const data = envelope.data as PortfolioExposureSymbolsData | undefined;
+        if (data && Array.isArray(data.by_symbol)) onExposure(data);
+      } catch { /* not ours */ }
+    };
+
+    ws.onerror = () => ws?.close();
+    ws.onclose = () => {
+      onStatus?.('closed');
+      if (destroyed) return;
+      const delay = Math.min(1000 * 2 ** retries, 30_000);
+      retries++;
+      retryTimer = setTimeout(connect, delay);
+    };
+  }
+
+  connect();
+
+  return () => {
+    destroyed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (ws) {
+      ws.onclose = null;
+      ws.close(1000, 'Client disconnecting');
+    }
+  };
+}
+
 // ============================================================================
 // Cockpit page — multi-topic WebSocket subscriber
 //

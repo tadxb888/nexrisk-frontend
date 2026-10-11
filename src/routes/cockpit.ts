@@ -81,4 +81,30 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(response.data);
     }
   );
+
+  /**
+   * GET /api/v1/risk-radar/exposure
+   * Risk Radar, Exposure layer — the per-symbol exposure snapshot the page
+   * opens with (and all it has while the market is shut and the
+   * portfolio.exposure.symbols topic is silent). Same payload as that topic.
+   *
+   * It is the snapshot /portfolio/exposure/symbols serves, registered here so
+   * that it is gated on the 'cockpit' module: anyone who can open the Cockpit
+   * can open Risk Radar, whatever their level on 'portfolio'.
+   *
+   * Sent raw (no snakeToCamel): by_symbol[] rows are consumed verbatim.
+   */
+  fastify.get(
+    '/risk-radar/exposure',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<unknown>('/api/v1/portfolio/exposure/symbols');
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      return reply.send(response.data);
+    }
+  );
 }

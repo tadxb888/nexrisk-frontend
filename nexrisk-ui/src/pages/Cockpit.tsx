@@ -1330,6 +1330,28 @@ export function CockpitPage() {
             </div>
           )}
 
+          {/* Risk Radar — the instrument-map view of the same book */}
+          <Link
+            to="/risk-radar"
+            className="flex items-center gap-2.5 rounded-md font-semibold text-white transition hover:brightness-125 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+            style={{
+              fontSize: 15,
+              padding: '9px 18px',
+              background: 'linear-gradient(100deg, #0d2a1a 0%, #2b2408 55%, #3a100f 100%)',
+              border: '1px solid #ff8a14',
+              boxShadow: '0 0 18px rgba(255, 138, 20, 0.35)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
+              <circle cx="13" cy="13" r="11.5" fill="none" stroke="#3ddc57" strokeWidth="1.8" />
+              <circle cx="13" cy="13" r="7.5" fill="none" stroke="#ffe01f" strokeWidth="1.8" />
+              <circle cx="13" cy="13" r="3.4" fill="#ff3b30" />
+            </svg>
+            Risk Radar
+            <span aria-hidden="true">→</span>
+          </Link>
+
           <Link
             to="/cockpit/help"
             className="text-sm text-text-secondary hover:text-text-primary underline"

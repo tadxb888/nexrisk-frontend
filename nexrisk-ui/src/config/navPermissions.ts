@@ -44,6 +44,9 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Summary',
     items: [
       { path: '/',          label: 'Cockpit',   module: 'cockpit' },
+      // Risk Radar shares the cockpit module by design: anyone with access
+      // to the Cockpit has access to Risk Radar.
+      { path: '/risk-radar', label: 'Risk Radar', module: 'cockpit' },
       { path: '/portfolio', label: 'Portfolio', module: 'portfolio' },
     ],
   },

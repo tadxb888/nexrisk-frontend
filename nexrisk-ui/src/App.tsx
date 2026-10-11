@@ -21,6 +21,7 @@ import HelpPage from './help/ui/HelpPage';
 import { Layout } from '@/components/layout';
 import {
   CockpitPage,
+  RiskRadarPage,
   PortfolioPage,
   FocusPage,
   BBookPage,
@@ -107,6 +108,7 @@ function App() {
 
               {/* ─── Overview ─────────────────────────── */}
               <Route path="/"              element={<CockpitPage />} />
+              <Route path="/risk-radar"    element={<RiskRadarPage />} />
               <Route path="/portfolio"     element={<PortfolioPage />} />
               <Route path="/net-exposure"  element={<NetExposurePage />} />
 

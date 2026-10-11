@@ -1,4 +1,5 @@
 export { CockpitPage } from './Cockpit';
+export { RiskRadarPage } from './RiskRadar';
 export { PortfolioPage } from './Portfolio';
 export { FocusPage } from './Focus';
 export { BBookPage } from './BBookPage';
