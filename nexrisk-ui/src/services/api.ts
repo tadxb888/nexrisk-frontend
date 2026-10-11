@@ -1527,6 +1527,29 @@ export async function getRiskRadarExposure(): Promise<PortfolioExposureSymbolsDa
   return fetchAPI<PortfolioExposureSymbolsData>('/api/v1/risk-radar/exposure');
 }
 
+/** The broker's symbol tree, from the MT5 MASTER. Risk Radar groups its map by it. */
+export interface RiskRadarInstruments {
+  source: { node_id: number; node_name: string } | null;
+  instruments: { symbol: string; path: string; description: string }[];
+  total: number;
+  /** Why the tree is empty, when it is. */
+  error?: string;
+}
+
+/** Open B-Book positions per symbol, read from the MT5 servers on request. */
+export interface RiskRadarMt5Book {
+  as_of: string;
+  nodes: { node_id: number; node_name: string; node_type: string; ok: boolean; positions: number }[];
+  total_positions: number;
+  /** Lots are client side, as MT5 reports them. */
+  by_symbol: { symbol: string; buy_lots: number; sell_lots: number; positions: number; logins: number }[];
+}
+
+export const riskRadarApi = {
+  getInstruments: () => fetchAPI<RiskRadarInstruments>('/api/v1/risk-radar/instruments'),
+  getMt5Book: () => fetchAPI<RiskRadarMt5Book>('/api/v1/risk-radar/mt5-book'),
+};
+
 export function connectRiskRadarWebSocket(
   onExposure: (data: PortfolioExposureSymbolsData) => void,
   onStatus?: (status: 'open' | 'closed') => void,

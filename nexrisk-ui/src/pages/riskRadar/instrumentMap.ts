@@ -2,145 +2,89 @@
 // Risk Radar — the instrument map
 //
 // One fixed layout shared by every layer: an instrument keeps its place
-// whatever is being measured, so the eye learns where EURUSD or XAUUSD
-// lives. Position carries NO measurement — it is geography only.
+// whatever is being measured. Position carries NO measurement — it is
+// geography only.
 //
-// Families and positions are derived here from the symbol name until the
-// service ships `asset_class` and a canonical layout (see the Risk Radar
-// backend brief). Everything is in unit coordinates (0..1 of the map).
+// THE GROUPS ARE THE BROKER'S OWN. Regions come from the symbol tree of the
+// MT5 MASTER (the folder each symbol sits under on that server), in the order
+// the server lists them. Nothing is inferred from a symbol's name. A symbol
+// the tree does not contain — a cTrader symbol with no MT5 namesake, or any
+// symbol while the tree cannot be read — is drawn under "Unclassified".
+//
+// Everything is in unit coordinates (0..1 of the map).
 // ============================================
 
-export type FamilyId =
-  | 'fx_majors'
-  | 'fx_crosses'
-  | 'metals'
-  | 'indices'
-  | 'energy'
-  | 'crypto'
-  | 'other';
+export interface TreeInstrument {
+  symbol: string;
+  /** Path on the MT5 server, e.g. "Forex\\Majors\\EURUSD". */
+  path: string;
+}
 
-export interface Family {
-  id: FamilyId;
-  /** Region caption on the map. */
-  label: string;
-  /** Name in running text and tables. */
+export interface Region {
+  id: string;
+  /** The folder name exactly as the broker wrote it. */
   name: string;
-  /** Region on the map, unit coordinates. */
   rect: { x: number; y: number; w: number; h: number };
 }
 
-export const FAMILIES: Family[] = [
-  { id: 'fx_majors',  label: 'FX MAJORS', name: 'FX Majors',  rect: { x: 0.012, y: 0.035, w: 0.392, h: 0.475 } },
-  { id: 'fx_crosses', label: 'FX CROSSES', name: 'FX Crosses', rect: { x: 0.416, y: 0.035, w: 0.300, h: 0.475 } },
-  { id: 'metals',     label: 'METALS', name: 'Metals',     rect: { x: 0.728, y: 0.035, w: 0.260, h: 0.475 } },
-  { id: 'indices',    label: 'INDICES', name: 'Indices',    rect: { x: 0.012, y: 0.540, w: 0.300, h: 0.430 } },
-  { id: 'energy',     label: 'ENERGY', name: 'Energy',     rect: { x: 0.324, y: 0.540, w: 0.196, h: 0.430 } },
-  { id: 'crypto',     label: 'CRYPTO', name: 'Crypto',     rect: { x: 0.532, y: 0.540, w: 0.220, h: 0.430 } },
-  { id: 'other',      label: 'OTHER', name: 'Other',      rect: { x: 0.764, y: 0.540, w: 0.224, h: 0.430 } },
-];
-
-const FAMILY_BY_ID = new Map(FAMILIES.map((f) => [f.id, f] as const));
-
-export function familyName(id: FamilyId): string {
-  return FAMILY_BY_ID.get(id)?.name ?? id;
+export interface MapPosition {
+  region: string;
+  /** Unit coordinates of the whole map. */
+  x: number;
+  y: number;
 }
 
-// ── Symbol name → family ─────────────────────────────────────
-
-const CURRENCIES = new Set([
-  'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD', 'SEK', 'NOK', 'DKK',
-  'PLN', 'HUF', 'CZK', 'TRY', 'ZAR', 'MXN', 'SGD', 'HKD', 'CNH', 'CNY', 'RUB',
-  'ILS', 'THB', 'INR', 'BRL', 'KRW', 'RON', 'AED', 'SAR',
-]);
-
-const MAJORS = new Set(['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD']);
-
-const METAL_PREFIXES  = ['XAU', 'XAG', 'XPT', 'XPD', 'GOLD', 'SILVER', 'PLATINUM', 'PALLADIUM', 'COPPER'];
-const CRYPTO_PREFIXES = [
-  'BTC', 'ETH', 'LTC', 'XRP', 'SOL', 'ADA', 'DOGE', 'BNB', 'DOT', 'BCH', 'XLM', 'LINK',
-  'AVAX', 'MATIC', 'UNI', 'TRX', 'EOS', 'XMR', 'SHIB', 'ATOM',
-];
-const ENERGY_PREFIXES = ['WTI', 'BRENT', 'USOIL', 'UKOIL', 'XTI', 'XBR', 'NGAS', 'NATGAS', 'XNG', 'OIL', 'CRUDE'];
-const INDEX_PREFIXES  = [
-  'US30', 'US500', 'US100', 'US2000', 'NAS100', 'NAS', 'USTEC', 'SPX', 'SP500', 'DJ30', 'DJI', 'WS30',
-  'GER40', 'GER30', 'DE40', 'DE30', 'DAX', 'UK100', 'FTSE', 'JP225', 'JPN225', 'NIKKEI', 'NI225',
-  'HK50', 'HSI', 'AUS200', 'AU200', 'FRA40', 'FR40', 'CAC', 'EU50', 'EUSTX50', 'STOXX', 'ESP35', 'ES35',
-  'IT40', 'CHINA50', 'CN50', 'CHINAH', 'VIX', 'SWI20', 'NETH25', 'USDX', 'DXY',
-];
-
-/** Leading alphanumeric run, upper-cased: "#EURUSD.m" → "EURUSD", "US500.cash" → "US500". */
-export function symbolCore(symbol: string): string {
-  const m = symbol.toUpperCase().replace(/^[^A-Z0-9]+/, '').match(/^[A-Z0-9]+/);
-  return m ? m[0] : symbol.toUpperCase();
+export interface InstrumentMap {
+  regions: Region[];
+  positions: Map<string, MapPosition>;
+  /** Region name of a symbol, for text. */
+  regionOf: (symbol: string) => string;
 }
 
-function startsWithAny(core: string, prefixes: string[]): boolean {
-  return prefixes.some((p) => core.startsWith(p));
+export const UNCLASSIFIED = 'Unclassified';
+const MAX_REGIONS = 12;
+const OVERFLOW = 'Other groups';
+
+function folders(path: string, symbol: string): string[] {
+  const parts = path.split(/[\\/]+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length && parts[parts.length - 1] === symbol) parts.pop();
+  return parts;
 }
 
-/** Six-letter FX pair behind a broker symbol, or null ("EURUSDm" → "EURUSD"). */
-function fxPair(core: string): string | null {
-  if (core.length < 6) return null;
-  const base = core.slice(0, 3);
-  const quote = core.slice(3, 6);
-  return CURRENCIES.has(base) && CURRENCIES.has(quote) && base !== quote ? base + quote : null;
-}
+/**
+ * Symbol → group, from the tree. The group is the top-level folder. When one
+ * top-level folder holds nearly everything (a server that keeps its whole
+ * catalogue under a single root), its sub-folders are used instead, so the
+ * map does not collapse into one region.
+ */
+export function groupsFromTree(tree: TreeInstrument[]): { groupOf: Map<string, string>; order: string[] } {
+  const paths = new Map<string, string[]>();
+  for (const t of tree) paths.set(t.symbol, folders(t.path ?? '', t.symbol));
 
-export function familyOf(symbol: string): FamilyId {
-  const core = symbolCore(symbol);
-  if (startsWithAny(core, METAL_PREFIXES)) return 'metals';
-  if (startsWithAny(core, CRYPTO_PREFIXES)) return 'crypto';
-  if (startsWithAny(core, ENERGY_PREFIXES)) return 'energy';
-  if (startsWithAny(core, INDEX_PREFIXES)) return 'indices';
-  const pair = fxPair(core);
-  if (pair) return MAJORS.has(pair) ? 'fx_majors' : 'fx_crosses';
-  return 'other';
-}
+  const count = (depth: number) => {
+    const c = new Map<string, number>();
+    for (const p of paths.values()) {
+      const key = p.slice(0, depth + 1).join(' / ') || UNCLASSIFIED;
+      c.set(key, (c.get(key) ?? 0) + 1);
+    }
+    return c;
+  };
 
-// ── Fixed positions ──────────────────────────────────────────
-// Hand-placed anchors for the instruments every book carries, as (u, v)
-// inside the family region. Everything else takes a deterministic slot.
+  let depth = 0;
+  const top = count(0);
+  const biggest = Math.max(0, ...top.values());
+  const deeper = [...paths.values()].some((p) => p.length > 1);
+  if (paths.size > 0 && deeper && biggest / paths.size > 0.9) depth = 1;
 
-const ANCHORS: Record<string, [number, number]> = {
-  // FX majors
-  EURUSD: [0.36, 0.46], GBPUSD: [0.66, 0.40], USDJPY: [0.20, 0.78], USDCHF: [0.50, 0.80],
-  AUDUSD: [0.78, 0.74], USDCAD: [0.89, 0.42], NZDUSD: [0.11, 0.42],
-  // FX crosses
-  EURGBP: [0.30, 0.42], EURJPY: [0.62, 0.38], GBPJPY: [0.76, 0.72], EURCHF: [0.20, 0.76],
-  AUDJPY: [0.48, 0.78], EURAUD: [0.87, 0.42],
-  // Metals
-  XAUUSD: [0.42, 0.50], XAGUSD: [0.78, 0.76], GOLD: [0.20, 0.78], SILVER: [0.84, 0.40],
-  XPTUSD: [0.16, 0.38], XPDUSD: [0.50, 0.86],
-  // Indices
-  NAS100: [0.62, 0.44], US500: [0.28, 0.56], US30: [0.46, 0.80], GER40: [0.82, 0.72],
-  UK100: [0.86, 0.38], JP225: [0.13, 0.34],
-  // Energy
-  BRENT: [0.40, 0.42], WTI: [0.64, 0.72], NGAS: [0.24, 0.78],
-  // Crypto
-  BTCUSD: [0.40, 0.46], ETHUSD: [0.70, 0.74], SOLUSD: [0.20, 0.78], XRPUSD: [0.80, 0.40],
-};
-
-/** Broker spellings of the same anchor. */
-const ANCHOR_ALIASES: Record<string, string> = {
-  USTEC: 'NAS100', US100: 'NAS100', NAS: 'NAS100',
-  SPX500: 'US500', SP500: 'US500', SPX: 'US500',
-  DJ30: 'US30', WS30: 'US30', DJI: 'US30',
-  DE40: 'GER40', GER30: 'GER40', DE30: 'GER40', DAX: 'GER40',
-  FTSE: 'UK100', JPN225: 'JP225', NIKKEI: 'JP225', NI225: 'JP225',
-  UKOIL: 'BRENT', XBRUSD: 'BRENT', USOIL: 'WTI', XTIUSD: 'WTI', CRUDE: 'WTI',
-  NATGAS: 'NGAS', XNGUSD: 'NGAS',
-  BTC: 'BTCUSD', BTCUSDT: 'BTCUSD', ETH: 'ETHUSD', ETHUSDT: 'ETHUSD',
-};
-
-function anchorKey(symbol: string, family: FamilyId): string | null {
-  const core = symbolCore(symbol);
-  if (family === 'fx_majors' || family === 'fx_crosses') {
-    const pair = fxPair(core);
-    return pair && ANCHORS[pair] ? pair : null;
+  const groupOf = new Map<string, string>();
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const [symbol, p] of paths) {
+    const key = p.slice(0, depth + 1).join(' / ') || UNCLASSIFIED;
+    groupOf.set(symbol, key);
+    if (!seen.has(key)) { seen.add(key); order.push(key); }
   }
-  if (ANCHORS[core]) return core;
-  const alias = ANCHOR_ALIASES[core];
-  return alias && ANCHORS[alias] ? alias : null;
+  return { groupOf, order };
 }
 
 /** FNV-1a — a stable number from a symbol name. */
@@ -153,77 +97,125 @@ export function hashSymbol(s: string): number {
   return h >>> 0;
 }
 
-// Free slots for instruments without an anchor: a staggered grid inside the
-// region, kept clear of the label strip at the top.
-const SLOT_COLS = 5;
-const SLOT_ROWS = 4;
-const SLOTS: Array<[number, number]> = [];
-for (let r = 0; r < SLOT_ROWS; r++) {
-  for (let c = 0; c < SLOT_COLS; c++) {
-    const u = 0.10 + (c + (r % 2 ? 0.5 : 0)) * (0.80 / SLOT_COLS);
-    const v = 0.30 + r * (0.58 / (SLOT_ROWS - 1));
-    SLOTS.push([Math.min(u, 0.92), v]);
+// ── Regions ──────────────────────────────────────────────────
+
+function layoutRegions(names: string[]): Region[] {
+  const n = names.length;
+  if (n === 0) return [];
+  const rows = n <= 3 ? 1 : n <= 10 ? 2 : 3;
+  const perRow: number[] = [];
+  let left = n;
+  for (let r = 0; r < rows; r++) {
+    const take = Math.ceil(left / (rows - r));
+    perRow.push(take);
+    left -= take;
   }
-}
 
-const MIN_GAP = 0.15; // region units; below this two markers sit on each other
+  const M = 0.012;          // outer margin
+  const G = 0.012;          // gap between regions
+  const top = 0.035;
+  const bottom = 0.03;
+  const rowH = (1 - top - bottom - G * (rows - 1)) / rows;
 
-// Assignments are remembered for the session so an instrument never moves
-// once it has been seen, whatever joins or leaves the book afterwards.
-const assigned = new Map<string, { family: FamilyId; u: number; v: number }>();
-
-function taken(family: FamilyId, u: number, v: number): boolean {
-  for (const a of assigned.values()) {
-    if (a.family === family && Math.hypot(a.u - u, a.v - v) < MIN_GAP) return true;
-  }
-  return false;
-}
-
-function assign(symbol: string): { family: FamilyId; u: number; v: number } {
-  const family = familyOf(symbol);
-
-  const key = anchorKey(symbol, family);
-  if (key) {
-    const [u, v] = ANCHORS[key];
-    if (!taken(family, u, v)) {
-      const pos = { family, u, v };
-      assigned.set(symbol, pos);
-      return pos;
+  const out: Region[] = [];
+  let i = 0;
+  for (let r = 0; r < rows; r++) {
+    const cols = perRow[r];
+    const colW = (1 - 2 * M - G * (cols - 1)) / cols;
+    for (let c = 0; c < cols; c++) {
+      const name = names[i++];
+      out.push({
+        id: name,
+        name,
+        rect: { x: M + c * (colW + G), y: top + r * (rowH + G), w: colW, h: rowH },
+      });
     }
   }
-
-  const start = hashSymbol(symbol) % SLOTS.length;
-  let pick = SLOTS[start];
-  for (let i = 0; i < SLOTS.length; i++) {
-    const [u, v] = SLOTS[(start + i) % SLOTS.length];
-    if (!taken(family, u, v)) { pick = [u, v]; break; }
-  }
-  const pos = { family, u: pick[0], v: pick[1] };
-  assigned.set(symbol, pos);
-  return pos;
+  return out;
 }
 
-export interface MapPosition {
-  family: FamilyId;
-  /** Unit coordinates of the whole map. */
-  x: number;
-  y: number;
+// ── Places inside a region ───────────────────────────────────
+// The n-th instrument of a region takes the n-th point of a Halton sequence:
+// however many instruments a region holds, they are spread evenly over it, and
+// the first one sits in the middle. The area keeps clear of the caption strip
+// at the top and of the region's lower edge.
+
+function halton(index: number, base: number): number {
+  let f = 1;
+  let r = 0;
+  for (let i = index; i > 0; i = Math.floor(i / base)) {
+    f /= base;
+    r += f * (i % base);
+  }
+  return r;
+}
+
+// Places are remembered for the session, so an instrument never moves once it
+// has been seen. They are tied to the set of regions: when that changes (the
+// tree arrives, or the broker edits it) the map is laid out again.
+let memoKey = '';
+const assigned = new Map<string, { region: string; u: number; v: number }>();
+
+function assign(symbol: string, region: string) {
+  let n = 1;
+  for (const a of assigned.values()) if (a.region === region) n++;
+  assigned.set(symbol, {
+    region,
+    u: 0.13 + halton(n, 2) * 0.74,
+    v: 0.36 + halton(n, 3) * 0.44,
+  });
 }
 
 /**
- * Fixed place of each instrument. New symbols are placed in name order so the
- * same book always produces the same map.
+ * The map for the instruments on screen.
+ *
+ * @param groupOf  symbol → group from the broker's tree (empty while unknown)
+ * @param order    groups in the server's order
+ * @param symbols  instruments to place
  */
-export function layoutSymbols(symbols: string[]): Map<string, MapPosition> {
-  const fresh = symbols.filter((s) => !assigned.has(s)).sort();
-  for (const s of fresh) assign(s);
+export function buildMap(
+  groupOf: Map<string, string>,
+  order: string[],
+  symbols: string[],
+): InstrumentMap {
+  // Every group of the tree is a region, so the map does not reshuffle when
+  // exposure appears in a new group. Beyond MAX_REGIONS the tail is folded.
+  let names = order.filter((g) => g !== UNCLASSIFIED);
+  const folded = new Set<string>();
+  if (names.length > MAX_REGIONS) {
+    for (const g of names.slice(MAX_REGIONS - 1)) folded.add(g);
+    names = [...names.slice(0, MAX_REGIONS - 1), OVERFLOW];
+  }
 
-  const out = new Map<string, MapPosition>();
+  const regionNameOf = (symbol: string): string => {
+    const g = groupOf.get(symbol);
+    if (!g || g === UNCLASSIFIED) return UNCLASSIFIED;
+    return folded.has(g) ? OVERFLOW : g;
+  };
+
+  if (symbols.some((s) => regionNameOf(s) === UNCLASSIFIED)) names = [...names, UNCLASSIFIED];
+
+  const regions = layoutRegions(names);
+  const byName = new Map(regions.map((r) => [r.name, r] as const));
+
+  const key = names.join('|');
+  if (key !== memoKey) { memoKey = key; assigned.clear(); }
+
+  // New instruments are placed in name order, so the same book always gives
+  // the same map.
+  for (const s of symbols.filter((x) => !assigned.has(x)).sort()) assign(s, regionNameOf(s));
+
+  const positions = new Map<string, MapPosition>();
   for (const s of symbols) {
     const a = assigned.get(s);
-    if (!a) continue;
-    const rect = FAMILY_BY_ID.get(a.family)!.rect;
-    out.set(s, { family: a.family, x: rect.x + a.u * rect.w, y: rect.y + a.v * rect.h });
+    const region = a ? byName.get(a.region) : undefined;
+    if (!a || !region) continue;
+    positions.set(s, {
+      region: region.name,
+      x: region.rect.x + a.u * region.rect.w,
+      y: region.rect.y + a.v * region.rect.h,
+    });
   }
-  return out;
+
+  return { regions, positions, regionOf: regionNameOf };
 }

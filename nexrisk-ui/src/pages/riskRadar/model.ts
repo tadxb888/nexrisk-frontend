@@ -23,7 +23,6 @@
 // ============================================
 
 import type { PortfolioExposureSymbolsData } from '@/services/api';
-import { familyOf, type FamilyId } from './instrumentMap';
 
 export type Band = 'low' | 'moderate' | 'high' | 'critical';
 
@@ -85,7 +84,6 @@ export type WorstDayState = 'ok' | 'no_history' | 'excluded' | 'unpriced';
 
 export interface RadarSymbol {
   symbol: string;
-  family: FamilyId;
   pricing: Pricing;
   /** |B-Book USD notional|. 0 unless priced. */
   usd: number;
@@ -111,6 +109,17 @@ export interface RadarSymbol {
   parts: PlatformPart[];
   /** Priced, but one platform's part has no USD value and is missing from `usd`. */
   partlyUnpriced: boolean;
+  /** The exposure feed has no B-Book figure for it; the lots come from the MT5 servers. */
+  fromMt5Book: boolean;
+}
+
+/** Open B-Book positions per symbol, as the MT5 servers report them (client side). */
+export interface Mt5BookRow {
+  symbol: string;
+  buy_lots: number;
+  sell_lots: number;
+  positions: number;
+  logins: number;
 }
 
 export interface RadarView {
@@ -130,6 +139,8 @@ export interface RadarView {
   unpriced: number;
   flat: number;
   bandCounts: Record<Band, number>;
+  /** Instruments MT5 holds B-Book positions in that the exposure feed has no figure for. */
+  feedGaps: number;
 }
 
 /** Same guard as the Cockpit: a one-day range above 10 % is a bad bar. */
@@ -216,6 +227,7 @@ interface Merged {
   unrealized: number | null;
   pnlMtd: number | null;
   parts: PlatformPart[];
+  fromMt5Book: boolean;
 }
 
 function addOpt(a: number | null, b: number | null): number | null {
@@ -242,7 +254,7 @@ function rowsInScope(snapshot: PortfolioExposureSymbolsData | null, scope: Platf
       m = {
         symbol: key, signedUsd: 0, pricedParts: 0, unpricedParts: 0,
         bLots: 0, aLots: 0, cLots: 0, netLots: 0, longLots: 0, shortLots: 0,
-        unrealized: null, pnlMtd: null, parts: [],
+        unrealized: null, pnlMtd: null, parts: [], fromMt5Book: false,
       };
       byKey.set(key, m);
     }
@@ -266,12 +278,50 @@ function rowsInScope(snapshot: PortfolioExposureSymbolsData | null, scope: Platf
   return [...byKey.values()];
 }
 
+/**
+ * Instruments the MT5 servers hold open B-Book positions in, for which the
+ * exposure feed carries no B-Book figure. They are added as unpriced rows —
+ * lots only, broker view — so a gap in the feed shows as a grey instrument
+ * instead of a missing one.
+ */
+function addFeedGaps(rows: Merged[], mt5Book: Mt5BookRow[]): number {
+  const have = new Map(rows.map((r) => [r.symbol, r] as const));
+  let gaps = 0;
+  for (const b of mt5Book) {
+    const lots = num(b.sell_lots) - num(b.buy_lots);          // client buy = broker short
+    const gross = num(b.sell_lots) + num(b.buy_lots);
+    if (!(gross > EPS_LOTS)) continue;
+    const row = have.get(b.symbol);
+    if (row && row.parts.some((p) => p.platform === 'MT5')) continue;   // the feed has it
+
+    const part: PlatformPart = { platform: 'MT5', usd: null, bLots: lots };
+    if (row) {
+      row.bLots += lots;
+      row.netLots += lots;
+      row.unpricedParts++;
+      row.parts.push(part);
+      row.fromMt5Book = true;
+    } else {
+      rows.push({
+        symbol: b.symbol, signedUsd: 0, pricedParts: 0, unpricedParts: 1,
+        bLots: lots, aLots: 0, cLots: 0, netLots: lots,
+        longLots: num(b.sell_lots), shortLots: num(b.buy_lots),
+        unrealized: null, pnlMtd: null, parts: [part], fromMt5Book: true,
+      });
+    }
+    gaps++;
+  }
+  return gaps;
+}
+
 export function buildView(
   snapshot: PortfolioExposureSymbolsData | null,
   largest1Day: Record<string, number> | null,
   scope: PlatformScope = 'ALL',
+  mt5Book: Mt5BookRow[] | null = null,
 ): RadarView {
   const rows = rowsInScope(snapshot, scope);
+  const feedGaps = mt5Book && scope !== 'CTRADER' ? addFeedGaps(rows, mt5Book) : 0;
 
   let totalUsd = 0;
   for (const r of rows) totalUsd += Math.abs(r.signedUsd);
@@ -312,7 +362,6 @@ export function buildView(
 
     symbols.push({
       symbol: r.symbol,
-      family: familyOf(r.symbol),
       pricing,
       usd: pricing === 'priced' ? usd : 0,
       share,
@@ -333,6 +382,7 @@ export function buildView(
       pnlMtd: r.pnlMtd,
       parts: r.parts,
       partlyUnpriced: pricing === 'priced' && r.unpricedParts > 0,
+      fromMt5Book: r.fromMt5Book,
     });
   }
 
@@ -360,6 +410,7 @@ export function buildView(
     unpriced,
     flat,
     bandCounts,
+    feedGaps,
   };
 }
 

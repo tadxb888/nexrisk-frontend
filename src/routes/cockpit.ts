@@ -107,4 +107,109 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(response.data);
     }
   );
+
+  // ── Risk Radar: what the MT5 servers themselves say ─────────────────────
+  // Two small reads the page makes once when it opens. Both are composed here
+  // from the per-node MT5 routes so that they follow the Risk Radar access
+  // rule (the 'cockpit' module) and return only what the page draws.
+
+  interface Mt5NodeRow { id: number; node_name: string; node_type: string; is_enabled: boolean; is_master?: boolean }
+  interface Mt5SymbolRow { symbol: string; path?: string; description?: string }
+  interface Mt5PositionRow { symbol: string; action: string; volume_lots: number; login: number }
+
+  async function mt5Nodes(): Promise<Mt5NodeRow[] | null> {
+    const res = await nexriskApi.get<{ nodes?: Mt5NodeRow[] }>('/api/v1/mt5/nodes');
+    return res.ok && Array.isArray(res.data?.nodes) ? res.data.nodes : null;
+  }
+
+  // The symbol tree changes when the broker edits it, not from minute to minute.
+  const TREE_TTL_MS = 10 * 60 * 1000;
+  let treeCache: { at: number; body: unknown } | null = null;
+
+  /**
+   * GET /api/v1/risk-radar/instruments
+   * The broker's own symbol tree: every symbol of the MT5 MASTER with the
+   * path it sits under on that server (e.g. "Forex\\Majors\\EURUSD"). Risk
+   * Radar groups its map by these folders — the grouping is the broker's,
+   * nothing is inferred from symbol names.
+   *
+   * Always 200: without a reachable MASTER the list is empty and `error` says
+   * why, and the page draws its instruments ungrouped.
+   */
+  fastify.get(
+    '/risk-radar/instruments',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      if (treeCache && Date.now() - treeCache.at < TREE_TTL_MS) return reply.send(treeCache.body);
+
+      const nodes = await mt5Nodes();
+      const master = nodes?.find((n) => n.is_enabled && (n.node_type === 'MASTER' || n.is_master));
+      if (!master) {
+        return reply.send({ source: null, instruments: [], total: 0, error: nodes ? 'No enabled MT5 MASTER node' : 'MT5 nodes could not be read' });
+      }
+
+      const res = await nexriskApi.get<{ symbols?: Mt5SymbolRow[] }>(`/api/v1/mt5/nodes/${master.id}/symbols`);
+      const source = { node_id: master.id, node_name: master.node_name };
+      if (!res.ok || !Array.isArray(res.data?.symbols)) {
+        return reply.send({ source, instruments: [], total: 0, error: `Symbols of ${master.node_name} could not be read` });
+      }
+
+      const instruments = res.data.symbols
+        .filter((s) => s && typeof s.symbol === 'string' && s.symbol)
+        .map((s) => ({ symbol: s.symbol, path: typeof s.path === 'string' ? s.path : '', description: s.description ?? '' }));
+      const body = { source, instruments, total: instruments.length };
+      if (instruments.length > 0) treeCache = { at: Date.now(), body };
+      return reply.send(body);
+    }
+  );
+
+  /**
+   * GET /api/v1/risk-radar/mt5-book
+   * Open B-Book positions per symbol, read from the MT5 servers at the moment
+   * of the request (the positions the B-Book page lists), reduced to lots and
+   * counts. Risk Radar compares it with the exposure feed, so that an
+   * instrument the feed has no figure for is shown as such instead of being
+   * absent — and an empty map can say whether MT5 is really flat.
+   *
+   * Lots are CLIENT side here (buy_lots / sell_lots), as MT5 reports them.
+   */
+  fastify.get(
+    '/risk-radar/mt5-book',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const nodes = await mt5Nodes();
+      if (!nodes) return reply.code(502).send({ error: 'MT5 nodes could not be read', status: 502 });
+
+      const enabled = nodes.filter((n) => n.is_enabled);
+      const results = await Promise.all(
+        enabled.map(async (n) => {
+          const res = await nexriskApi.get<{ positions?: Mt5PositionRow[] }>(`/api/v1/mt5/nodes/${n.id}/books/B/positions`);
+          return { node: n, ok: res.ok, positions: res.ok && Array.isArray(res.data?.positions) ? res.data.positions : [] };
+        }),
+      );
+
+      const bySymbol = new Map<string, { symbol: string; buy_lots: number; sell_lots: number; positions: number; logins: Set<number> }>();
+      let total = 0;
+      for (const r of results) {
+        for (const pos of r.positions) {
+          if (!pos || typeof pos.symbol !== 'string' || !pos.symbol) continue;
+          const lots = Number(pos.volume_lots);
+          if (!Number.isFinite(lots) || lots <= 0) continue;
+          let row = bySymbol.get(pos.symbol);
+          if (!row) { row = { symbol: pos.symbol, buy_lots: 0, sell_lots: 0, positions: 0, logins: new Set() }; bySymbol.set(pos.symbol, row); }
+          if (pos.action === 'SELL') row.sell_lots += lots; else row.buy_lots += lots;
+          row.positions++;
+          row.logins.add(pos.login);
+          total++;
+        }
+      }
+
+      return reply.send({
+        as_of: new Date().toISOString(),
+        nodes: results.map((r) => ({ node_id: r.node.id, node_name: r.node.node_name, node_type: r.node.node_type, ok: r.ok, positions: r.positions.length })),
+        total_positions: total,
+        by_symbol: [...bySymbol.values()].map((r) => ({ symbol: r.symbol, buy_lots: r.buy_lots, sell_lots: r.sell_lots, positions: r.positions, logins: r.logins.size })),
+      });
+    }
+  );
 }

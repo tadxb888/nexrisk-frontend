@@ -8,6 +8,14 @@
 //   seed   GET /api/v1/risk-radar/exposure               (once, on open)
 //   live   topic portfolio.exposure.symbols              (WebSocket, ~1 Hz)
 //   stress GET /api/v1/risk/largest-1day                 (once, on open)
+//   groups GET /api/v1/risk-radar/instruments            (once, on open)
+//   check  GET /api/v1/risk-radar/mt5-book               (once, on open)
+//
+// The map is grouped by the broker's own symbol tree on the MT5 MASTER — no
+// grouping is invented here. The MT5 book check is what lets an empty or
+// partial exposure feed be told apart from a flat book: while no live
+// snapshot has arrived, instruments MT5 holds B-Book positions in but the
+// feed has no figure for are drawn grey with their lots.
 // Nothing is polled. Flow toxicity and Liquidity show an explicit
 // "awaiting feed" state until the service publishes their measures — no layer
 // ever paints a colour it has no measurement for.
@@ -33,10 +41,13 @@ import {
   connectRiskRadarWebSocket,
   getRiskRadarExposure,
   cockpitApi,
+  riskRadarApi,
   type PortfolioExposureSymbolsData,
+  type RiskRadarMt5Book,
 } from '@/services/api';
 import { usePermission } from '@/stores/usePermission';
-import { FAMILIES, familyName, hashSymbol, layoutSymbols, type MapPosition } from './riskRadar/instrumentMap';
+import { buildMap, groupsFromTree, hashSymbol, type InstrumentMap } from './riskRadar/instrumentMap';
+import { RadarIcon } from './riskRadar/RadarIcon';
 import { HeatRenderer, rampGradientCss, type HeatBlob } from './riskRadar/heatField';
 import {
   BANDS,
@@ -214,6 +225,37 @@ function useLargest1Day(): Record<string, number> | null {
   return data;
 }
 
+/** The broker's symbol tree, read once. Until it arrives the map has one region. */
+function useSymbolTree() {
+  const [tree, setTree] = useState<{ groupOf: Map<string, string>; order: string[]; source: string | null }>(
+    () => ({ groupOf: new Map(), order: [], source: null }),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    riskRadarApi.getInstruments()
+      .then((d) => {
+        if (cancelled || !d || !Array.isArray(d.instruments)) return;
+        setTree({ ...groupsFromTree(d.instruments), source: d.source?.node_name ?? null });
+      })
+      .catch(() => { /* instruments stay under "Unclassified" */ });
+    return () => { cancelled = true; };
+  }, []);
+  return tree;
+}
+
+/** Open B-Book positions per symbol on the MT5 servers, read once. */
+function useMt5Book(): RiskRadarMt5Book | null {
+  const [book, setBook] = useState<RiskRadarMt5Book | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    riskRadarApi.getMt5Book()
+      .then((d) => { if (!cancelled && d && Array.isArray(d.by_symbol)) setBook(d); })
+      .catch(() => { /* the page then relies on the exposure feed alone */ });
+    return () => { cancelled = true; };
+  }, []);
+  return book;
+}
+
 /** A local clock tick, for "is the feed still fresh". No network. */
 function useClock(everyMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -361,16 +403,6 @@ function Sparkline({
   );
 }
 
-function RadarGlyph({ size = 26 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 26 26" aria-hidden="true">
-      <circle cx="13" cy="13" r="11.5" fill="none" stroke="#3ddc57" strokeWidth="1.6" />
-      <circle cx="13" cy="13" r="7.5" fill="none" stroke="#ffe01f" strokeWidth="1.6" />
-      <circle cx="13" cy="13" r="3.4" fill="#ff3b30" />
-    </svg>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Summary cards
 // ═══════════════════════════════════════════════════════════════════════════
@@ -508,9 +540,17 @@ function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: num
   return a.x < b.x + b.w + 3 && a.x + a.w + 3 > b.x && a.y < b.y + b.h + 2 && a.y + a.h + 2 > b.y;
 }
 
+function captionOf(name: string): string {
+  return name.length > 24 ? `${name.slice(0, 23)}…` : name;
+}
+
+function captionWidth(name: string): number {
+  return captionOf(name).length * 7.3 + 18;
+}
+
 function placeSymbols(
   view: RadarView,
-  positions: Map<string, MapPosition>,
+  imap: InstrumentMap,
   w: number,
   h: number,
   always: Array<string | null>,
@@ -519,9 +559,11 @@ function placeSymbols(
   const boxes: Array<{ x: number; y: number; w: number; h: number }> = [];
   const pinned = new Set(always.filter(Boolean) as string[]);
 
+  const positions = imap.positions;
+
   // Region captions are obstacles too.
-  for (const f of FAMILIES) {
-    boxes.push({ x: f.rect.x * w + 8, y: f.rect.y * h + 6, w: f.label.length * 7.6 + 18, h: 22 });
+  for (const r of imap.regions) {
+    boxes.push({ x: r.rect.x * w + 8, y: r.rect.y * h + 6, w: captionWidth(r.name), h: 22 });
   }
 
   // …and so is every marker: a name never sits on another instrument's dot.
@@ -578,13 +620,14 @@ function symbolAria(s: RadarSymbol): string {
 
 interface RadarMapProps {
   view: RadarView;
+  imap: InstrumentMap;
   layer: Layer;
   selected: string | null;
   onSelect: (symbol: string | null) => void;
   children?: ReactNode;
 }
 
-function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) {
+function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HeatRenderer | null>(null);
@@ -607,10 +650,7 @@ function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) 
     return () => ro.disconnect();
   }, []);
 
-  const positions = useMemo(
-    () => layoutSymbols(view.symbols.map((s) => s.symbol)),
-    [view],
-  );
+  const positions = imap.positions;
 
   // What each patch should reach; the picture eases towards it.
   const targets = useMemo(() => {
@@ -666,11 +706,11 @@ function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) 
     for (let y = 0.5; y < sz.h; y += 34) { ctx.moveTo(0, y); ctx.lineTo(sz.w, y); }
     ctx.stroke();
 
-    // A crowded family gets smaller patches so it does not merge into a carpet.
+    // A crowded region gets smaller patches so it does not merge into a carpet.
     const crowd = new Map<string, number>();
     for (const symbol of shown.keys()) {
       const p = pos.get(symbol);
-      if (p) crowd.set(p.family, (crowd.get(p.family) ?? 0) + 1);
+      if (p) crowd.set(p.region, (crowd.get(p.region) ?? 0) + 1);
     }
 
     const base = Math.min(sz.h, sz.w * 0.5);
@@ -678,7 +718,7 @@ function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) 
     for (const [symbol, heat] of shown) {
       const p = pos.get(symbol);
       if (!p) continue;
-      const tight = Math.max(0.62, Math.min(1, Math.sqrt(7 / (crowd.get(p.family) ?? 1))));
+      const tight = Math.max(0.62, Math.min(1, Math.sqrt(7 / (crowd.get(p.region) ?? 1))));
       blobs.push({
         x: p.x * sz.w,
         y: p.y * sz.h,
@@ -702,8 +742,8 @@ function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
   const placed = useMemo(
-    () => (size.w > 0 ? placeSymbols(view, positions, size.w, size.h, [selected, hovered]) : []),
-    [view, positions, size, selected, hovered],
+    () => (size.w > 0 ? placeSymbols(view, imap, size.w, size.h, [selected, hovered]) : []),
+    [view, imap, size, selected, hovered],
   );
 
   // The inspector already describes the selected instrument.
@@ -729,11 +769,11 @@ function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) 
         role="group"
         aria-label="Instrument map"
       >
-        {/* Family regions — geography only */}
-        {FAMILIES.map((f) => {
+        {/* Regions: the broker's own symbol groups — geography only */}
+        {imap.regions.map((f) => {
           const x = f.rect.x * size.w, y = f.rect.y * size.h;
           const w = f.rect.w * size.w, h = f.rect.h * size.h;
-          const lw = f.label.length * 7.6 + 18;
+          const lw = Math.min(captionWidth(f.name), Math.max(40, w - 16));
           return (
             <g key={f.id} pointerEvents="none">
               <rect
@@ -743,9 +783,9 @@ function RadarMap({ view, layer, selected, onSelect, children }: RadarMapProps) 
               <rect x={x + 8} y={y + 6} width={lw} height={22} rx={4} fill="rgba(7, 11, 17, 0.86)" stroke="rgba(150, 180, 215, 0.42)" />
               <text
                 x={x + 8 + lw / 2} y={y + 21} textAnchor="middle" className="font-mono"
-                style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.1em', fill: C.soft }}
+                style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', fill: C.soft }}
               >
-                {f.label}
+                {captionOf(f.name)}
               </text>
             </g>
           );
@@ -970,8 +1010,8 @@ function ActionButtons() {
 }
 
 function SymbolDetail({
-  s, view, upto, scope, scopeText, onClose,
-}: { s: RadarSymbol; view: RadarView; upto: number; scope: PlatformScope; scopeText: string; onClose: () => void }) {
+  s, view, upto, scope, scopeText, region, onClose,
+}: { s: RadarSymbol; view: RadarView; upto: number; scope: PlatformScope; scopeText: string; region: string; onClose: () => void }) {
   const trend = s.pricing === 'priced' ? trendOf(history, upto, (x) => usdOf(x.snapshot, s.symbol, scope)) : null;
   const series = history.slice(0, upto + 1).map((x) => usdOf(x.snapshot, s.symbol, scope));
   const byPlatform = scope === 'ALL' && (s.parts.length > 1 || s.partlyUnpriced);
@@ -982,7 +1022,7 @@ function SymbolDetail({
     <div style={{ padding: '14px 16px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12, color: C.faint }}>{familyName(s.family)} · exposure · {scopeText}</div>
+          <div style={{ fontSize: 12, color: C.faint }}>{region} · exposure · {scopeText}</div>
           <div className="font-mono" style={{ fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1.2 }}>{s.symbol}</div>
         </div>
         <button
@@ -1005,8 +1045,9 @@ function SymbolDetail({
 
       {s.pricing === 'unpriced' && (
         <p style={{ fontSize: 12.5, color: C.soft, lineHeight: 1.5, margin: '6px 0 4px' }}>
-          The feed carries a B-Book position for this instrument but no USD value, so it has no place on
-          the colour scale and is left out of the totals. It is not a low reading.
+          {s.fromMt5Book
+            ? 'MT5 holds a B-Book position in this instrument, but the exposure feed carries no figure for it. The lots below are read from the MT5 server; without a USD value it has no place on the colour scale and is left out of the totals. It is not a low reading.'
+            : 'The feed carries a B-Book position for this instrument but no USD value, so it has no place on the colour scale and is left out of the totals. It is not a low reading.'}
         </p>
       )}
       {s.pricing === 'flat' && (
@@ -1118,7 +1159,9 @@ function SymbolDetail({
   );
 }
 
-function RankedList({ view, scopeText, onSelect }: { view: RadarView; scopeText: string; onSelect: (symbol: string) => void }) {
+function RankedList({
+  view, scopeText, emptyText, onSelect,
+}: { view: RadarView; scopeText: string; emptyText: string; onSelect: (symbol: string) => void }) {
   const priced = view.symbols.filter((s) => s.pricing === 'priced');
   const unpriced = view.symbols.filter((s) => s.pricing === 'unpriced');
   const flat = view.symbols.filter((s) => s.pricing === 'flat');
@@ -1144,7 +1187,7 @@ function RankedList({ view, scopeText, onSelect }: { view: RadarView; scopeText:
       </div>
 
       {view.symbols.length === 0 && (
-        <div style={{ padding: '18px 16px', fontSize: 13, color: C.soft }}>No open exposure in this snapshot.</div>
+        <div style={{ padding: '18px 16px', fontSize: 13, color: C.soft, lineHeight: 1.5 }}>{emptyText}</div>
       )}
 
       {priced.length > 0 && (
@@ -1422,6 +1465,8 @@ function Legend({ layer }: { layer: Layer }) {
 export function RiskRadarPage() {
   const { snapshot, socket, lastLiveAt } = useRadarFeed();
   const largest1Day = useLargest1Day();
+  const tree = useSymbolTree();
+  const mt5Book = useMt5Book();
   const now = useClock(5_000);
 
   const [layer, setLayer] = useState<Layer>('exposure');
@@ -1435,8 +1480,27 @@ export function RiskRadarPage() {
   const upto = replaying ? replayIndex : history.length - 1;
   const shownSnapshot = replaying ? history[replayIndex].snapshot : snapshot;
 
-  const view = useMemo(() => buildView(shownSnapshot, largest1Day, scope), [shownSnapshot, largest1Day, scope]);
+  // The MT5 book was read once, when the page opened. It is compared with the
+  // feed only until a live snapshot arrives: after that the feed moves on and
+  // a one-off reading of MT5 would raise false gaps.
+  const mt5Check = !replaying && lastLiveAt === null ? mt5Book : null;
+
+  const view = useMemo(
+    () => buildView(shownSnapshot, largest1Day, scope, mt5Check?.by_symbol ?? null),
+    [shownSnapshot, largest1Day, scope, mt5Check],
+  );
   const selectedSymbol = selected ? view.bySymbol.get(selected) ?? null : null;
+
+  const imap = useMemo(
+    () => buildMap(tree.groupOf, tree.order, view.symbols.map((s) => s.symbol)),
+    [tree, view],
+  );
+
+  // What an empty map means, in words.
+  const mt5Names = mt5Check ? mt5Check.nodes.filter((n) => n.ok).map((n) => n.node_name).join(', ') : '';
+  const emptyText = mt5Check && mt5Check.total_positions === 0 && scope !== 'CTRADER' && mt5Names
+    ? `No open B-Book positions on MT5 (${mt5Names}), checked ${fmtUtcTime(parseTime(mt5Check.as_of))}.`
+    : 'No open exposure in this snapshot.';
 
   // Which platforms the snapshot actually has data for.
   const covered = useMemo(() => coverageOf(shownSnapshot), [shownSnapshot]);
@@ -1513,7 +1577,7 @@ export function RiskRadarPage() {
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-            <RadarGlyph />
+            <RadarIcon size={30} color="#3ddc57" />
             <div>
               <h1 style={{ fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1.15, margin: 0 }}>Risk Radar</h1>
               <div style={{ fontSize: 13, color: C.soft }}>Where the risk in the book sits, instrument by instrument.</div>
@@ -1588,13 +1652,11 @@ export function RiskRadarPage() {
                 })}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
-                {missing.length > 0 && shownAlone.length > 0 ? (
+                {missing.length > 0 && shownAlone.length > 0 && (
                   <div style={{ fontSize: 12, color: '#ffb020', whiteSpace: 'nowrap' }}>
                     {missing.map((p) => PLATFORM_LABEL[p]).join(' and ')} not in the feed yet · showing{' '}
                     {shownAlone.map((p) => PLATFORM_LABEL[p]).join(' and ')} only
                   </div>
-                ) : (
-                  <div className="font-mono" style={{ fontSize: 12, color: C.faint, whiteSpace: 'nowrap' }}>Instrument map · fixed layout</div>
                 )}
                 <div role="radiogroup" aria-label="Trading platform" style={{ display: 'flex', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: C.soft, marginRight: 8 }}>Platform</span>
@@ -1627,7 +1689,7 @@ export function RiskRadarPage() {
             </div>
 
             <div style={{ position: 'relative', flex: 1, minHeight: 0, margin: '0 6px 6px' }}>
-              <RadarMap view={view} layer={layer} selected={selected} onSelect={setSelected}>
+              <RadarMap view={view} imap={imap} layer={layer} selected={selected} onSelect={setSelected}>
                 {layer !== 'exposure' && (
                   <div
                     style={{
@@ -1644,7 +1706,15 @@ export function RiskRadarPage() {
                     </div>
                   </div>
                 )}
-                {layer === 'exposure' && !snapshot && (
+                <div
+                  style={{
+                    position: 'absolute', right: 12, bottom: 8, fontSize: 11.5, color: C.faint,
+                    pointerEvents: 'none', textShadow: '0 0 6px #05080d',
+                  }}
+                >
+                  {tree.source ? `Groups: symbol tree of ${tree.source}` : 'Symbol groups not loaded'}
+                </div>
+                {layer === 'exposure' && !snapshot && view.symbols.length === 0 && (
                   <div
                     style={{
                       position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
@@ -1674,10 +1744,26 @@ export function RiskRadarPage() {
                   <div
                     style={{
                       position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
-                      fontSize: 14, color: C.soft, pointerEvents: 'none',
+                      fontSize: 14, color: C.soft, pointerEvents: 'none', textAlign: 'center',
                     }}
                   >
-                    No open exposure in this snapshot.
+                    {emptyText}
+                  </div>
+                )}
+                {layer === 'exposure' && !pendingPlatform && view.feedGaps > 0 && mt5Check && (
+                  <div
+                    role="note"
+                    style={{
+                      position: 'absolute', left: 10, bottom: 30, maxWidth: 'calc(100% - 20px)',
+                      background: 'rgba(8, 12, 18, 0.94)', border: '1px solid #ffb02099', borderRadius: 6,
+                      padding: '7px 11px', fontSize: 12.5, color: '#ffb020', lineHeight: 1.45,
+                      pointerEvents: 'none', zIndex: 2,
+                    }}
+                  >
+                    The exposure feed has no figure for {view.feedGaps} instrument{view.feedGaps === 1 ? '' : 's'} MT5 holds
+                    B-Book positions in ({mt5Check.total_positions} open position{mt5Check.total_positions === 1 ? '' : 's'},
+                    read {fmtUtcTime(parseTime(mt5Check.as_of))}). {view.feedGaps === 1 ? 'It is' : 'They are'} drawn grey, lots only,
+                    until the feed prices {view.feedGaps === 1 ? 'it' : 'them'}.
                   </div>
                 )}
               </RadarMap>
@@ -1690,9 +1776,9 @@ export function RiskRadarPage() {
             ) : pendingPlatform ? (
               <PlatformPendingInspector platform={pendingPlatform} />
             ) : selectedSymbol ? (
-              <SymbolDetail s={selectedSymbol} view={view} upto={upto} scope={scope} scopeText={scopeText} onClose={() => setSelected(null)} />
+              <SymbolDetail s={selectedSymbol} view={view} upto={upto} scope={scope} scopeText={scopeText} region={imap.regionOf(selectedSymbol.symbol)} onClose={() => setSelected(null)} />
             ) : (
-              <RankedList view={view} scopeText={scopeText} onSelect={setSelected} />
+              <RankedList view={view} scopeText={scopeText} emptyText={emptyText} onSelect={setSelected} />
             )}
           </Panel>
         </div>

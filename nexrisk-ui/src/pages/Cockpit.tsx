@@ -20,6 +20,7 @@ import {
 import { fmtHdrMoney, fmtHdrCompact } from '@/stores/PortfolioStatsContext';
 import { Link } from 'react-router-dom';
 import { HelpIcon } from '../help/HelpIcon';
+import { RadarIcon } from './riskRadar/RadarIcon';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES — match wire shape from PortfolioBroadcaster.cpp
@@ -1343,11 +1344,7 @@ export function CockpitPage() {
               whiteSpace: 'nowrap',
             }}
           >
-            <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
-              <circle cx="13" cy="13" r="11.5" fill="none" stroke="#3ddc57" strokeWidth="1.8" />
-              <circle cx="13" cy="13" r="7.5" fill="none" stroke="#ffe01f" strokeWidth="1.8" />
-              <circle cx="13" cy="13" r="3.4" fill="#ff3b30" />
-            </svg>
+            <RadarIcon size={20} />
             Risk Radar
             <span aria-hidden="true">→</span>
           </Link>
