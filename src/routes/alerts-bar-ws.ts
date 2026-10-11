@@ -20,10 +20,11 @@
  *     subscribe/unsubscribe at runtime; we don't expose that here).
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { SocketStream } from '@fastify/websocket';
 import WebSocket from 'ws';
 import { config } from '../config.js';
+import { bindSocketToSession } from '../websocket/session-guard.js';
 
 function backendWsUrl(): string {
   const restUrl = new URL(config.nexriskApiUrl);
@@ -143,9 +144,12 @@ export async function alertsBarWsRoutes(fastify: FastifyInstance): Promise<void>
 
   fastify.get(
     '/ws/v1/alerts-bar/events',
-    { websocket: true },
-    (connection: SocketStream) => {
+    // A signed-in session is required: without the session cookie the
+    // handshake is answered 401, and the socket is closed when its session ends.
+    { websocket: true, preHandler: [fastify.authenticate] },
+    (connection: SocketStream, request: FastifyRequest) => {
       const socket = connection.socket;
+      if (!bindSocketToSession(socket, request)) return;
       browserClients.add(socket);
       fastify.log.info(
         `[AlertsBar WS] Browser connected — total=${browserClients.size}`,

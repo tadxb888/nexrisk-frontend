@@ -87,6 +87,16 @@ export const sessionStore = {
   },
 
   /**
+   * True while the session exists and has not expired. Unlike get(), this is
+   * not counted as activity: it never moves `lastAccessedAt`. Used to watch
+   * open WebSockets without letting an open tab keep its session alive.
+   */
+  has(sessionId: string): boolean {
+    const session = _store.get(sessionId);
+    return !!session && Date.now() - session.lastAccessedAt <= SESSION_MAX_AGE_MS;
+  },
+
+  /**
    * Partially update a session (e.g. after a silent token refresh).
    */
   update(

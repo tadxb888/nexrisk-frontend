@@ -20,10 +20,11 @@
  * No snapshot pre-fetch needed — FIX WS is a pure PUB/SUB stream.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { SocketStream } from '@fastify/websocket';
 import WebSocket from 'ws';
 import { config } from '../config.js';
+import { bindSocketToSession } from '../websocket/session-guard.js';
 
 function backendWsUrl(): string {
   const restUrl = new URL(config.nexriskApiUrl);
@@ -139,8 +140,12 @@ export async function fixWsRoutes(fastify: FastifyInstance): Promise<void> {
   connectBackend();
   if (!watchdogTimer) watchdogTimer = setInterval(checkUpstream, WATCHDOG_INTERVAL_MS);
 
-  fastify.get('/ws/v1/fix/events', { websocket: true }, (connection: SocketStream) => {
+  // A signed-in session is required: without the session cookie the handshake
+  // is answered 401, and the socket is closed when its session ends. This
+  // route also forwards what the browser sends to the backend.
+  fastify.get('/ws/v1/fix/events', { websocket: true, preHandler: [fastify.authenticate] }, (connection: SocketStream, request: FastifyRequest) => {
     const socket = connection.socket;
+    if (!bindSocketToSession(socket, request)) return;
     browserClients.add(socket);
     fastify.log.info(`[FIX WS] Browser connected — total=${browserClients.size}`);
 
