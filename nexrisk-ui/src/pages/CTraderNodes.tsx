@@ -203,6 +203,10 @@ function fmtClock(ms: number) {
   return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function fmtDateClock(ms: number) {
+  return new Date(ms).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 /** Milliseconds for display: one decimal. The API sends measurements such as 18.9984. */
 const fmtMs = (ms: number) => (Math.round(ms * 10) / 10).toFixed(1);
 
@@ -481,6 +485,31 @@ function TestLine({ outcome }: { outcome: TestOutcome }) {
 // ============================================================
 /** Nothing while the node's data loads normally; one line when a load failed. */
 function DataWarning({ data }: { data: CTraderNodeData }) {
+  return (
+    <>
+      <LoadWarning data={data} />
+      <RecoveryWarning data={data} />
+    </>
+  );
+}
+
+// The MASTER fetches the deals made while it was not connected, after every
+// load, and stores them. Only a recovery that did not read them all is shown.
+function RecoveryWarning({ data }: { data: CTraderNodeData }) {
+  const r = data.recovery;
+  if (!r || (r.state !== 'FAILED' && r.state !== 'INCOMPLETE')) return null;
+  const since = r.from_ms > 0 ? <> since <span className="font-mono">{fmtDateClock(r.from_ms)}</span></> : null;
+  return (
+    <p className="leading-snug" style={{ color: YELLOW, overflowWrap: 'anywhere' }}>
+      {r.state === 'FAILED'
+        ? <>Deals{since} not stored yet: they could not be read from cTrader{r.error && <> ({r.error})</>}
+            {r.retry_at_ms > 0 && <>. Next attempt <span className="font-mono">{fmtClock(r.retry_at_ms)}</span></>}.</>
+        : <>Deals{since} may be incomplete{r.error && <> ({r.error})</>}. They are read again after the next login.</>}
+    </p>
+  );
+}
+
+function LoadWarning({ data }: { data: CTraderNodeData }) {
   if (data.state === 'DEFERRED') {
     return (
       <p className="leading-snug" style={{ color: YELLOW }}>

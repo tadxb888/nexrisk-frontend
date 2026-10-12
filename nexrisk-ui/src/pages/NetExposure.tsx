@@ -42,7 +42,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useAuth } from '@/stores/AuthContext';
-import { mt5Api, type MT5PositionWithNode, type MT5NodeAPI } from '@/services/api';
+import { mt5Api, isCTraderFrame, type MT5PositionWithNode, type MT5NodeAPI } from '@/services/api';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 import type {
@@ -903,6 +903,9 @@ export function NetExposurePage() {
       if (cancelled) return;
       try {
         const msg = JSON.parse(evt.data);
+        // cTrader frames use the same event names on this socket; these
+        // figures are MT5 only.
+        if (isCTraderFrame(msg)) return;
 
         // All-in P/L for a single MT5 position (matches BBookPage.stats.netPnL).
         const allInPnl = (p: MT5PositionWithNode): number =>

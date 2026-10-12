@@ -843,11 +843,36 @@ export interface CTraderNodeData {
   next_sync_at_ms: number;
   positions_book_a: number;
   positions_book_b: number;
+  /** Counters of the events cTrader pushes (Node Admin API 1.4). For support. */
+  events?: CTraderNodeDataEvents;
+  /** The last recovery of deals (Node Admin API 1.5). MASTER only. */
+  recovery?: CTraderDealRecovery;
   assets: CTraderNodeDataList;
   groups: CTraderNodeDataList;
   symbols: CTraderNodeDataList;
   traders: CTraderNodeDataList;
   positions: CTraderNodeDataList;
+}
+
+export interface CTraderNodeDataEvents {
+  handled: number;
+  unreadable: number;
+  waiting: number;
+  last_at_ms: number;
+  deals: number;
+  position_seq: number;
+}
+
+/**
+ * After every load the cTrader MASTER fetches the deals made while it was not
+ * connected and stores them. state '' = not the MASTER, or none has run yet.
+ */
+export interface CTraderDealRecovery {
+  state: '' | 'RUNNING' | 'SKIPPED' | 'DONE' | 'INCOMPLETE' | 'FAILED';
+  from_ms: number;
+  recovered_deals: number;
+  error: string;
+  retry_at_ms: number;
 }
 
 /** Fields every list answer starts with. */
@@ -1434,6 +1459,25 @@ export type WsEnvelope<T = unknown> = {
   timestamp_ms: number;
 };
 
+// ── Topic ctrader.position (cTrader Node Data API 1.1) ──────────────────────
+// Live open positions of every started cTrader node. Follow it by four rules:
+// SNAPSHOT replaces everything, POSITION_SYNC replaces one node, ADD/CHANGE
+// insert or replace the row (node_id, position_id), DELETE removes it.
+export interface CTraderNodeRef { platform: 'CTRADER'; node_id: number; node_name: string }
+export type CTraderPositionRow = CTraderPosition & CTraderNodeRef;
+export type CTraderPositionMessage =
+  | { type: 'SNAPSHOT'; data: { nodes: (CTraderNodeRef & { node_type: string; seq: number; count: number })[]; positions: CTraderPositionRow[]; total: number } }
+  | { type: 'POSITION_SYNC'; data: CTraderNodeRef & { seq: number; positions: CTraderPositionRow[]; total: number } }
+  | { type: 'POSITION_ADD' | 'POSITION_CHANGE' | 'POSITION_DELETE'; data: CTraderPositionRow & { seq: number } };
+
+export const CTRADER_POSITION_TOPIC = 'ctrader.position';
+
+/** True for a frame of a cTrader topic. Pages reading mt5.position skip these:
+ *  both platforms use the same event names on the same socket. */
+export function isCTraderFrame(msg: { topic?: unknown }): boolean {
+  return typeof msg.topic === 'string' && msg.topic.startsWith('ctrader.');
+}
+
 export type BBookWsEvent =
   | { type: 'SNAPSHOT';        data: MT5PositionWithNode[]         }
   | { type: 'POSITION_ADD';    data: MT5PositionWithNode            }
@@ -1448,18 +1492,24 @@ export type BBookWsEvent =
  */
 export function connectBBookWebSocket(
   onMessage: (event: BBookWsEvent) => void,
-  onStatus?: (status: 'open' | 'closed' | 'error') => void
+  onStatus?: (status: 'open' | 'closed' | 'error') => void,
+  onCTraderPosition?: (event: CTraderPositionMessage) => void,
 ): () => void {
   const ws = new WebSocket(`${WS_BASE}/ws/v1/mt5/events`);
 
   ws.onopen = () => {
     onStatus?.('open');
-    ws.send(JSON.stringify({ type: 'subscribe', topics: ['mt5.position'] }));
+    ws.send(JSON.stringify({ type: 'subscribe', topics: ['mt5.position', CTRADER_POSITION_TOPIC] }));
   };
 
   ws.onmessage = (ev: MessageEvent<string>) => {
     try {
-      onMessage(JSON.parse(ev.data) as BBookWsEvent);
+      const msg = JSON.parse(ev.data);
+      if (isCTraderFrame(msg)) {
+        if (msg.topic === CTRADER_POSITION_TOPIC) onCTraderPosition?.(msg as CTraderPositionMessage);
+        return;
+      }
+      onMessage(msg as BBookWsEvent);
     } catch { /* ignore parse errors */ }
   };
 

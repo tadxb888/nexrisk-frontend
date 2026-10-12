@@ -61,6 +61,81 @@ const POSITION_FLUSH_MS = 1000;
 const pendingPositionFrames = new Map<string, string>();
 let positionFlushTimer: ReturnType<typeof setInterval> | null = null;
 
+// ── cTrader positions (topic ctrader.position) ─────────────────────────────
+// The service sends this topic's SNAPSHOT once, when the shared upstream
+// connection subscribes. A browser that connects later would never get one,
+// so the BFF follows the topic itself, by the four rules of the cTrader Node
+// Data API (v1.1+), and hands each new browser a SNAPSHOT built from what it
+// holds. Every frame still passes through to the browsers unchanged.
+// A position's key is (node_id, position_id): ids of two nodes can collide.
+const CT_POSITION_TOPIC = 'ctrader.position';
+type CtRow = { node_id: number; position_id: number } & Record<string, unknown>;
+type CtNodeMeta = { node_id: number; seq: number; count: number } & Record<string, unknown>;
+let ctKnown = false;                                    // a SNAPSHOT has arrived on this upstream connection
+const ctRows  = new Map<number, Map<number, CtRow>>();  // node_id -> position_id -> row
+const ctNodes = new Map<number, CtNodeMeta>();          // started nodes, as the snapshot lists them
+
+function ctReset(): void {
+  ctKnown = false;
+  ctRows.clear();
+  ctNodes.clear();
+}
+
+function ctNodeRows(nodeId: number): Map<number, CtRow> {
+  let m = ctRows.get(nodeId);
+  if (!m) { m = new Map(); ctRows.set(nodeId, m); }
+  return m;
+}
+
+function ctFollow(type: string | undefined, data: unknown): void {
+  if (!data || typeof data !== 'object') return;
+  const d = data as Record<string, unknown>;
+  if (type === 'SNAPSHOT') {
+    ctReset();
+    ctKnown = true;
+    for (const n of (d.nodes as CtNodeMeta[] | undefined) ?? []) ctNodes.set(n.node_id, { ...n });
+    for (const r of (d.positions as CtRow[] | undefined) ?? []) ctNodeRows(r.node_id).set(r.position_id, r);
+    return;
+  }
+  const nodeId = Number(d.node_id);
+  if (!Number.isFinite(nodeId)) return;
+  if (type === 'POSITION_SYNC') {
+    const rows = (d.positions as CtRow[] | undefined) ?? [];
+    const seq  = Number(d.seq ?? 0);
+    if (seq === 0 && rows.length === 0) {               // the node was stopped: it holds nothing
+      ctRows.delete(nodeId);
+      ctNodes.delete(nodeId);
+      return;
+    }
+    const m = new Map<number, CtRow>();
+    for (const r of rows) m.set(r.position_id, r);
+    ctRows.set(nodeId, m);
+    const { positions: _p, total: _t, ...meta } = d;
+    ctNodes.set(nodeId, { ...(ctNodes.get(nodeId) ?? {}), ...meta, node_id: nodeId, seq, count: m.size } as CtNodeMeta);
+    return;
+  }
+  const pid = Number(d.position_id);
+  if (!Number.isFinite(pid)) return;
+  const rows = ctNodeRows(nodeId);
+  if (type === 'POSITION_ADD' || type === 'POSITION_CHANGE') rows.set(pid, d as CtRow);
+  else if (type === 'POSITION_DELETE') rows.delete(pid);
+  else return;
+  const meta = ctNodes.get(nodeId);
+  if (meta) { meta.seq = Number(d.seq ?? meta.seq); meta.count = rows.size; }
+}
+
+function ctSnapshotFrame(): string | null {
+  if (!ctKnown) return null;
+  const positions: CtRow[] = [];
+  for (const m of ctRows.values()) for (const r of m.values()) positions.push(r);
+  return JSON.stringify({
+    topic: CT_POSITION_TOPIC,
+    type: 'SNAPSHOT',
+    data: { nodes: Array.from(ctNodes.values()), positions, total: positions.length },
+    timestamp_ms: Date.now(),
+  });
+}
+
 function sendToAll(frame: string): void {
   for (const client of browserClients) {
     if (client.readyState === WebSocket.OPEN) client.send(frame);
@@ -127,7 +202,7 @@ function connectBackend() {
       // 'ctrader.node_status' must be the exact topic name: a prefix would
       // receive the events but not the snapshot sent on subscribe.
       topics: ['mt5.position', 'mt5.node_status', 'mt5.deal',
-               'ctrader.node_status',
+               'ctrader.node_status', CT_POSITION_TOPIC,
                'portfolio.summary.today', 'portfolio.summary.month',
                'portfolio.exposure.symbols',
                'quote',
@@ -151,6 +226,7 @@ function connectBackend() {
       // future topics) must pass through to browser clients.
       if (msg.type === "SNAPSHOT" && msg.topic === "mt5.position") return;
       if (msg.type === "ping") { backendWs?.send(JSON.stringify({ type: "pong", timestamp_ms: Date.now() })); return; }
+      if (msg.topic === CT_POSITION_TOPIC) ctFollow(msg.type, (msg as { data?: unknown }).data);
 
       // Replaceable per-tick P/L batch: hold the newest per symbol.
       // Everything else on this topic passes straight through.
@@ -169,6 +245,7 @@ function connectBackend() {
     backendWs = null;
     lastSnapshot = null;
     pendingPositionFrames.clear();
+    ctReset();            // the next connection's SNAPSHOT replaces everything
     reconnectTimer = setTimeout(() => connectBackend(), 3000);
   });
 
@@ -191,6 +268,11 @@ export async function mt5WsRoutes(fastify: FastifyInstance): Promise<void> {
     if (!bindSocketToSession(socket, request)) return;
     browserClients.add(socket);
     fastify.log.info(`[MT5 WS] Browser connected — total=${browserClients.size}`);
+
+    // cTrader positions as the BFF holds them (see ctFollow). Sent at once, so
+    // no frame of the topic can slip in between and be lost.
+    const ctSnap = ctSnapshotFrame();
+    if (ctSnap) socket.send(ctSnap);
 
     // Fresh snapshot per browser (see buildSnapshot). Fall back to the cached
     // one only if REST is unavailable right now.
