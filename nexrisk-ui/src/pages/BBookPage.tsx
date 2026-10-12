@@ -43,8 +43,8 @@ export interface BBookPosition {
   price_open: number;
   sl: number | null;   // price_sl — 0 mapped to null
   tp: number | null;   // price_tp — 0 mapped to null
-  price_current: number | null;   // null: cTrader does not send it yet
-  profit: number | null;          // null: cTrader does not send it yet
+  price_current: number | null;   // cTrader: null while there is no quote for the symbol
+  profit: number | null;          // cTrader: null without a price or a currency conversion
   swap: number;
   commission: number;
   hedge: 'No' | 'Rule' | 'Manual';   // reserved for future hedge logic
@@ -92,8 +92,8 @@ function mapPosition(raw: MT5PositionWithNode): BBookPosition {
 
 /**
  * A cTrader open position (book B) as a B-Book row. Field names match MT5's by
- * design of the Node Data API, so the mapping mirrors mapPosition. What cTrader
- * does not send stays empty: current price and profit are null, never 0.
+ * design of the Node Data API, so the mapping mirrors mapPosition. A current
+ * price or profit the service cannot compute stays empty: null, never 0.
  */
 function mapCTraderPosition(raw: CTraderPositionRow): BBookPosition {
   return {
@@ -485,6 +485,26 @@ export function BBookPage() {
       for (const r of msg.data.positions ?? []) m.set(r.position_id, r);
       store.set(msg.data.node_id, m);
       if (ctMasterRef.current?.id === msg.data.node_id) ctRebuild();
+      return;
+    }
+    if (msg.type === 'POSITION_PRICES') {
+      // Two fields of rows already held. Entries whose row is not held are ignored.
+      const node = store.get(msg.data.node_id);
+      if (!node) return;
+      const shown = ctMasterRef.current?.id === msg.data.node_id;
+      const api = gridRef.current?.api;
+      const update: BBookPosition[] = [];
+      for (const e of msg.data.prices ?? []) {
+        const held = node.get(e.position_id);
+        if (!held) continue;
+        const next = { ...held, price_current: e.price_current, profit: e.profit };
+        node.set(e.position_id, next);
+        if (shown && api && next.book === 'B') {
+          const row = mapCTraderPosition(next);
+          if (api.getRowNode(getRowId(row))) update.push(row);
+        }
+      }
+      if (update.length) api!.applyTransactionAsync({ update });
       return;
     }
     const r = msg.data;

@@ -847,6 +847,8 @@ export interface CTraderNodeData {
   events?: CTraderNodeDataEvents;
   /** The last recovery of deals (Node Admin API 1.5). MASTER only. */
   recovery?: CTraderDealRecovery;
+  /** Quote subscriptions and the prices of the open positions (Node Admin API 1.6). */
+  prices?: CTraderNodePrices;
   assets: CTraderNodeDataList;
   groups: CTraderNodeDataList;
   symbols: CTraderNodeDataList;
@@ -875,6 +877,24 @@ export interface CTraderDealRecovery {
   retry_at_ms: number;
 }
 
+/**
+ * Quotes of a node. state '' = not connected or nothing subscribed yet.
+ * with_markup: open positions priced before their group's price-stream markup,
+ * which the service does not apply yet.
+ */
+export interface CTraderNodePrices {
+  state: '' | 'READY' | 'PARTIAL' | 'FAILED';
+  symbols: number;
+  quotes: number;
+  last_quote_at_ms: number;
+  unpriced: number;
+  unconverted: number;
+  with_markup: number;
+  error_code: string;
+  error: string;
+  retry_at_ms: number;
+}
+
 /** Fields every list answer starts with. */
 export interface CTraderListAnswer {
   node_id: number;
@@ -897,6 +917,8 @@ export interface CTraderGroup {
   has_access: boolean;
   is_dealing_desk: boolean;
   margin_stopout: number | null;
+  /** cTrader's price stream of the group (Data API 1.3). null if not sent. */
+  price_stream_id?: number | null;
 }
 export interface CTraderGroupsAnswer extends CTraderListAnswer { groups: CTraderGroup[] }
 
@@ -952,11 +974,11 @@ export interface CTraderPosition {
   volume_lots: number | null;
   volume: number;
   price_open: number;
-  /** null for now: the service will compute it from cTrader quotes. */
+  /** Close price (bid for BUY, ask for SELL), from cTrader quotes. null without a quote. */
   price_current: number | null;
   price_sl: number | null;
   price_tp: number | null;
-  /** null for now, as price_current. */
+  /** Floating profit, gross, in the account's currency. null without a price or a conversion. */
   profit: number | null;
   swap: number;
   commission: number;
@@ -1462,13 +1484,18 @@ export type WsEnvelope<T = unknown> = {
 // ── Topic ctrader.position (cTrader Node Data API 1.1) ──────────────────────
 // Live open positions of every started cTrader node. Follow it by four rules:
 // SNAPSHOT replaces everything, POSITION_SYNC replaces one node, ADD/CHANGE
-// insert or replace the row (node_id, position_id), DELETE removes it.
+// insert or replace the row (node_id, position_id), DELETE removes it,
+// POSITION_PRICES sets price_current and profit of rows already held.
 export interface CTraderNodeRef { platform: 'CTRADER'; node_id: number; node_name: string }
 export type CTraderPositionRow = CTraderPosition & CTraderNodeRef;
 export type CTraderPositionMessage =
   | { type: 'SNAPSHOT'; data: { nodes: (CTraderNodeRef & { node_type: string; seq: number; count: number })[]; positions: CTraderPositionRow[]; total: number } }
   | { type: 'POSITION_SYNC'; data: CTraderNodeRef & { seq: number; positions: CTraderPositionRow[]; total: number } }
-  | { type: 'POSITION_ADD' | 'POSITION_CHANGE' | 'POSITION_DELETE'; data: CTraderPositionRow & { seq: number } };
+  | { type: 'POSITION_ADD' | 'POSITION_CHANGE' | 'POSITION_DELETE'; data: CTraderPositionRow & { seq: number } }
+  /** At most once a second per node: price and profit of the positions that moved (Data API 1.3). */
+  | { type: 'POSITION_PRICES'; data: CTraderNodeRef & { prices: CTraderPositionPrice[]; total: number } };
+
+export interface CTraderPositionPrice { position_id: number; price_current: number | null; profit: number | null }
 
 export const CTRADER_POSITION_TOPIC = 'ctrader.position';
 

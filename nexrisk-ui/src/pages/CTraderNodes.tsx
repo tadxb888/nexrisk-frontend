@@ -488,7 +488,34 @@ function DataWarning({ data }: { data: CTraderNodeData }) {
   return (
     <>
       <LoadWarning data={data} />
+      <PriceWarning data={data} />
       <RecoveryWarning data={data} />
+    </>
+  );
+}
+
+// Current price and floating profit of the open positions come from cTrader
+// quotes. Shown: quotes refused or failing, positions whose profit cannot be
+// converted, and positions priced before their group's price-stream markup
+// (not applied yet). Positions merely waiting for a first quote are not:
+// the count is only as fresh as the node's last event.
+function PriceWarning({ data }: { data: CTraderNodeData }) {
+  const p = data.prices;
+  if (!p) return null;
+  const lines: ReactNode[] = [];
+  if (p.state === 'FAILED' || p.state === 'PARTIAL') {
+    lines.push(<>Prices {p.state === 'FAILED' ? 'not received' : 'incomplete'}{(p.error || p.error_code) && <>: {p.error || p.error_code}</>}
+      {p.retry_at_ms > 0 && <>. Next attempt <span className="font-mono">{fmtClock(p.retry_at_ms)}</span></>}.</>);
+  }
+  const plural = (n: number) => (n === 1 ? 'position' : 'positions');
+  if (p.unconverted > 0) lines.push(<><span className="font-mono">{p.unconverted}</span> open {plural(p.unconverted)} without a profit: the currency could not be converted.</>);
+  if (p.with_markup > 0) lines.push(<><span className="font-mono">{p.with_markup}</span> open {plural(p.with_markup)} priced before the group's price-stream markup.</>);
+  if (lines.length === 0) return null;
+  return (
+    <>
+      {lines.map((l, i) => (
+        <p key={i} className="leading-snug" style={{ color: YELLOW, overflowWrap: 'anywhere' }}>{l}</p>
+      ))}
     </>
   );
 }
