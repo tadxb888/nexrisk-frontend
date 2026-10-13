@@ -136,6 +136,11 @@ export interface PortfolioStatsValue {
    *  null until a payload that carries it has arrived. */
   bbookBySource: PortfolioBySource | null;
   abook: BookCardStats;
+  /** books.A.by_source: LP and CTRADER (LP_MT5 / LP_CTRADER / LP_UNASSIGNED
+   *  once the backend splits LP by platform). null until it arrives. */
+  abookBySource: PortfolioBySource | null;
+  /** books.C.by_source: LP. null until it arrives. */
+  cbookBySource: PortfolioBySource | null;
   cbook: BookCardStats;
   cost:  CostCardStats;
   total: TotalCardStats;
@@ -160,6 +165,8 @@ const DEFAULT_VALUE: PortfolioStatsValue = {
   bbook: EMPTY_BOOK_STATS,
   bbookBySource: null,
   abook: EMPTY_BOOK_STATS,
+  abookBySource: null,
+  cbookBySource: null,
   cbook: EMPTY_BOOK_STATS,
   cost:  EMPTY_COST_STATS,
   total: EMPTY_TOTAL_STATS,
@@ -332,6 +339,8 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   const [bbook, setBbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
   const [bbookBySource, setBbookBySource] = useState<PortfolioBySource | null>(null);
   const [abook, setAbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
+  const [abookBySource, setAbookBySource] = useState<PortfolioBySource | null>(null);
+  const [cbookBySource, setCbookBySource] = useState<PortfolioBySource | null>(null);
   const [cbook, setCbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
   const [total, setTotal] = useState<TotalCardStats>(EMPTY_TOTAL_STATS);
 
@@ -349,7 +358,9 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
     setBbook(EMPTY_BOOK_STATS);
     setBbookBySource(null);
     setAbook(EMPTY_BOOK_STATS);
+    setAbookBySource(null);
     setCbook(EMPTY_BOOK_STATS);
+    setCbookBySource(null);
     setTotal(EMPTY_TOTAL_STATS);
     setVsPriorMonth(null);
 
@@ -362,7 +373,9 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       setBbook(mapBook(d.books.B));
       setBbookBySource(d.books.B.by_source ?? null);
       setAbook(mapBook(d.books.A));
+      setAbookBySource(d.books.A.by_source ?? null);
       setCbook(mapBook(d.books.C));
+      setCbookBySource(d.books.C.by_source ?? null);
       setTotal(mapTotal(d.total));
       setPeriodFrom(d.from ?? null);
       setPeriodTo(d.to ?? null);
@@ -397,14 +410,14 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<PortfolioStatsValue>(
     () => ({
-      bbook, bbookBySource, abook, cbook, cost, total,
+      bbook, bbookBySource, abook, abookBySource, cbook, cbookBySource, cost, total,
       cardsPeriod, setCardsPeriod,
       periodFrom, periodTo, baselineDate,
       lastUpdated: fmtLastUpdated(periodTo),
       vsPriorMonth,
       wsStatus,
     }),
-    [bbook, bbookBySource, abook, cbook, cost, total,
+    [bbook, bbookBySource, abook, abookBySource, cbook, cbookBySource, cost, total,
      cardsPeriod, setCardsPeriod,
      periodFrom, periodTo, baselineDate,
      vsPriorMonth,

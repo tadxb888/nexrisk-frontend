@@ -29,9 +29,12 @@
 //       collapsed (no surprise re-open — user can re-expand).
 //
 // State owned here:
-//   • mt5NodeId             — single page-level master node id.
-//                             Hydrated from /mt5/nodes via Mt5NodeSelector
-//                             on first paint.
+//   • platform              — All / MT5 (Master) / cTrader (Master), for
+//                             the breakdown pane. Default All. The charts
+//                             are not split by platform (the chart routes
+//                             have no split): they stay whole-book.
+//   • mt5NodeId             — the MT5 master's id (from /mt5/nodes), passed
+//                             to the charts and the insight panel.
 //   • breakdownCollapsed    — chevron + Get Insight both write this.
 //   • per-chart period      — keyed map, survives chart switches.
 //   • per-chart hedge side  — keyed map (Symbols Hedge only).
@@ -44,6 +47,9 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ChartPanel } from './ChartPanel';
 import { PortfolioBreakdownPane } from './PortfolioBreakdownPane';
+import type { PortfolioPlatform } from './PlatformSelector';
+import { useMt5MasterNode } from '@/hooks/useMt5MasterNode';
+import { usePlatformMasters } from '@/hooks/usePlatformMasters';
 import {
   getChartById,
   type ChartId,
@@ -71,7 +77,10 @@ export function ChartWorkspace({
   const [insightOnByChart, setInsightOnByChart] = useState<Record<string, boolean>>({});
 
   // Page-level state.
-  const [mt5NodeId, setMt5NodeId] = useState<number | null>(null);
+  const { node: mt5Master } = useMt5MasterNode();
+  const mt5NodeId = mt5Master?.id ?? null;
+  const masters = usePlatformMasters();
+  const [platform, setPlatform] = useState<PortfolioPlatform>('All');   // default: All
   const [breakdownCollapsed, setBreakdownCollapsed] = useState<boolean>(false);
 
   const period    = periodByChart[selectedChartId]    ?? entry.defaultPeriod;
@@ -104,6 +113,7 @@ export function ChartWorkspace({
           period={period}
           onPeriod={(p) => setPeriodByChart(prev => ({ ...prev, [selectedChartId]: p }))}
           mt5NodeId={mt5NodeId}
+          platform={platform}
           hedgeSide={hedgeSide}
           onHedgeSide={(s) => setHedgeSideByChart(prev => ({ ...prev, [selectedChartId]: s }))}
           insightOn={insightOn}
@@ -119,8 +129,9 @@ export function ChartWorkspace({
       <PortfolioBreakdownPane
         collapsed={breakdownCollapsed}
         onToggle={() => setBreakdownCollapsed(c => !c)}
-        mt5NodeId={mt5NodeId}
-        onMt5Node={setMt5NodeId}
+        platform={platform}
+        onPlatform={setPlatform}
+        masters={masters}
       />
 
     </div>

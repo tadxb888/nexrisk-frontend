@@ -1640,6 +1640,9 @@ export interface PortfolioSourceFields {
   long_volume?: number;
   short_volume?: number;
   net_volume?: number;
+  long_volume_notional?: number;
+  short_volume_notional?: number;
+  net_volume_notional?: number;
   commissions: number;
   swaps: number;
   rebates: number;
@@ -1651,8 +1654,11 @@ export interface PortfolioSourceFields {
   unpriced?: number;
 }
 
-/** Sources: B has MT5 and CTRADER; A has LP and CTRADER; C has LP. */
-export type PortfolioBySource = Partial<Record<'MT5' | 'CTRADER' | 'LP', PortfolioSourceFields>>;
+/** Sources: B has MT5 and CTRADER; A has LP and CTRADER; C has LP.
+ *  A also has LP_MT5, LP_CTRADER and LP_UNASSIGNED once the backend splits the
+ *  hedge rules' LP positions by the platform they hedge (LP is their sum). */
+export type PortfolioSourceKey = 'MT5' | 'CTRADER' | 'LP' | 'LP_MT5' | 'LP_CTRADER' | 'LP_UNASSIGNED';
+export type PortfolioBySource = Partial<Record<PortfolioSourceKey, PortfolioSourceFields>>;
 
 export interface PortfolioSummaryData {
   period:   string;             // "today" | "month"

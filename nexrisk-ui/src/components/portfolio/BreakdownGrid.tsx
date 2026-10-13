@@ -42,12 +42,21 @@ import {
   type TotalCardStats,
 } from '@/stores/PortfolioStatsContext';
 
+import type { PortfolioPlatform } from './PlatformSelector';
+import { platformColumns, type BooksBySource } from './platformBooks';
+
 interface Props {
   total: TotalCardStats;
   bbook: BookCardStats;
   abook: BookCardStats;
   cbook: BookCardStats;
+  /** Platform selector. All: the books as sent; MT5 / cTrader: see platformBooks. */
+  platform: PortfolioPlatform;
+  bySource: BooksBySource;
 }
+
+const C_BOOK_HINT =
+  'C-Book holds manual trades to the LP. They belong to no platform, so the C-Book is shown in full under every platform choice.';
 
 type VolumeMode = 'lots' | 'notional';
 
@@ -80,10 +89,6 @@ const ROWS: Array<{ key: string; label: string; kind: 'pnl' | 'count' | 'volume'
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────
-function sumOrNull(vals: (number | null)[]): number | null {
-  const present = vals.filter((v): v is number => v != null);
-  return present.length === 0 ? null : present.reduce((s, v) => s + v, 0);
-}
 
 // Net Realized P/L = Realized − Cost, where Cost = commissions + swaps + rebates.
 // Cost components are stored as POSITIVE magnitudes by the backend
@@ -151,15 +156,17 @@ function rollUp(stats: BookCardStats, volumeMode: VolumeMode): ColumnStats {
 }
 
 // ── Main ────────────────────────────────────────────────────────
-export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
+export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }: Props) {
   // Volume display mode — Lots (raw) or Notional (lots × per-symbol contract size).
   // Mirrors CBookPage's identical toggle. Local to this component; doesn't
   // need persistence (cheap to flip again).
   const [volumeMode, setVolumeMode] = useState<VolumeMode>('lots');
 
   const inLots = volumeMode === 'lots';
+  const perPlatform = platform !== 'All';
+  const cols = platformColumns(platform, { bbook, abook, cbook }, bySource);
 
-  const portfolio: ColumnStats = {
+  const wholeBook: ColumnStats = {
     // Net Realized = Realized − Cost (uniform across all books).
     // Uses the same netRealized helper as the per-book rows for consistency.
     netReal:     netRealized(total.realized, total.commissions, total.swaps, total.rebates),
@@ -192,11 +199,39 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
     rebates:     total.rebates,
   };
 
-  const columns: Array<{ kind: 'parent' | 'child'; label: string; stats: ColumnStats; tooltip?: string }> = [
-    { kind: 'parent', label: 'PORTFOLIO', stats: portfolio },
-    { kind: 'child',  label: 'B-BOOK',    stats: rollUp(bbook, volumeMode), tooltip: 'B-Book: Internalized flow held against the house.' },
-    { kind: 'child',  label: 'A-BOOK',    stats: rollUp(abook, volumeMode), tooltip: 'A-Book: positions opened by hedging strategies (automated execution).' },
-    { kind: 'child',  label: 'C-BOOK',    stats: rollUp(cbook, volumeMode), tooltip: 'C-Book: positions executed manually via Terminal or DOM Trader.' },
+  // Under a single platform the Portfolio column is the sum of the three
+  // columns shown; Hedge Direction = (A.net + C.net) − B.net over them.
+  const portfolio: ColumnStats = cols.sum
+    ? {
+        ...rollUp(cols.sum, volumeMode),
+        hedgeDirection: inLots ? cols.sumHedgeDirection : cols.sumHedgeDirectionNotional,
+      }
+    : wholeBook;
+
+  const platformName = platform === 'cTrader' ? 'cTrader' : 'MT5';
+  const columns: Array<{ kind: 'parent' | 'child'; label: string; sublabel?: string; stats: ColumnStats; tooltip?: string; notes: string[] }> = [
+    { kind: 'parent', label: 'PORTFOLIO', stats: portfolio,
+      sublabel: perPlatform ? `${platformName} + C-Book` : undefined,
+      tooltip: perPlatform ? `Portfolio: the sum of the ${platformName} B-Book, the ${platformName} A-Book and the C-Book.` : undefined,
+      notes: cols.notes.portfolio },
+    { kind: 'child',  label: 'B-BOOK',    stats: rollUp(cols.bbook, volumeMode),
+      sublabel: perPlatform ? platformName : undefined,
+      tooltip: perPlatform
+        ? `B-Book: internalized flow held against the house, ${platformName} master only.`
+        : 'B-Book: Internalized flow held against the house.',
+      notes: cols.notes.bbook },
+    { kind: 'child',  label: 'A-BOOK',    stats: rollUp(cols.abook, volumeMode),
+      sublabel: perPlatform ? platformName : undefined,
+      tooltip: platform === 'MT5'
+        ? 'A-Book: LP positions opened by the hedging strategies on the MT5 B-Book.'
+        : platform === 'cTrader'
+        ? 'A-Book: cTrader book A (passed to its LP) and the LP positions opened by the hedging strategies on the cTrader B-Book.'
+        : 'A-Book: positions opened by hedging strategies (automated execution).',
+      notes: cols.notes.abook },
+    { kind: 'child',  label: 'C-BOOK',    stats: rollUp(cols.cbook, volumeMode),
+      sublabel: perPlatform ? 'All platforms' : undefined,
+      tooltip: `C-Book: positions executed manually via Terminal or DOM Trader. ${C_BOOK_HINT}`,
+      notes: cols.notes.cbook },
   ];
 
   // Row track string — header + N data rows.
@@ -229,8 +264,15 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
           style={{ gridColumn: 1, gridRow: i + 2 }}
           className="flex items-center pr-3"
         >
-          <span className="text-[13px] uppercase tracking-wider text-white leading-tight whitespace-nowrap">
-            {row.label}
+          <span
+            className="text-[13px] uppercase tracking-wider text-white leading-tight whitespace-nowrap"
+            title={row.key === 'unrl'
+              ? (perPlatform
+                  ? 'Live floating P/L of the open positions shown (the change since the baseline is kept per whole book only).'
+                  : 'Change in floating P/L since the baseline (end of the day before the period).')
+              : undefined}
+          >
+            {row.key === 'unrl' && perPlatform ? 'Floating P/L' : row.label}
           </span>
         </div>
       ))}
@@ -276,10 +318,27 @@ export function BreakdownGrid({ total, bbook, abook, cbook }: Props) {
             <div
               style={{ gridColumn: gridCol, gridRow: 1 }}
               className="flex items-center justify-center px-3 border-b border-[#3a3a3e] z-10"
+              title={col.tooltip}
             >
-              <span className="text-[14px] uppercase tracking-wider text-white font-semibold">
-                {col.label}
-              </span>
+              <div className="flex flex-col items-center leading-tight">
+                <span className="text-[14px] uppercase tracking-wider text-white font-semibold">
+                  {col.label}
+                  {col.notes.length > 0 && (
+                    <span
+                      className="ml-1 cursor-help"
+                      style={{ color: '#c09060' }}
+                      title={Array.from(new Set(col.notes)).join('\n')}
+                    >
+                      *
+                    </span>
+                  )}
+                </span>
+                {col.sublabel && (
+                  <span className="text-[10px] uppercase tracking-wider" style={{ color: '#c8c8cc' }}>
+                    {col.sublabel}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Data cells */}

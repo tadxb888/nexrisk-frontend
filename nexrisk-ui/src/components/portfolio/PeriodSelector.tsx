@@ -6,7 +6,7 @@
 // CHART_REGISTRY) — some charts only support "This Month", others
 // the full set including H1 / H2 / This Year.
 //
-// Visual matches Mt5NodeSelector for consistency in the chart header.
+// Visual matches the Portfolio Platform selector for consistency in the chart header.
 // ============================================
 
 import {

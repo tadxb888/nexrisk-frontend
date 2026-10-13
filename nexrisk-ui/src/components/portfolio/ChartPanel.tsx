@@ -16,12 +16,16 @@
 import { ChartHeader } from './ChartHeader';
 import { ChartExplanation } from './ChartExplanation';
 import type { ChartEntry, ChartId, ChartPeriod } from './charts/registry';
+import type { PortfolioPlatform } from './PlatformSelector';
 
 interface Props {
   entry:           ChartEntry;
   period:          ChartPeriod;
   onPeriod:        (p: ChartPeriod) => void;
   mt5NodeId:       number | null;
+  /** Platform chosen on the breakdown pane. The charts are not split by
+   *  platform, so under MT5 / cTrader a note says they show both. */
+  platform:        PortfolioPlatform;
   hedgeSide:       'long' | 'short' | 'both';
   onHedgeSide:     (s: 'long' | 'short' | 'both') => void;
   insightOn:       boolean;
@@ -38,6 +42,7 @@ export function ChartPanel({
   period,
   onPeriod,
   mt5NodeId,
+  platform,
   hedgeSide,
   onHedgeSide,
   insightOn,
@@ -64,6 +69,16 @@ export function ChartPanel({
         onSelectChart={onSelectChart}
         onPinChart={onPinChart}
       />
+
+      {platform !== 'All' && (
+        <div
+          className="px-3 py-1 border-b border-[#3a3a3c] text-[11px] flex-shrink-0"
+          style={{ backgroundColor: '#232225', color: '#e0e0e4' }}
+          title="The chart data is not split by platform. The Platform selector applies to the Portfolio breakdown only."
+        >
+          Charts: both platforms. The Platform selector ({platform === 'MT5' ? 'MT5 (Master)' : 'cTrader (Master)'}) applies to the breakdown only.
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 flex overflow-hidden">
 

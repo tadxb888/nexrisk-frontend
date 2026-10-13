@@ -10,7 +10,7 @@
 //   • Page-level Period selector (drives both the breakdown values
 //     and stays in sync with the TopBar Cards Period selector via
 //     PortfolioStatsContext.cardsPeriod)
-//   • MT5 Master node selector (single option for now)
+//   • Platform selector: All / MT5 (Master) / cTrader (Master)
 //   • Portfolio (parent) summary card — Net of Costs
 //   • B-Book / A-Book / C-Book (child cards, indented)
 //
@@ -22,24 +22,30 @@
 import { ChevronRight, ChevronLeft } from 'lucide-react';
 
 import { CardsPeriodSelector } from './CardsPeriodSelector';
-import { Mt5NodeSelector } from './Mt5NodeSelector';
+import { PlatformSelector, type PortfolioPlatform } from './PlatformSelector';
 import { BreakdownGrid } from './BreakdownGrid';
+import type { PlatformMasters } from '@/hooks/usePlatformMasters';
 import { usePortfolioStats, fmtHdrMoney, pnlColor } from '@/stores/PortfolioStatsContext';
 
 interface Props {
   collapsed:    boolean;
   onToggle:     () => void;
-  mt5NodeId:    number | null;
-  onMt5Node:    (id: number | null) => void;
+  platform:     PortfolioPlatform;
+  onPlatform:   (p: PortfolioPlatform) => void;
+  masters:      PlatformMasters;
 }
 
 export function PortfolioBreakdownPane({
   collapsed,
   onToggle,
-  mt5NodeId,
-  onMt5Node,
+  platform,
+  onPlatform,
+  masters,
 }: Props) {
-  const { bbook, abook, cbook, total, lastUpdated, vsPriorMonth } = usePortfolioStats();
+  const {
+    bbook, abook, cbook, total, lastUpdated, vsPriorMonth,
+    bbookBySource, abookBySource, cbookBySource,
+  } = usePortfolioStats();
 
   // ── Collapsed state: 28px vertical strip with chevron + rotated label
   if (collapsed) {
@@ -86,10 +92,10 @@ export function PortfolioBreakdownPane({
         </button>
       </div>
 
-      {/* Selectors strip — Period + MT5 Node on the same line */}
+      {/* Selectors strip — Period + Platform on the same line */}
       <div className="px-3 py-2 border-b border-[#3a3a3c] flex items-center gap-4 flex-shrink-0">
         <CardsPeriodSelector />
-        <Mt5NodeSelector value={mt5NodeId} onChange={onMt5Node} />
+        <PlatformSelector value={platform} onChange={onPlatform} masters={masters} />
         <div
           className="ml-auto text-[10px] uppercase tracking-wider whitespace-nowrap"
           style={{ color: '#8a8a8a' }}
@@ -107,7 +113,14 @@ export function PortfolioBreakdownPane({
           that book. Cards keep their identity via per-column borders +
           accent stripes (Portfolio yellow, B/A/C teal). */}
       <div className="flex-1 min-h-0 overflow-y-auto p-2">
-        <BreakdownGrid total={total} bbook={bbook} abook={abook} cbook={cbook} />
+        <BreakdownGrid
+          total={total}
+          bbook={bbook}
+          abook={abook}
+          cbook={cbook}
+          platform={platform}
+          bySource={{ B: bbookBySource, A: abookBySource, C: cbookBySource }}
+        />
 
         {/* ── Under-total slim row: This Month vs prior month, NET REALIZED.
             Pace gauge — are we ahead of or behind last month at the same
@@ -126,7 +139,7 @@ export function PortfolioBreakdownPane({
               title={`Net Realized pace vs the same point last month (${vsPriorMonth.from} → ${vsPriorMonth.to}). This: ${thisVal != null ? fmtHdrMoney(thisVal) : '—'} · Prior: ${fmtHdrMoney(prior)}`}
             >
               <span className="uppercase tracking-wider" style={{ color: '#8a8a8a' }}>
-                vs Prior Month · Net Realized
+                vs Prior Month · Net Realized{platform !== 'All' ? ' · Both platforms' : ''}
               </span>
               {thisVal != null && (
                 <span className="font-mono" style={{ color: pnlColor(thisVal) }}>

@@ -7,7 +7,7 @@
 // don't hit the endpoint once per chart.
 //
 // Returns the master node (or null while loading / on error). The
-// `name` field drives the Mt5NodeSelector display label, the `id`
+// `name` field names the MT5 master, the `id`
 // flows into chart data fetches as the per-chart `mt5_node` filter.
 // ============================================
 
