@@ -22,7 +22,7 @@
 //   Absolute limits per instrument are a backend item.
 // ============================================
 
-import type { PortfolioExposureSymbolsData } from '@/services/api';
+import type { PortfolioExposureSymbolsData, PortfolioExposureSymbolRow } from '@/services/api';
 
 export type Band = 'low' | 'moderate' | 'high' | 'critical';
 
@@ -200,8 +200,40 @@ export function coverageOf(snapshot: PortfolioExposureSymbolsData | null): Set<P
     return out;
   }
   out.add('MT5');
-  for (const r of snapshot.by_symbol ?? []) out.add(platformOfRow(r));
+  for (const r of snapshot.by_symbol ?? []) {
+    out.add(platformOfRow(r));
+    if (r && typeof r.b_book_lots_ctrader === 'number') out.add('CTRADER');   // merged rows carry cTrader
+  }
   return out;
+}
+
+/**
+ * Since the backend merges the cTrader MASTER into the same rows (Books
+ * cTrader 1.0), a row without `platform` holds both platforms, with the
+ * cTrader share of the B and A lots given apart. For one platform the row is
+ * cut in two: lots exactly; notional pro rata of the B-Book lots (same symbol,
+ * same contract size). P&L is not given per platform, so a part has none.
+ */
+function partsOfRow(r: PortfolioExposureSymbolRow, scope: PlatformScope): PortfolioExposureSymbolRow[] {
+  if (r.platform || typeof r.b_book_lots_ctrader !== 'number' || scope === 'ALL') return [r];
+  const bCt = num(r.b_book_lots_ctrader);
+  const aCt = num(r.a_book_lots_ctrader);
+  const bAll = num(r.b_book_lots);
+  const usdAll = Math.abs(num(r.b_book_notional_usd));
+  const perLot = Math.abs(bAll) > EPS_LOTS ? usdAll / Math.abs(bAll) : 0;
+  const cut = (b: number, a: number, c: number, platform: string): PortfolioExposureSymbolRow => {
+    const net = b + a + c;
+    return {
+      ...r, platform,
+      b_book_lots: b, a_book_lots: a, c_book_lots: c, net_exposure_lots: net,
+      long_lots: Math.max(net, 0), short_lots: Math.max(-net, 0),
+      b_book_notional_usd: perLot > 0 ? Math.abs(b) * perLot : 0,
+      unrealized_pnl: undefined, realized_pnl_mtd: undefined, pnl_total_mtd: undefined,
+    };
+  };
+  return scope === 'CTRADER'
+    ? [cut(bCt, aCt, 0, 'CTRADER')]
+    : [cut(bAll - bCt, num(r.a_book_lots) - aCt, num(r.c_book_lots), 'MT5')];
 }
 
 /** One platform's share of an instrument. */
@@ -243,8 +275,9 @@ function addOpt(a: number | null, b: number | null): number | null {
  */
 function rowsInScope(snapshot: PortfolioExposureSymbolsData | null, scope: PlatformScope): Merged[] {
   const byKey = new Map<string, Merged>();
-  for (const r of snapshot?.by_symbol ?? []) {
-    if (!r || typeof r.symbol !== 'string' || !r.symbol) continue;
+  for (const whole of snapshot?.by_symbol ?? []) {
+    if (!whole || typeof whole.symbol !== 'string' || !whole.symbol) continue;
+    for (const r of partsOfRow(whole, scope)) {
     const platform = platformOfRow(r);
     if (scope !== 'ALL' && platform !== scope) continue;
 
@@ -273,7 +306,17 @@ function rowsInScope(snapshot: PortfolioExposureSymbolsData | null, scope: Platf
     m.shortLots += num(r.short_lots);
     m.unrealized = addOpt(m.unrealized, optNum(r.unrealized_pnl));
     m.pnlMtd = addOpt(m.pnlMtd, optNum(r.pnl_total_mtd));
-    if (usd > 0 || hasLots) m.parts.push({ platform, usd: usd > 0 ? usd : null, bLots });
+    if (!r.platform && typeof r.b_book_lots_ctrader === 'number' && scope === 'ALL') {
+      // A merged row on the Both view: its two platforms' parts, pro rata.
+      const bCt = num(r.b_book_lots_ctrader);
+      const perLot = Math.abs(bLots) > EPS_LOTS ? usd / Math.abs(bLots) : 0;
+      for (const [p, b] of [['MT5', bLots - bCt], ['CTRADER', bCt]] as const) {
+        if (Math.abs(b) > EPS_LOTS) m.parts.push({ platform: p, usd: perLot > 0 ? Math.abs(b) * perLot : null, bLots: b });
+      }
+    } else if (usd > 0 || hasLots) {
+      m.parts.push({ platform, usd: usd > 0 ? usd : null, bLots });
+    }
+    }
   }
   return [...byKey.values()];
 }

@@ -28,6 +28,7 @@ import {
   type PortfolioWsTotalFields,
   type PortfolioWsPeriod,
   type PortfolioSummaryData,
+  type PortfolioBySource,
   type PortfolioVsPriorMonth,
 } from '@/services/api';
 
@@ -131,6 +132,9 @@ const EMPTY_TOTAL_STATS: TotalCardStats = {
 
 export interface PortfolioStatsValue {
   bbook: BookCardStats;
+  /** The B-Book split by platform (books.B.by_source): MT5 and CTRADER.
+   *  null until a payload that carries it has arrived. */
+  bbookBySource: PortfolioBySource | null;
   abook: BookCardStats;
   cbook: BookCardStats;
   cost:  CostCardStats;
@@ -154,6 +158,7 @@ export interface PortfolioStatsValue {
 
 const DEFAULT_VALUE: PortfolioStatsValue = {
   bbook: EMPTY_BOOK_STATS,
+  bbookBySource: null,
   abook: EMPTY_BOOK_STATS,
   cbook: EMPTY_BOOK_STATS,
   cost:  EMPTY_COST_STATS,
@@ -325,6 +330,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const [bbook, setBbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
+  const [bbookBySource, setBbookBySource] = useState<PortfolioBySource | null>(null);
   const [abook, setAbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
   const [cbook, setCbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
   const [total, setTotal] = useState<TotalCardStats>(EMPTY_TOTAL_STATS);
@@ -341,6 +347,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setWsStatus('connecting');
     setBbook(EMPTY_BOOK_STATS);
+    setBbookBySource(null);
     setAbook(EMPTY_BOOK_STATS);
     setCbook(EMPTY_BOOK_STATS);
     setTotal(EMPTY_TOTAL_STATS);
@@ -353,6 +360,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
 
     const applySnapshot = (d: PortfolioSummaryData) => {
       setBbook(mapBook(d.books.B));
+      setBbookBySource(d.books.B.by_source ?? null);
       setAbook(mapBook(d.books.A));
       setCbook(mapBook(d.books.C));
       setTotal(mapTotal(d.total));
@@ -389,14 +397,14 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<PortfolioStatsValue>(
     () => ({
-      bbook, abook, cbook, cost, total,
+      bbook, bbookBySource, abook, cbook, cost, total,
       cardsPeriod, setCardsPeriod,
       periodFrom, periodTo, baselineDate,
       lastUpdated: fmtLastUpdated(periodTo),
       vsPriorMonth,
       wsStatus,
     }),
-    [bbook, abook, cbook, cost, total,
+    [bbook, bbookBySource, abook, cbook, cost, total,
      cardsPeriod, setCardsPeriod,
      periodFrom, periodTo, baselineDate,
      vsPriorMonth,

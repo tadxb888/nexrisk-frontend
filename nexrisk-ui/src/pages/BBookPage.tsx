@@ -44,9 +44,12 @@ export interface BBookPosition {
   sl: number | null;   // price_sl — 0 mapped to null
   tp: number | null;   // price_tp — 0 mapped to null
   price_current: number | null;   // cTrader: null while there is no quote for the symbol
-  profit: number | null;          // cTrader: null without a price or a currency conversion
-  swap: number;
-  commission: number;
+  profit: number | null;          // USD, broker view. cTrader: null without a price or a rate to USD
+  /** cTrader: broker-view profit in the account's own currency (`currency`). MT5: null. */
+  profit_account: number | null;
+  currency: string;               // cTrader: the account's currency. MT5: ''
+  swap: number | null;            // USD. cTrader: null without a rate to USD
+  commission: number | null;      // USD. cTrader: null without a rate to USD
   hedge: 'No' | 'Rule' | 'Manual';   // reserved for future hedge logic
   lp: string | null;                  // reserved for future LP routing
   group: string;                      // MT5 group (not provided per-position; shown if available)
@@ -81,6 +84,8 @@ function mapPosition(raw: MT5PositionWithNode): BBookPosition {
     sl:            raw.price_sl  !== 0 ? raw.price_sl  : null,
     tp:            raw.price_tp  !== 0 ? raw.price_tp  : null,
     profit:        -raw.profit,  // broker P&L is inverse of client
+    profit_account: null,
+    currency:      '',
     swap:          raw.swap,
     commission:    raw.commission,
     hedge:         'No',
@@ -94,8 +99,22 @@ function mapPosition(raw: MT5PositionWithNode): BBookPosition {
  * A cTrader open position (book B) as a B-Book row. Field names match MT5's by
  * design of the Node Data API, so the mapping mirrors mapPosition. A current
  * price or profit the service cannot compute stays empty: null, never 0.
+ *
+ * Money is shown in USD, as for MT5, so a column adds up across platforms:
+ * profit from `profit_usd`, swap and commission at `usd_rate` (Data API 1.4).
+ * An account currency without a rate to USD leaves them empty. Before 1.4 the
+ * fields are absent; a USD account then needs no rate.
  */
+const round2 = (v: number) => Math.round(v * 100) / 100;
+function usdRateOf(raw: CTraderPositionRow): number | null {
+  if (raw.usd_rate !== undefined) return raw.usd_rate;
+  return raw.currency === 'USD' ? 1 : null;
+}
 function mapCTraderPosition(raw: CTraderPositionRow): BBookPosition {
+  const rate = usdRateOf(raw);
+  const profitUsd = raw.profit_usd !== undefined
+    ? raw.profit_usd
+    : (raw.profit !== null && rate !== null ? round2(raw.profit * rate) : null);
   return {
     platform:      'cTrader',
     login:         raw.login ?? 0,
@@ -108,9 +127,11 @@ function mapCTraderPosition(raw: CTraderPositionRow): BBookPosition {
     price_current: raw.price_current,
     sl:            raw.price_sl,
     tp:            raw.price_tp,
-    profit:        raw.profit === null ? null : -raw.profit,  // broker P&L is inverse of client
-    swap:          raw.swap,
-    commission:    raw.commission,
+    profit:        profitUsd === null ? null : -profitUsd,   // broker P&L is inverse of client
+    profit_account: raw.profit === null ? null : -raw.profit,
+    currency:      raw.currency,
+    swap:          rate === null ? null : round2(raw.swap * rate),
+    commission:    rate === null ? null : round2(raw.commission * rate),
     hedge:         'No',
     lp:            null,
     group:         raw.group,
@@ -497,7 +518,13 @@ export function BBookPage() {
       for (const e of msg.data.prices ?? []) {
         const held = node.get(e.position_id);
         if (!held) continue;
-        const next = { ...held, price_current: e.price_current, profit: e.profit };
+        const next = {
+          ...held,
+          price_current: e.price_current,
+          profit: e.profit,
+          ...(e.profit_usd !== undefined && { profit_usd: e.profit_usd }),
+          ...(e.usd_rate !== undefined && { usd_rate: e.usd_rate }),
+        };
         node.set(e.position_id, next);
         if (shown && api && next.book === 'B') {
           const row = mapCTraderPosition(next);
@@ -720,6 +747,18 @@ export function BBookPage() {
         return { color: v > 0 ? '#66e07a' : v < 0 ? '#ff5c5c' : '#999' };
       },
     },
+    {
+      // cTrader only, hidden by default (Columns panel): the profit in the
+      // account's own currency, as cTrader shows it, broker view.
+      field: 'profit_account',
+      headerName: 'Profit (account ccy)',
+      hide: true,
+      filter: 'agNumberColumnFilter',
+      width: 150,
+      type: 'rightAligned',
+      valueFormatter: (p) => (p.value === null || p.value === undefined
+        ? '' : `${(p.value as number).toFixed(2)} ${p.data?.currency ?? ''}`.trim()),
+    },
     { field: 'swap',       headerName: 'Swap',       filter: 'agNumberColumnFilter', valueFormatter: fmtNum(2), width: 90,  type: 'rightAligned' },
     { field: 'commission', headerName: 'Commission', filter: 'agNumberColumnFilter', valueFormatter: fmtNum(2), width: 110, type: 'rightAligned' },
     { field: 'hedge',  headerName: 'Hedge',  filter: 'agSetColumnFilter', width: 90, filterParams: { values: ['No', 'Rule', 'Manual'] } },
@@ -884,13 +923,46 @@ export function BBookPage() {
   //   period_unrealized = live_floating - baseline_unrealized_eod
   // where the baseline is yesterday's EOD for Today, last-day-of-prev-month
   // for This Month. Computed in PortfolioBroadcaster.cpp.
+  //
+  // The money cells follow the Platform filter. All: the whole B-Book.
+  // MT5 / cTrader: that platform's part (books.B.by_source). A part has the
+  // live floating P&L, not the change since the baseline (kept per book only),
+  // so the cell reads "Floating P/L" there. A payload without by_source is the
+  // MT5 book alone: MT5 then reads the book, cTrader has no figure.
+  const bySource = portfolio.bbookBySource;
+  const perPlatform = platformFilter !== 'All';
+  const part = platformFilter === 'MT5' ? bySource?.MT5 : platformFilter === 'cTrader' ? bySource?.CTRADER : undefined;
+  const useBook = !perPlatform || (platformFilter === 'MT5' && !bySource);
+  const pnlCell: number | null = useBook ? portfolio.bbook.unrealized : (part?.floating ?? null);
+  const pnlLabel = useBook ? 'Unrealized P/L' : 'Floating P/L';
+  const realizedCell: number | null = useBook ? portfolio.bbook.realized : (part?.realized ?? null);
+
   const periodCost = useMemo(() => {
-    const c = portfolio.bbook.commissions;
-    const s = portfolio.bbook.swaps;
-    const r = portfolio.bbook.rebates;
+    const src = useBook ? portfolio.bbook : part;
+    if (!src) return null;
+    const c = src.commissions;
+    const s = src.swaps;
+    const r = src.rebates;
     if (c == null && s == null && r == null) return null;
     return (c ?? 0) + (s ?? 0) + (r ?? 0);
-  }, [portfolio.bbook.commissions, portfolio.bbook.swaps, portfolio.bbook.rebates]);
+  }, [useBook, part, portfolio.bbook]);
+
+  // cTrader money that is not in the figures, said beside them.
+  const ctMoneyCaveat = useMemo<string | null>(() => {
+    if (platformFilter === 'MT5') return null;
+    const ct = bySource?.CTRADER;
+    if (!ct) return null;
+    const lines: string[] = [];
+    if (ct.available === false) {
+      lines.push('The cTrader master is not connected: its positions count in positions and volume, not in money.');
+    } else if ((ct.unpriced ?? 0) > 0) {
+      lines.push(`${ct.unpriced} cTrader position${ct.unpriced === 1 ? ' has' : 's have'} no price yet and ${ct.unpriced === 1 ? 'is' : 'are'} not in the P/L.`);
+    }
+    if ((ct.no_usd_rate ?? 0) > 0) {
+      lines.push(`${ct.no_usd_rate} cTrader position${ct.no_usd_rate === 1 ? ' has' : 's have'} no rate to USD and ${ct.no_usd_rate === 1 ? 'is' : 'are'} not in the P/L.`);
+    }
+    return lines.length ? lines.join(' ') : null;
+  }, [platformFilter, bySource]);
 
   // Hedge Ratio = C-Book volume / B-Book volume × 100, both for the selected
   // period. Same-units comparison (both are lots from the broadcaster), so
@@ -931,7 +1003,7 @@ export function BBookPage() {
               border: '1px solid #49b3b344',
               borderLeft: '3px solid #49b3b3',
             }}
-            title="B-Book card. Live cells reflect open positions; Unrealized/Realized P/L, Cost and Hedge Ratio follow the M/D toggle to the left."
+            title="B-Book card. Live cells reflect open positions; P/L, Cost and Hedge Ratio follow the M/D toggle to the left. P/L and Cost follow the Platform filter."
           >
           {/* Cell 1 — Card name + position count */}
           <div>
@@ -973,12 +1045,19 @@ export function BBookPage() {
           </div>
           <div className="w-px self-stretch bg-[#3a3a3e]" />
 
-          {/* Cell 4 — Unrealized P/L (period-scoped: live floating - baseline_eod) */}
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Unrealized P/L</div>
-            {portfolio.bbook.unrealized != null ? (
-              <div className="text-xs font-mono" style={{ color: pnlColor(portfolio.bbook.unrealized) }}>
-                {fmtHdrMoney(portfolio.bbook.unrealized)}
+          {/* Cell 4 — Unrealized P/L (whole book, period-scoped: live floating - baseline_eod),
+              or a platform's live Floating P/L when the Platform filter is MT5 or cTrader */}
+          <div
+            title={(useBook
+              ? 'Change of the floating P/L since the end of the day before the period.'
+              : `Live floating P/L of the ${platformFilter} part of the B-Book.`)
+              + (ctMoneyCaveat ? ` ${ctMoneyCaveat}` : '')}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">{pnlLabel}</div>
+            {pnlCell != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(pnlCell) }}>
+                {fmtHdrMoney(pnlCell)}
+                {ctMoneyCaveat && <span aria-label="Not every cTrader position is in this figure" style={{ color: '#e0a020' }}> *</span>}
               </div>
             ) : (
               <div className="text-xs font-mono text-[#d2d6e2]">—</div>
@@ -989,9 +1068,9 @@ export function BBookPage() {
           {/* Cell 5 — Realized P/L (period rollup) */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Realized P/L</div>
-            {portfolio.bbook.realized != null ? (
-              <div className="text-xs font-mono" style={{ color: pnlColor(portfolio.bbook.realized) }}>
-                {fmtHdrMoney(portfolio.bbook.realized)}
+            {realizedCell != null ? (
+              <div className="text-xs font-mono" style={{ color: pnlColor(realizedCell) }}>
+                {fmtHdrMoney(realizedCell)}
               </div>
             ) : (
               <div className="text-xs font-mono text-[#d2d6e2]">—</div>
@@ -1012,8 +1091,9 @@ export function BBookPage() {
           </div>
           <div className="w-px self-stretch bg-[#3a3a3e]" />
 
-          {/* Cell 7 — Hedge Ratio (period: C-Book vol / B-Book vol, %) */}
-          <div>
+          {/* Cell 7 — Hedge Ratio (period: C-Book vol / B-Book vol, %). The C-Book
+              covers the whole B-Book, so this stays a whole-book figure. */}
+          <div title="C-Book volume over B-Book volume for the period, whole book, both platforms.">
             <div className="text-[10px] uppercase tracking-wider text-white mb-0.5">Hedge Ratio</div>
             {hedgeRatioPct === null ? (
               <div className="text-xs font-mono text-[#d2d6e2]">—</div>

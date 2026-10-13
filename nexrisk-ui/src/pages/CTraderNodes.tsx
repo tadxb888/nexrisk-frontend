@@ -496,7 +496,8 @@ function DataWarning({ data }: { data: CTraderNodeData }) {
 
 // Current price and floating profit of the open positions come from cTrader
 // quotes. Shown: quotes refused or failing, positions whose profit cannot be
-// converted, and positions priced before their group's price-stream markup
+// converted, positions whose currency has no rate to USD (left out of the
+// Portfolio money figures), and positions priced before their group's price-stream markup
 // (not applied yet). Positions merely waiting for a first quote are not:
 // the count is only as fresh as the node's last event.
 function PriceWarning({ data }: { data: CTraderNodeData }) {
@@ -509,6 +510,7 @@ function PriceWarning({ data }: { data: CTraderNodeData }) {
   }
   const plural = (n: number) => (n === 1 ? 'position' : 'positions');
   if (p.unconverted > 0) lines.push(<><span className="font-mono">{p.unconverted}</span> open {plural(p.unconverted)} without a profit: the currency could not be converted.</>);
+  if ((p.no_usd_rate ?? 0) > 0) lines.push(<><span className="font-mono">{p.no_usd_rate}</span> open {plural(p.no_usd_rate ?? 0)} without a rate to USD: not in the Portfolio money figures.</>);
   if (p.with_markup > 0) lines.push(<><span className="font-mono">{p.with_markup}</span> open {plural(p.with_markup)} priced before the group's price-stream markup.</>);
   if (lines.length === 0) return null;
   return (

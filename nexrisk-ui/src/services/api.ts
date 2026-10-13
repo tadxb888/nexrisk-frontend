@@ -890,6 +890,8 @@ export interface CTraderNodePrices {
   unpriced: number;
   unconverted: number;
   with_markup: number;
+  /** Open positions whose account currency has no rate to USD: in no USD figure (Admin API 1.7). */
+  no_usd_rate?: number;
   error_code: string;
   error: string;
   retry_at_ms: number;
@@ -980,6 +982,10 @@ export interface CTraderPosition {
   price_tp: number | null;
   /** Floating profit, gross, in the account's currency. null without a price or a conversion. */
   profit: number | null;
+  /** profit in USD, rounded to cents (Data API 1.4). null without a profit or a rate to USD. */
+  profit_usd?: number | null;
+  /** Account currency × usd_rate = USD; also converts swap, commission, used_margin. null without a rate. */
+  usd_rate?: number | null;
   swap: number;
   commission: number;
   used_margin: number;
@@ -1495,7 +1501,14 @@ export type CTraderPositionMessage =
   /** At most once a second per node: price and profit of the positions that moved (Data API 1.3). */
   | { type: 'POSITION_PRICES'; data: CTraderNodeRef & { prices: CTraderPositionPrice[]; total: number } };
 
-export interface CTraderPositionPrice { position_id: number; price_current: number | null; profit: number | null }
+export interface CTraderPositionPrice {
+  position_id: number;
+  price_current: number | null;
+  profit: number | null;
+  /** Data API 1.4. */
+  profit_usd?: number | null;
+  usd_rate?: number | null;
+}
 
 export const CTRADER_POSITION_TOPIC = 'ctrader.position';
 
@@ -1613,15 +1626,43 @@ export interface PortfolioVsPriorMonth {
 }
 
 /** Push payload for topic "portfolio.summary.{period}". */
+/**
+ * One source's part of a book (Books cTrader 1.0). Same figures as the book,
+ * except `floating` (live floating P&L) in place of `unrealized` (the change
+ * since the baseline, kept per book only).
+ */
+export interface PortfolioSourceFields {
+  realized: number;
+  floating: number;
+  positions: number;
+  volume: number;
+  volume_notional?: number;
+  long_volume?: number;
+  short_volume?: number;
+  net_volume?: number;
+  commissions: number;
+  swaps: number;
+  rebates: number;
+  /** CTRADER only: false when the cTrader MASTER is not connected (positions count, money does not). */
+  available?: boolean;
+  /** CTRADER only: open positions without a rate to USD, not in `floating`. */
+  no_usd_rate?: number;
+  /** CTRADER only: open positions without a price, not in `floating`. */
+  unpriced?: number;
+}
+
+/** Sources: B has MT5 and CTRADER; A has LP and CTRADER; C has LP. */
+export type PortfolioBySource = Partial<Record<'MT5' | 'CTRADER' | 'LP', PortfolioSourceFields>>;
+
 export interface PortfolioSummaryData {
   period:   string;             // "today" | "month"
   from:     string;             // ISO 8601
   to:       string;             // ISO 8601
   baseline: string;             // YYYY-MM-DD
   books: {
-    B: PortfolioWsBookFields;
-    A: PortfolioWsBookFields;
-    C: PortfolioWsBookFields;
+    B: PortfolioWsBookFields & { by_source?: PortfolioBySource };
+    A: PortfolioWsBookFields & { by_source?: PortfolioBySource };
+    C: PortfolioWsBookFields & { by_source?: PortfolioBySource };
   };
   total: PortfolioWsTotalFields;
   /** Prior-month pace comparison — present on period=month only. */
@@ -1733,6 +1774,10 @@ export interface PortfolioExposureSymbolRow {
   /** C-Book net (long − short) for this symbol, broker view.
    *  NEW: previously absent from the legacy REST shape. */
   c_book_lots:       number;
+  /** The cTrader share of b_book_lots / a_book_lots (Books cTrader 1.0). Present
+   *  once the backend merges the cTrader MASTER into the rows. */
+  b_book_lots_ctrader?: number;
+  a_book_lots_ctrader?: number;
   // Per-symbol B-Book P&L (Card 3 Row 1). Broker view: a symbol that cost the
   // broker money is negative. Optional — a symbol whose USD-conversion path is
   // unavailable may ship 0.0 or omit these.

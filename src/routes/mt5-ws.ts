@@ -120,9 +120,14 @@ function ctFollow(type: string | undefined, data: unknown): void {
     // Two fields of rows already held; an entry whose row is not held is ignored.
     const rows = ctRows.get(nodeId);
     if (!rows) return;
-    for (const e of (d.prices as { position_id: number; price_current: unknown; profit: unknown }[] | undefined) ?? []) {
+    type PriceEntry = { position_id: number; price_current: unknown; profit: unknown; profit_usd?: unknown; usd_rate?: unknown };
+    for (const e of (d.prices as PriceEntry[] | undefined) ?? []) {
       const r = rows.get(Number(e.position_id));
-      if (r) { r.price_current = e.price_current; r.profit = e.profit; }
+      if (!r) continue;
+      r.price_current = e.price_current;
+      r.profit = e.profit;
+      if (e.profit_usd !== undefined) r.profit_usd = e.profit_usd;   // Data API 1.4
+      if (e.usd_rate !== undefined) r.usd_rate = e.usd_rate;
     }
     return;
   }
