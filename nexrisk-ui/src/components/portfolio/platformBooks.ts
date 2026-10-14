@@ -145,7 +145,7 @@ export function ctMoneyNote(ct: PortfolioSourceFields | undefined, counted = fal
 }
 
 export const LP_NOT_SPLIT_NOTE =
-  'LP hedge positions cover both platforms; not split per platform yet. This column shows all of them.';
+  'LP hedge positions cover both platforms and are not split per platform: this column shows all of them.';
 
 function unassignedNote(p: PortfolioSourceFields | undefined): string | null {
   if (!p || !(p.positions > 0 || p.volume > 0)) return null;

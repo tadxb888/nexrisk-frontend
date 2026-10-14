@@ -74,9 +74,9 @@ export function ChartPanel({
         <div
           className="px-3 py-1 border-b border-[#3a3a3c] text-[11px] flex-shrink-0"
           style={{ backgroundColor: '#232225', color: '#e0e0e4' }}
-          title="Traders are listed by login, and cTrader traders are not stored yet (a cTrader login can be the number of an MT5 one)."
+          title="Traders are listed by MT5 login."
         >
-          Top holders: MT5 only. cTrader traders are not listed yet.
+          Top holders: MT5 accounts only.
         </div>
       ) : platform !== 'All' && (
         <div

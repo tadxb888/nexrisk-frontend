@@ -176,7 +176,9 @@ export interface PortfolioStatsValue {
   /** Books cTrader 1.2: per book, positions left out of the floating P&L.
    *  null per book until a payload carrying the fields arrives. */
   pricing: BooksPricing;
-  /** Books cTrader 1.2: notices for a banner above the books. */
+  /** Books cTrader 1.2: backend notices about the figures. Not shown to end
+   *  users: they describe backend changes (e.g. CROSS_PAIRS_PRICED, a one-off
+   *  note that cross pairs were added to the A/C P&L). */
   notices: PortfolioNotice[];
 
   cardsPeriod:    CardsPeriod;

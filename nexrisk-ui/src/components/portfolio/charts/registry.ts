@@ -168,7 +168,7 @@ export const CHART_REGISTRY: ChartEntry[] = [
     id:            'top-holders',
     label:         'Top 30 Holders by Gross Volume',
     thumbnailLabel:'Top 30 Holders',
-    description:   'Top 30 MT5 logins by gross traded volume — month-to-date (period fixed backend-side). cTrader traders are not included yet.',
+    description:   'Top 30 MT5 logins by gross traded volume — month-to-date (period fixed backend-side). cTrader accounts are not included.',
     defaultPeriod: 'this_month',
     periodOptions: ['this_month'],
     Icon:          TopHoldersIcon,
