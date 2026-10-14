@@ -186,6 +186,8 @@ export interface RadarSymbol {
   rating: Rating;
   /** Why it is unpriced, in words ("no price", "A-Book P&L unknown"…). */
   missing: string[];
+  /** Books 1.2: a book's P&L here is a part sum (some positions not priced). */
+  partial: string[];
   /** null when there is no level (unrated, unpriced, or no capacity). */
   band: Band | null;
   heat: number;
@@ -349,6 +351,20 @@ interface Acc {
   pnlMtd: number | null;
   parts: Array<{ platform: Platform; bLots: number; bU: number | null }>;
   fromMt5Book: boolean;
+  partial: string[];
+}
+
+/** Books 1.2: the row's P&L fields that are part sums, with the backend hint. */
+function partialOf(r: PortfolioExposureSymbolRow): string[] {
+  const out: string[] = [];
+  const add = (book: string, flag: boolean | undefined, hint: string | null | undefined, n: number | undefined) => {
+    if (flag !== true) return;
+    out.push(`${book}: ${hint ?? `${n ?? 'some'} position${n === 1 ? '' : 's'} not priced, left out of its P&L`}`);
+  };
+  add('cTrader B-Book', r.b_book_partially_priced_ctrader, r.b_book_pricing_hint_ctrader, r.b_book_unpriced_positions_ctrader);
+  add('A-Book', r.a_book_partially_priced, r.a_book_pricing_hint, r.a_book_unpriced_positions);
+  add('C-Book', r.c_book_partially_priced, r.c_book_pricing_hint, r.c_book_unpriced_positions);
+  return out;
 }
 
 function usdPerLotOf(r: PortfolioExposureSymbolRow): number | null {
@@ -376,6 +392,7 @@ function accumulate(snapshot: PortfolioExposureSymbolsData | null): Map<string, 
       m = {
         symbol: key, bLots: 0, aLots: 0, cLots: 0, netLots: 0, bU: 0, aU: 0, cU: 0,
         usdPerLot: null, unpricedLots: false, pnlMtd: null, parts: [], fromMt5Book: false,
+        partial: [],
       };
       byKey.set(key, m);
     }
@@ -391,6 +408,7 @@ function accumulate(snapshot: PortfolioExposureSymbolsData | null): Map<string, 
     else if (!flat(net) || !flat(b)) m.unpricedLots = true;
     const mtd = optNum(r.pnl_total_mtd);
     if (mtd !== null) m.pnlMtd = (m.pnlMtd ?? 0) + mtd;
+    m.partial.push(...partialOf(r));
 
     if (r.platform) {
       addPart(m, platformOfRow(r), b, bU);
@@ -430,6 +448,7 @@ function addFeedGaps(rows: Map<string, Acc>, mt5Book: Mt5BookRow[]): number {
         symbol: b.symbol, bLots: lots, aLots: 0, cLots: 0, netLots: lots,
         bU: null, aU: 0, cU: 0, usdPerLot: null, unpricedLots: true, pnlMtd: null,
         parts: [{ platform: 'MT5', bLots: lots, bU: null }], fromMt5Book: true,
+        partial: [],
       });
     }
     gaps++;
@@ -491,7 +510,7 @@ function measure(
   }
 
   return {
-    symbol: m.symbol, rating, missing, band,
+    symbol: m.symbol, rating, missing, partial: m.partial, band,
     heat: level !== null ? heatOf(level, t) : 0,
     rank: null,
     bLots: m.bLots, aLots: m.aLots, cLots: m.cLots, netLots: m.netLots,

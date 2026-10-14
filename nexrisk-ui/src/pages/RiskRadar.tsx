@@ -1193,6 +1193,11 @@ function SymbolDetail({
             : 'The loss capacity is not known yet, so the risk has no level.'}
         </Para>
       )}
+      {s.rating !== 'unpriced' && s.partial.length > 0 && (
+        <Para color="#ffb020">
+          Part of the P&amp;L is not priced: {s.partial.join(' ')} The risk shown is measured without them.
+        </Para>
+      )}
       {rated && netFlat && (
         <Para>The books offset each other: the net position is flat, so only the unrealised P&amp;L counts.</Para>
       )}
