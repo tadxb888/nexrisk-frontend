@@ -7,9 +7,19 @@
 // Phase 1 — the Exposure layer runs on live data:
 //   seed   GET /api/v1/risk-radar/exposure               (once, on open)
 //   live   topic portfolio.exposure.symbols              (WebSocket, ~1 Hz)
+//   limit  GET /api/v1/risk-radar/risk-limits            (once, on open)
+//   moves  GET /api/v1/risk/daily-moves                  (once, on open)
+//   P&L    GET /api/v1/risk-radar/month-pnl              (once, on open)
+//          then topic portfolio.summary.month            (WebSocket)
 //   stress GET /api/v1/risk/largest-1day                 (once, on open)
 //   groups GET /api/v1/risk-radar/instruments            (once, on open)
 //   check  GET /api/v1/risk-radar/mt5-book               (once, on open)
+//
+// The colour is the risk measure (riskRadar/model.ts): money the broker can
+// lose on an instrument under its historical adverse move, after the
+// unrealised P&L of B + A + C, as a share of the loss capacity left this
+// month (the broker's limit, Settings → Risk Limits). Share of B-Book stays
+// in the inspector as information only.
 //
 // The map is grouped by the broker's own symbol tree on the MT5 MASTER — no
 // grouping is invented here. The MT5 book check is what lets an empty or
@@ -29,7 +39,8 @@
 // Reading rules the page keeps to:
 //   • colour is the measure — the dot on an instrument is its exact band, the
 //     glow around it fades out from that level; place and outline carry nothing;
-//   • an instrument without a USD value is drawn grey, never green;
+//   • an instrument without a USD value, a P&L or an adverse move is drawn
+//     grey (unpriced ◇ / unrated ○), never green;
 //   • the timeline replays what this page observed, nothing reconstructed;
 //   • the buttons open other pages — nothing is executed from here.
 // ============================================
@@ -42,7 +53,10 @@ import {
   getRiskRadarExposure,
   cockpitApi,
   riskRadarApi,
+  riskLimitsApi,
+  type DailyMovesData,
   type PortfolioExposureSymbolsData,
+  type RiskLimitsSection,
   type RiskRadarMt5Book,
 } from '@/services/api';
 import { usePermission } from '@/stores/usePermission';
@@ -56,25 +70,28 @@ import {
   MAX_DAILY_RANGE,
   SAMPLE_EVERY_MS,
   PLATFORM_LABEL,
+  bookRiskOf,
   buildView,
   coverageOf,
   fmtLots,
+  fmtMovePct,
   fmtPct,
   fmtSpan,
   fmtUsd,
   fmtUtcDateTime,
   fmtUtcTime,
   parseTime,
+  riskOf,
   scopeLabel,
   sideOf,
-  totalUsdOf,
   trendOf,
-  usdOf,
   type Band,
+  type Capacity,
   type Platform,
   type PlatformScope,
   type RadarSymbol,
   type RadarView,
+  type RiskContext,
   type Sample,
   type Trend,
 } from './riskRadar/model';
@@ -177,8 +194,10 @@ function useRadarFeed() {
   );
   const [socket, setSocket] = useState<SocketState>('connecting');
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
+  const [realizedMtd, setRealizedMtd] = useState<number | null>(null);
   const [, setHistoryVersion] = useState(0);
   const liveSeen = useRef(false);
+  const monthLive = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,6 +217,13 @@ function useRadarFeed() {
       })
       .catch(() => { /* the live feed remains the primary source */ });
 
+    // Realised P&L of the month: the loss already taken comes off the limit.
+    riskRadarApi.getMonthPnl()
+      .then((d) => {
+        if (!cancelled && !monthLive.current && d && typeof d.realized === 'number') setRealizedMtd(d.realized);
+      })
+      .catch(() => { /* capacity shows as not loaded until the topic speaks */ });
+
     const stop = connectRiskRadarWebSocket(
       (d) => {
         if (cancelled) return;
@@ -205,12 +231,44 @@ function useRadarFeed() {
         accept(d, true);
       },
       (status) => { if (!cancelled) setSocket(status); },
+      (m) => {
+        const r = m.total?.realized;
+        if (cancelled || typeof r !== 'number' || !Number.isFinite(r)) return;
+        monthLive.current = true;
+        setRealizedMtd(r);
+      },
     );
 
     return () => { cancelled = true; stop(); };
   }, []);
 
-  return { snapshot, socket, lastLiveAt };
+  return { snapshot, socket, lastLiveAt, realizedMtd };
+}
+
+/** Adverse move per symbol, read once. null until it arrives. */
+function useDailyMoves(): DailyMovesData | null {
+  const [data, setData] = useState<DailyMovesData | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    riskLimitsApi.getDailyMoves()
+      .then((d) => { if (!cancelled && d && typeof d === 'object' && d.symbols) setData(d); })
+      .catch(() => { /* every instrument stays unrated */ });
+    return () => { cancelled = true; };
+  }, []);
+  return data;
+}
+
+/** The broker's loss limit and bands, read once. null until it arrives. */
+function useRiskLimits(): RiskLimitsSection | null {
+  const [data, setData] = useState<RiskLimitsSection | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    riskLimitsApi.getForRadar()
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch(() => { /* capacity shows as not loaded */ });
+    return () => { cancelled = true; };
+  }, []);
+  return data;
 }
 
 function useLargest1Day(): Record<string, number> | null {
@@ -440,51 +498,91 @@ function CardNote({ children }: { children: ReactNode }) {
   );
 }
 
-function ExposureCards({ view, upto, scope }: { view: RadarView; upto: number; scope: PlatformScope }) {
-  const totals = history.slice(0, upto + 1).map((s) => totalUsdOf(s.snapshot, scope));
-  const trend = trendOf(history, upto, (s) => totalUsdOf(s.snapshot, scope));
+function capacityNote(cap: Capacity): string {
+  switch (cap.state) {
+    case 'loading':  return 'Risk limits not loaded';
+    case 'no_limit': return 'No monthly loss limit set, so nothing can be coloured';
+    case 'no_pnl':   return `Limit ${fmtUsd(cap.limit)} · month-to-date P&L not loaded`;
+    case 'ok': {
+      if ((cap.remaining ?? 0) <= 0) return `Limit ${fmtUsd(cap.limit)} used up by this month's losses`;
+      const lim = `Limit ${fmtUsd(cap.limit)}${cap.carriedOver ? ' (carried over)' : ''}`;
+      return cap.lossTaken
+        ? `${lim} − loss taken this month ${fmtUsd(cap.lossTaken)}`
+        : `${lim} · no loss taken this month`;
+    }
+  }
+}
+
+function LimitsLink() {
+  const navigate = useNavigate();
+  const { can } = usePermission();
+  if (!can('settings', 'VIEW')) return null;
+  return (
+    <button
+      type="button"
+      className="rr-btn"
+      onClick={() => navigate('/settings/risk-limits')}
+      style={{
+        padding: '6px 11px', borderRadius: 5, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+        background: 'transparent', color: '#ffffff', border: `1px solid ${C.blueSoft}88`, whiteSpace: 'nowrap',
+      }}
+    >
+      Risk Limits →
+    </button>
+  );
+}
+
+function ExposureCards({
+  view, upto, ctx, scope,
+}: { view: RadarView; upto: number; ctx: RiskContext; scope: PlatformScope }) {
+  const risks = history.slice(0, upto + 1).map((s) => bookRiskOf(s.snapshot, ctx));
+  const trend = trendOf(history, upto, (s) => bookRiskOf(s.snapshot, ctx));
   const sparkColor = trend?.dir === 'building' ? C.up : trend?.dir === 'easing' ? C.down : C.blueSoft;
-  const top = view.symbols.find((s) => s.pricing === 'priced') ?? null;
-  const hasBook = view.priced > 0;
+  const cap = view.capacity;
+  const top = view.symbols.find((s) => (s.risk ?? 0) > 0) ?? null;
+  const bookDef = view.bookBand ? BAND_BY_ID[view.bookBand] : null;
+  const measured = view.rated > 0;
+  const capAccent = cap.state !== 'ok' ? '#ffb020' : (cap.remaining ?? 0) <= 0 ? '#ff3b30' : C.blue;
+
+  const bookNote = !measured
+    ? (view.unrated + view.unpriced > 0 ? 'No instrument can be rated yet' : 'No open exposure in this snapshot')
+    : [
+        view.bookLevel !== null ? `${fmtPct(view.bookLevel)} of capacity left` : 'no level without a limit',
+        `${view.atRisk} instrument${view.atRisk === 1 ? '' : 's'} at risk`,
+        view.unrated > 0 ? `${view.unrated} unrated` : null,
+      ].filter(Boolean).join(' · ');
 
   return (
     <div style={{ display: 'flex', gap: 12 }}>
       <Card
-        accent={C.blue}
-        label="B-Book exposure"
-        aside={<Sparkline values={totals} width={132} height={42} color={sparkColor} />}
+        accent={bookDef?.color ?? C.blue}
+        label={scope === 'ALL' ? 'Book risk' : 'Book risk · whole book'}
+        aside={<Sparkline values={risks} width={132} height={42} color={sparkColor} />}
       >
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <CardValue>{hasBook ? fmtUsd(view.totalUsd) : '—'}</CardValue>
-          {trend && hasBook && <TrendChip trend={trend} />}
+          <CardValue>{measured ? fmtUsd(view.bookRisk) : '—'}</CardValue>
+          {measured && view.bookBand && <BandBadge band={view.bookBand} />}
+          {trend && measured && <TrendChip trend={trend} />}
         </div>
-        <CardNote>
-          {hasBook
-            ? `${view.priced} instrument${view.priced === 1 ? '' : 's'} · a 1% move is ${fmtUsd(view.impact1pct)}`
-            : 'No priced B-Book exposure in this snapshot'}
-        </CardNote>
+        <CardNote>{bookNote}</CardNote>
       </Card>
 
-      <Card accent="#ff3b30" label="Worst-day loss">
-        <CardValue>{view.worstDayTotal !== null ? fmtUsd(view.worstDayTotal) : '—'}</CardValue>
-        <CardNote>
-          {!view.worstDayReady
-            ? 'Daily ranges not loaded'
-            : view.worstDayTotal === null
-              ? 'No usable daily range for the instruments held'
-              : `Each instrument repeating its worst day of the last 100 · covers ${view.worstDayCovered} of ${view.priced}`}
-        </CardNote>
+      <Card accent={capAccent} label="Loss capacity left this month" aside={<LimitsLink />}>
+        <CardValue>
+          {cap.remaining !== null
+            ? <span style={{ color: cap.remaining <= 0 ? '#ff5c5c' : C.text }}>{fmtUsd(cap.remaining)}</span>
+            : '—'}
+        </CardValue>
+        <CardNote>{capacityNote(cap)}</CardNote>
       </Card>
 
-      <Card accent={top?.band ? BAND_BY_ID[top.band].color : C.grey} label="Largest concentration">
+      <Card accent={top?.band ? BAND_BY_ID[top.band].color : C.grey} label="Largest instrument risk">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <CardValue>{top ? fmtPct(top.share) : '—'}</CardValue>
-          {top && (
-            <span className="font-mono" style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{top.symbol}</span>
-          )}
+          <CardValue>{top ? fmtUsd(top.risk) : '—'}</CardValue>
+          {top && <span className="font-mono" style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{top.symbol}</span>}
           {top?.band && <BandBadge band={top.band} />}
         </div>
-        <div style={{ display: 'flex', gap: 12, marginTop: 3 }}>
+        <div style={{ display: 'flex', gap: 12, marginTop: 3, flexWrap: 'nowrap', overflow: 'hidden' }}>
           {BANDS.map((b) => (
             <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: b.color }} />
@@ -492,6 +590,13 @@ function ExposureCards({ view, upto, scope }: { view: RadarView; upto: number; s
               <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{view.bandCounts[b.id]}</span>
             </span>
           ))}
+          {view.unrated > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${C.grey}` }} />
+              Unrated
+              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{view.unrated}</span>
+            </span>
+          )}
         </div>
       </Card>
     </div>
@@ -503,7 +608,7 @@ const PENDING_CARDS: Record<Exclude<Layer, 'exposure'>, string[]> = {
   liquidity: ['Degraded routes', 'Reject rate', 'Stale quotes'],
 };
 
-const EXPOSURE_CARDS = ['B-Book exposure', 'Worst-day loss', 'Largest concentration'];
+const EXPOSURE_CARDS = ['Book risk', 'Loss capacity left this month', 'Largest instrument risk'];
 
 function PendingCards({ labels }: { labels: string[] }) {
   return (
@@ -583,7 +688,8 @@ function placeSymbols(
     const x = pos.x * w;
     const y = pos.y * h;
     // Unpriced instruments are always named: they are a data gap to notice.
-    const wants = pinned.has(s.symbol) || s.pricing === 'unpriced' || (s.pricing === 'priced' && labelled < LABEL_LIMIT);
+    const atRisk = s.rating === 'rated' && (s.risk ?? 0) > 0;
+    const wants = pinned.has(s.symbol) || s.rating === 'unpriced' || ((atRisk || s.rating === 'unrated') && labelled < LABEL_LIMIT);
     let label: Placed['label'] = null;
     if (wants) {
       const lw = labelWidth(s.symbol);
@@ -603,7 +709,7 @@ function placeSymbols(
       if (!label && pinned.has(s.symbol)) {
         label = { x: Math.max(2, Math.min(w - lw - 2, x + 10)), y: Math.max(2, Math.min(h - LABEL_H - 2, y - LABEL_H / 2)), w: lw, h: LABEL_H };
       }
-      if (label) { boxes.push(label); if (s.pricing === 'priced') labelled++; }
+      if (label) { boxes.push(label); if (s.rating !== 'unpriced') labelled++; }
     }
     out.push({ s, x, y, label });
   }
@@ -611,11 +717,11 @@ function placeSymbols(
 }
 
 function symbolAria(s: RadarSymbol): string {
-  if (s.pricing === 'priced' && s.band) {
-    return `${s.symbol}: ${BAND_BY_ID[s.band].label}, ${fmtPct(s.share)} of B-Book exposure, ${fmtUsd(s.usd)}`;
-  }
-  if (s.pricing === 'unpriced') return `${s.symbol}: unpriced, ${fmtLots(s.bLots)} B-Book lots with no USD value`;
-  return `${s.symbol}: no B-Book position`;
+  if (s.rating === 'unpriced') return `${s.symbol}: unpriced, ${s.missing.join(', ')}`;
+  if (s.rating === 'unrated') return `${s.symbol}: unrated, no adverse move yet, net ${fmtLots(s.netLots)} lots`;
+  if (!((s.risk ?? 0) > 0)) return `${s.symbol}: nothing at risk`;
+  const lvl = s.level !== null ? `, ${fmtPct(s.level)} of the capacity left` : ', no level';
+  return `${s.symbol}: ${s.band ? BAND_BY_ID[s.band].label : 'risk'} ${fmtUsd(s.risk)}${lvl}`;
 }
 
 interface RadarMapProps {
@@ -794,9 +900,9 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
         {placed.map(({ s, x, y, label }) => {
           const isSel = s.symbol === selected;
           const isHover = s.symbol === hovered;
-          const lit = active && s.pricing === 'priced';
+          const lit = active && s.rating === 'rated' && (s.risk ?? 0) > 0;
           const critical = lit && s.band === 'critical';
-          const dim = !active || s.pricing === 'flat';
+          const dim = !active || (s.rating === 'rated' && !lit);
           return (
             <g
               key={s.symbol}
@@ -818,16 +924,18 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
               {critical && <circle cx={x} cy={y} r={6} fill="none" stroke="#ffffff" strokeWidth={1.5} className="rr-pulse" pointerEvents="none" />}
               {isSel && <circle cx={x} cy={y} r={10} fill="none" stroke="#ffffff" strokeWidth={2} />}
 
-              {active && s.pricing === 'unpriced' ? (
+              {active && s.rating === 'unpriced' ? (
                 <rect
                   x={x - 4.5} y={y - 4.5} width={9} height={9} transform={`rotate(45 ${x} ${y})`}
                   fill="#0a0f15" stroke={C.grey} strokeWidth={1.6} strokeDasharray="2.5 1.5"
                 />
+              ) : active && s.rating === 'unrated' ? (
+                <circle cx={x} cy={y} r={isHover || isSel ? 5.5 : 4.5} fill="#0a0f15" stroke={C.grey} strokeWidth={1.8} />
               ) : (
                 <circle
                   cx={x} cy={y}
                   r={dim ? 3 : isHover || isSel ? 6.5 : 5.5}
-                  fill={dim ? '#5d6b7c' : s.band ? BAND_BY_ID[s.band].color : '#0a0f15'}
+                  fill={dim ? '#5d6b7c' : s.band ? BAND_BY_ID[s.band].color : C.blueSoft}
                   stroke={dim ? 'none' : '#ffffff'}
                   strokeWidth={1.8}
                 />
@@ -879,18 +987,7 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
           <div style={{ fontSize: 12, color: C.soft, marginTop: 5, lineHeight: 1.45 }}>
             {!active
               ? 'No measurement on this layer yet.'
-              : hoveredItem.s.pricing === 'priced'
-                ? (
-                  <>
-                    <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{fmtUsd(hoveredItem.s.usd)}</span>
-                    {' B-Book exposure · '}
-                    <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{fmtPct(hoveredItem.s.share)}</span>
-                    {' of the book'}
-                  </>
-                )
-                : hoveredItem.s.pricing === 'unpriced'
-                  ? `Unpriced: ${fmtLots(hoveredItem.s.bLots)} B-Book lots, no USD value from the feed.`
-                  : 'No B-Book position — held in the A-Book or C-Book only.'}
+              : <HoverText s={hoveredItem.s} />}
           </div>
         </div>
       )}
@@ -924,44 +1021,64 @@ function pnlColor(v: number): string {
   return v > 0 ? '#3ddc57' : v < 0 ? '#ff5c5c' : C.text;
 }
 
-function signedUsd(v: number): string {
+function HoverText({ s }: { s: RadarSymbol }) {
+  const strong = (t: string) => <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{t}</span>;
+  if (s.rating === 'unpriced') return <>Unpriced: {s.missing.join('; ')}.</>;
+  if (s.rating === 'unrated') {
+    return <>Unrated: no adverse move yet{s.moveSamples !== null ? ` (${s.moveSamples} daily closes)` : ''}. Net {strong(fmtUsd(s.netUsd))}.</>;
+  }
+  if (!((s.risk ?? 0) > 0)) {
+    return <>Nothing at risk: {Math.abs(s.netLots) < 0.005 ? 'the books offset each other' : 'the unrealised gain covers the adverse move'}.</>;
+  }
+  return (
+    <>
+      {strong(fmtUsd(s.risk))} at risk
+      {s.level !== null ? <> · {strong(fmtPct(s.level))} of the capacity left</> : ' · no level without a limit'}
+    </>
+  );
+}
+
+function signedUsd(v: number | null): string {
+  if (v === null) return '—';
   return v > 0 ? `+${fmtUsd(v)}` : fmtUsd(v);
+}
+
+function Signed({ v }: { v: number | null }) {
+  return <span style={{ color: v === null ? C.text : pnlColor(v) }}>{signedUsd(v)}</span>;
 }
 
 interface Driver { tone: 'red' | 'amber' | 'green'; text: string }
 
 function driversFor(s: RadarSymbol, view: RadarView, trend: Trend | null): Driver[] {
   const out: Driver[] = [];
-  if (s.band === 'critical' || s.band === 'high') {
+  if ((s.band === 'critical' || s.band === 'high') && s.level !== null) {
     out.push({
       tone: s.band === 'critical' ? 'red' : 'amber',
-      text: `Holds ${fmtPct(s.share)} of B-Book exposure${s.rank === 1 ? ' — the largest position in the book' : ''}`,
+      text: Number.isFinite(s.level)
+        ? `Risk is ${fmtPct(s.level)} of the loss capacity left this month`
+        : 'The loss capacity of the month is used up',
     });
-  } else if (s.rank === 1 && view.priced > 1) {
-    out.push({ tone: 'amber', text: `Largest position in the book at ${fmtPct(s.share)}` });
   }
+  if (s.rank === 1 && view.atRisk > 1) out.push({ tone: 'amber', text: 'Largest risk in the book' });
   if (trend?.dir === 'building') {
     out.push({
       tone: 'red',
       text: trend.change === null
-        ? `New exposure in the last ${fmtSpan(trend.spanMs)}`
-        : `Exposure up ${(trend.change * 100).toFixed(0)}% in the last ${fmtSpan(trend.spanMs)}`,
+        ? `New risk in the last ${fmtSpan(trend.spanMs)}`
+        : `Risk up ${(trend.change * 100).toFixed(0)}% in the last ${fmtSpan(trend.spanMs)}`,
     });
   } else if (trend?.dir === 'easing' && trend.change !== null) {
-    out.push({ tone: 'green', text: `Exposure down ${Math.abs(trend.change * 100).toFixed(0)}% in the last ${fmtSpan(trend.spanMs)}` });
+    out.push({ tone: 'green', text: `Risk down ${Math.abs(trend.change * 100).toFixed(0)}% in the last ${fmtSpan(trend.spanMs)}` });
   }
-  if (s.worstDayLoss !== null) {
+  if (Math.abs(s.bLots) >= 0.005 && Math.abs(s.aLots) < 0.005 && Math.abs(s.cLots) < 0.005) {
+    out.push({ tone: 'amber', text: 'Not hedged: no A-Book or C-Book position' });
+  }
+  if (s.u !== null && s.u < 0) out.push({ tone: 'amber', text: `Unrealised loss across the books: ${fmtUsd(s.u)}` });
+  if (s.worstDayLoss !== null && view.worstDayCovered > 1) {
     const worst = view.symbols.reduce((m, x) => Math.max(m, x.worstDayLoss ?? 0), 0);
-    if (view.worstDayCovered > 1 && s.worstDayLoss >= worst) {
-      out.push({ tone: 'amber', text: 'Largest worst-day loss in the book' });
-    }
+    if (s.worstDayLoss >= worst) out.push({ tone: 'amber', text: 'Largest worst-day stress in the book' });
   }
-  if (s.pnlMtd !== null && s.pnlMtd < 0) {
-    out.push({ tone: 'amber', text: `Losing month to date: ${fmtUsd(s.pnlMtd)}` });
-  }
-  if (s.unrealized !== null && s.unrealized < 0) {
-    out.push({ tone: 'amber', text: `Unrealised loss on open positions: ${fmtUsd(s.unrealized)}` });
-  }
+  if (s.pnlMtd !== null && s.pnlMtd < 0) out.push({ tone: 'amber', text: `B-Book losing month to date: ${fmtUsd(s.pnlMtd)}` });
   return out;
 }
 
@@ -1009,20 +1126,31 @@ function ActionButtons() {
   );
 }
 
+function Para({ children, color }: { children: ReactNode; color?: string }) {
+  return <p style={{ fontSize: 12.5, color: color ?? C.soft, lineHeight: 1.5, margin: '6px 0 4px' }}>{children}</p>;
+}
+
 function SymbolDetail({
-  s, view, upto, scope, scopeText, region, onClose,
-}: { s: RadarSymbol; view: RadarView; upto: number; scope: PlatformScope; scopeText: string; region: string; onClose: () => void }) {
-  const trend = s.pricing === 'priced' ? trendOf(history, upto, (x) => usdOf(x.snapshot, s.symbol, scope)) : null;
-  const series = history.slice(0, upto + 1).map((x) => usdOf(x.snapshot, s.symbol, scope));
-  const byPlatform = scope === 'ALL' && (s.parts.length > 1 || s.partlyUnpriced);
-  const drivers = s.pricing === 'priced' ? driversFor(s, view, trend) : [];
+  s, view, upto, ctx, scope, scopeText, region, onClose,
+}: {
+  s: RadarSymbol; view: RadarView; upto: number; ctx: RiskContext; scope: PlatformScope;
+  scopeText: string; region: string; onClose: () => void;
+}) {
+  const rated = s.rating === 'rated';
+  const trend = rated ? trendOf(history, upto, (x) => riskOf(x.snapshot, s.symbol, ctx)) : null;
+  const series = history.slice(0, upto + 1).map((x) => riskOf(x.snapshot, s.symbol, ctx));
+  const drivers = rated ? driversFor(s, view, trend) : [];
   const since = history.length ? history[0].t : null;
+  const netFlat = Math.abs(s.netLots) < 0.005;
+  const moveNote = ctx.moves
+    ? `${ctx.moves.percentile}th percentile of daily moves, ${ctx.moves.lookback_days} days${s.moveSamples !== null ? ` · ${s.moveSamples} closes on file` : ''}`
+    : 'daily moves not loaded';
 
   return (
     <div style={{ padding: '14px 16px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12, color: C.faint }}>{region} · exposure · {scopeText}</div>
+          <div style={{ fontSize: 12, color: C.faint }}>{region} · risk · {scopeText}</div>
           <div className="font-mono" style={{ fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1.2 }}>{s.symbol}</div>
         </div>
         <button
@@ -1037,84 +1165,120 @@ function SymbolDetail({
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '10px 0 8px' }}>
-        {s.pricing === 'priced' && s.band && <BandBadge band={s.band} large />}
-        {s.pricing === 'unpriced' && <GreyBadge text="UNPRICED" />}
-        {s.pricing === 'flat' && <GreyBadge text="NO B-BOOK POSITION" />}
+        {rated && s.band && <BandBadge band={s.band} large />}
+        {rated && !s.band && <GreyBadge text="NO LEVEL" />}
+        {s.rating === 'unrated' && <GreyBadge text="UNRATED" />}
+        {s.rating === 'unpriced' && <GreyBadge text="UNPRICED" />}
         {trend && <TrendChip trend={trend} large />}
       </div>
 
-      {s.pricing === 'unpriced' && (
-        <p style={{ fontSize: 12.5, color: C.soft, lineHeight: 1.5, margin: '6px 0 4px' }}>
+      {s.rating === 'unpriced' && (
+        <Para>
           {s.fromMt5Book
-            ? 'MT5 holds a B-Book position in this instrument, but the exposure feed carries no figure for it. The lots below are read from the MT5 server; without a USD value it has no place on the colour scale and is left out of the totals. It is not a low reading.'
-            : 'The feed carries a B-Book position for this instrument but no USD value, so it has no place on the colour scale and is left out of the totals. It is not a low reading.'}
-        </p>
+            ? 'MT5 holds a B-Book position in this instrument, but the exposure feed carries no figure for it. The lots below are read from the MT5 server.'
+            : `This instrument cannot be measured: ${s.missing.join('; ')}.`}{' '}
+          It has no place on the colour scale and is left out of the book risk. It is not a low reading.
+        </Para>
       )}
-      {s.pricing === 'flat' && (
-        <p style={{ fontSize: 12.5, color: C.soft, lineHeight: 1.5, margin: '6px 0 4px' }}>
-          {s.parts.length > 1
-            ? 'The B-Book positions on the two platforms offset each other, so nothing is carried on this instrument.'
-            : 'Held in the A-Book or C-Book only. This layer measures the exposure the broker carries in the B-Book.'}
-        </p>
+      {s.rating === 'unrated' && (
+        <Para>
+          There is no adverse move for this symbol yet: fewer than 20 daily closes on file. Its risk is not
+          measured and it is left out of the book risk until the history fills. It is not a low reading.
+        </Para>
       )}
-      {s.partlyUnpriced && (
-        <p style={{ fontSize: 12.5, color: '#ffb020', lineHeight: 1.5, margin: '6px 0 4px' }}>
-          One platform's position has no USD value from the feed and is missing from these figures.
-        </p>
+      {rated && !s.band && view.capacity.state !== 'ok' && (
+        <Para color="#ffb020">
+          {view.capacity.state === 'no_limit'
+            ? 'No monthly loss limit is set, so the risk has no level.'
+            : 'The loss capacity is not known yet, so the risk has no level.'}
+        </Para>
+      )}
+      {rated && netFlat && (
+        <Para>The books offset each other: the net position is flat, so only the unrealised P&amp;L counts.</Para>
+      )}
+      {scope !== 'ALL' && (
+        <Para color={C.faint}>
+          Risk is measured on the whole book: LP hedges and the C-Book are not split per platform.
+        </Para>
       )}
 
-      {s.pricing === 'priced' && (
+      {s.rating !== 'unpriced' && (
         <>
-          <Row label="B-Book exposure">{fmtUsd(s.usd)}</Row>
-          <Row label="Share of B-Book" note={s.rank ? `#${s.rank} of ${view.priced}` : undefined}>{fmtPct(s.share, 1)}</Row>
-          <Row label="1% move">{fmtUsd(s.impact1pct)}</Row>
+          <Row label="Risk" note={s.level !== null ? `${fmtPct(s.level, 1)} of the capacity left` : rated ? 'no level' : undefined}>
+            {rated ? fmtUsd(s.risk) : '—'}
+          </Row>
+          <Row label="Unrealised P&L" note="B + A + C, broker view"><Signed v={s.u} /></Row>
+          <Row label="Adverse move" note={moveNote}>{fmtMovePct(s.movePct)}</Row>
           <Row
-            label="Worst-day loss"
+            label="Move loss"
+            note={s.usdPerLot !== null ? `${fmtLots(Math.abs(s.netLots))} net lots × ${fmtUsd(s.usdPerLot)} per lot` : undefined}
+          >
+            {s.moveLoss !== null ? fmtUsd(s.moveLoss) : '—'}
+          </Row>
+          <Row label="Stressed P&L" note="unrealised less the move loss"><Signed v={s.stressed} /></Row>
+          <Row label="Net position" note={sideOf(s.netLots)}>{fmtUsd(s.netUsd)}</Row>
+          <Row
+            label="Worst-day stress"
             note={
               s.worstDay === 'ok' && s.worstRange !== null
-                ? `worst day of the last 100: ${(s.worstRange * 100).toFixed(2)}%`
+                ? `net position, worst day of the last 100: ${(s.worstRange * 100).toFixed(2)}%`
                 : s.worstDay === 'excluded'
                   ? `range on file is over ${MAX_DAILY_RANGE * 100}% — treated as a bad bar`
+                  : s.worstDay === 'flat' ? 'net position flat'
                   : view.worstDayReady ? 'no daily range on file' : 'daily ranges not loaded'
             }
           >
             {s.worstDayLoss !== null ? fmtUsd(s.worstDayLoss) : '—'}
           </Row>
-          {s.unrealized !== null && (
-            <Row label="Unrealised P&L"><span style={{ color: pnlColor(s.unrealized) }}>{signedUsd(s.unrealized)}</span></Row>
-          )}
           {s.pnlMtd !== null && (
-            <Row label="P&L month to date"><span style={{ color: pnlColor(s.pnlMtd) }}>{signedUsd(s.pnlMtd)}</span></Row>
+            <Row label="B-Book P&L month to date"><Signed v={s.pnlMtd} /></Row>
+          )}
+          {s.bUsd !== null && (
+            <Row label="Share of B-Book" note="information only">{fmtPct(s.share, 1)}</Row>
           )}
         </>
       )}
 
-      <SectionTitle>Position by book <span style={{ color: C.faint, fontWeight: 400 }}>· lots, broker view</span></SectionTitle>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-        {([['B-Book', s.bLots], ['A-Book', s.aLots], ['C-Book', s.cLots], ['Net', s.netLots]] as Array<[string, number]>).map(([name, lots]) => (
-          <div key={name} style={{ background: '#0f1620', border: `1px solid ${C.line}`, borderRadius: 5, padding: '6px 7px' }}>
-            <div style={{ fontSize: 11.5, color: C.soft }}>{name}</div>
-            <div className="font-mono" style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>{fmtLots(lots)}</div>
-            <div style={{ fontSize: 10.5, color: C.faint }}>{sideOf(lots)}</div>
-          </div>
-        ))}
-      </div>
+      <SectionTitle>By book <span style={{ color: C.faint, fontWeight: 400 }}>· broker view</span></SectionTitle>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ fontSize: 11, color: C.faint, textAlign: 'right' }}>
+            <th style={{ textAlign: 'left', fontWeight: 500, padding: '2px 0' }}>Book</th>
+            <th style={{ fontWeight: 500, padding: '2px 0' }}>Lots</th>
+            <th style={{ fontWeight: 500, padding: '2px 0' }}>Unrealised</th>
+          </tr>
+        </thead>
+        <tbody>
+          {([['B-Book', s.bLots, s.bU], ['A-Book', s.aLots, s.aU], ['C-Book', s.cLots, s.cU], ['Net', s.netLots, s.u]] as Array<[string, number, number | null]>).map(([name, lots, u]) => (
+            <tr key={name} style={{ borderTop: `1px solid ${C.line}` }}>
+              <td style={{ padding: '6px 0', fontSize: 13, color: name === 'Net' ? C.text : C.soft, fontWeight: name === 'Net' ? 600 : 400 }}>{name}</td>
+              <td className="font-mono" style={{ padding: '6px 0', fontSize: 13, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                {fmtLots(lots)}
+              </td>
+              <td className="font-mono" style={{ padding: '6px 0', fontSize: 13, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                <Signed v={u} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
 
-      {byPlatform && (
+      {(s.parts.length > 1 || scope !== 'ALL') && s.parts.length > 0 && (
         <>
-          <SectionTitle>
-            By platform <span style={{ color: C.faint, fontWeight: 400 }}>· B-Book, netted above</span>
-          </SectionTitle>
+          <SectionTitle>B-Book by platform</SectionTitle>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <tbody>
-              {s.parts.map((part) => (
+              {s.parts.filter((p) => scope === 'ALL' || p.platform === scope).map((part) => (
                 <tr key={part.platform} style={{ borderTop: `1px solid ${C.line}` }}>
                   <td style={{ padding: '6px 0', fontSize: 13, color: C.soft }}>{PLATFORM_LABEL[part.platform]}</td>
                   <td className="font-mono" style={{ padding: '6px 0', fontSize: 12.5, color: C.soft, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {fmtLots(part.bLots)} lots · {sideOf(part.bLots)}
+                    {fmtLots(part.bLots)} lots
                   </td>
-                  <td className="font-mono" style={{ padding: '6px 0 6px 10px', fontSize: 13.5, fontWeight: 600, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {part.usd !== null ? fmtUsd(part.usd) : 'unpriced'}
+                  <td className="font-mono" style={{ padding: '6px 0 6px 10px', fontSize: 13, fontWeight: 600, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {part.bUsd !== null ? fmtUsd(part.bUsd) : 'unpriced'}
+                  </td>
+                  <td className="font-mono" style={{ padding: '6px 0 6px 10px', fontSize: 13, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <Signed v={part.bU} />
                   </td>
                 </tr>
               ))}
@@ -1123,7 +1287,7 @@ function SymbolDetail({
         </>
       )}
 
-      {s.pricing === 'priced' && (
+      {rated && (
         <>
           <SectionTitle>What stands out</SectionTitle>
           {drivers.length === 0 ? (
@@ -1140,7 +1304,7 @@ function SymbolDetail({
           )}
 
           <SectionTitle>
-            B-Book exposure{' '}
+            Risk{' '}
             <span style={{ color: C.faint, fontWeight: 400 }}>
               · observed{since !== null ? ` since ${fmtUtcTime(since)}` : ''}
             </span>
@@ -1160,12 +1324,13 @@ function SymbolDetail({
 }
 
 function RankedList({
-  view, scopeText, emptyText, onSelect,
-}: { view: RadarView; scopeText: string; emptyText: string; onSelect: (symbol: string) => void }) {
-  const priced = view.symbols.filter((s) => s.pricing === 'priced');
-  const unpriced = view.symbols.filter((s) => s.pricing === 'unpriced');
-  const flat = view.symbols.filter((s) => s.pricing === 'flat');
-  const topShare = priced.length ? priced[0].share : 0;
+  view, scope, scopeText, emptyText, onSelect,
+}: { view: RadarView; scope: PlatformScope; scopeText: string; emptyText: string; onSelect: (symbol: string) => void }) {
+  const atRisk = view.symbols.filter((s) => s.rating === 'rated' && (s.risk ?? 0) > 0);
+  const unrated = view.symbols.filter((s) => s.rating === 'unrated');
+  const unpriced = view.symbols.filter((s) => s.rating === 'unpriced');
+  const none = view.symbols.filter((s) => s.rating === 'rated' && !((s.risk ?? 0) > 0));
+  const topRisk = atRisk.length ? (atRisk[0].risk ?? 0) : 0;
 
   const rowProps = (symbol: string) => ({
     className: 'rr-row',
@@ -1180,9 +1345,10 @@ function RankedList({
   return (
     <div style={{ padding: '14px 0 10px' }}>
       <div style={{ padding: '0 16px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>Exposure by instrument</div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>Risk by instrument</div>
         <div style={{ fontSize: 12, color: C.faint, marginTop: 2 }}>
-          B-Book USD notional · {scopeText}. Largest first; select one for detail.
+          Loss under the adverse move, after unrealised P&amp;L · {scopeText}
+          {scope !== 'ALL' ? ' · measured on the whole book' : ''}. Largest first; select one for detail.
         </div>
       </div>
 
@@ -1190,37 +1356,38 @@ function RankedList({
         <div style={{ padding: '18px 16px', fontSize: 13, color: C.soft, lineHeight: 1.5 }}>{emptyText}</div>
       )}
 
-      {priced.length > 0 && (
+      {atRisk.length > 0 && (
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
           <thead>
             <tr style={{ fontSize: 11, color: C.faint, textAlign: 'left' }}>
               <th style={{ padding: '4px 4px 4px 16px', fontWeight: 500, width: 26 }}>#</th>
               <th style={{ padding: 4, fontWeight: 500 }}>Instrument</th>
-              <th style={{ padding: 4, fontWeight: 500, textAlign: 'right' }}>Share</th>
-              <th style={{ padding: '4px 16px 4px 4px', fontWeight: 500, textAlign: 'right' }}>Exposure</th>
+              <th style={{ padding: 4, fontWeight: 500, textAlign: 'right' }}>Capacity</th>
+              <th style={{ padding: '4px 16px 4px 4px', fontWeight: 500, textAlign: 'right' }}>Risk</th>
             </tr>
           </thead>
           <tbody>
-            {priced.map((s) => {
+            {atRisk.map((s) => {
               const def = s.band ? BAND_BY_ID[s.band] : null;
+              const bar = def?.color ?? C.blueSoft;
               return (
                 <tr key={s.symbol} {...rowProps(s.symbol)} aria-label={symbolAria(s)} style={{ borderTop: `1px solid ${C.line}` }}>
                   <td className="font-mono" style={{ padding: '6px 4px 6px 16px', fontSize: 12, color: C.faint }}>{s.rank}</td>
                   <td style={{ padding: '6px 4px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                      <span title={def?.label} style={{ width: 9, height: 9, borderRadius: 2, background: def?.color, flexShrink: 0 }} />
+                      <span title={def?.label} style={{ width: 9, height: 9, borderRadius: 2, background: bar, flexShrink: 0 }} />
                       <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.symbol}</span>
                     </div>
                     <div style={{ height: 3, background: '#141d28', borderRadius: 2, marginTop: 4 }}>
-                      <div style={{ height: 3, borderRadius: 2, background: def?.color, width: `${topShare > 0 ? Math.max(3, (s.share / topShare) * 100) : 0}%` }} />
+                      <div style={{ height: 3, borderRadius: 2, background: bar, width: `${topRisk > 0 ? Math.max(3, ((s.risk ?? 0) / topRisk) * 100) : 0}%` }} />
                     </div>
                   </td>
                   <td className="font-mono" style={{ padding: '6px 4px', fontSize: 13, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {fmtPct(s.share)}
-                    <span style={{ display: 'block', fontSize: 10.5, color: C.faint, fontFamily: 'inherit' }}>{def?.label}</span>
+                    {s.level !== null ? fmtPct(s.level) : '—'}
+                    <span style={{ display: 'block', fontSize: 10.5, color: C.faint, fontFamily: 'inherit' }}>{def?.label ?? 'no level'}</span>
                   </td>
                   <td className="font-mono" style={{ padding: '6px 16px 6px 4px', fontSize: 13, fontWeight: 600, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {fmtUsd(s.usd)}
+                    {fmtUsd(s.risk)}
                   </td>
                 </tr>
               );
@@ -1229,10 +1396,29 @@ function RankedList({
         </table>
       )}
 
+      {unrated.length > 0 && (
+        <div style={{ margin: '12px 0 0' }}>
+          <div style={{ padding: '0 16px', fontSize: 12, color: C.soft }}>
+            Unrated — no adverse move yet (too few daily closes)
+          </div>
+          {unrated.map((s) => (
+            <div
+              key={s.symbol}
+              {...rowProps(s.symbol)}
+              aria-label={symbolAria(s)}
+              style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 16px', borderTop: `1px solid ${C.line}`, marginTop: 4 }}
+            >
+              <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.soft }}>○ {s.symbol}</span>
+              <span className="font-mono" style={{ fontSize: 12.5, color: C.soft }}>net {fmtUsd(s.netUsd)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {unpriced.length > 0 && (
         <div style={{ margin: '12px 0 0' }}>
           <div style={{ padding: '0 16px', fontSize: 12, color: C.soft }}>
-            Unpriced — B-Book position with no USD value from the feed
+            Unpriced — no USD value or P&amp;L for the position
           </div>
           {unpriced.map((s) => (
             <div
@@ -1242,16 +1428,16 @@ function RankedList({
               style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 16px', borderTop: `1px solid ${C.line}`, marginTop: 4 }}
             >
               <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.soft }}>◇ {s.symbol}</span>
-              <span className="font-mono" style={{ fontSize: 12.5, color: C.soft }}>{fmtLots(s.bLots)} lots</span>
+              <span className="font-mono" style={{ fontSize: 12.5, color: C.soft }}>{fmtLots(s.netLots)} net lots</span>
             </div>
           ))}
         </div>
       )}
 
-      {flat.length > 0 && (
+      {none.length > 0 && (
         <div style={{ padding: '12px 16px 0', fontSize: 12, color: C.faint, lineHeight: 1.5 }}>
-          {flat.length} instrument{flat.length === 1 ? '' : 's'} with no B-Book position (A-Book / C-Book only):{' '}
-          <span className="font-mono" style={{ color: C.soft }}>{flat.map((s) => s.symbol).join(', ')}</span>
+          Nothing at risk ({none.length}), hedged or covered by unrealised gains:{' '}
+          <span className="font-mono" style={{ color: C.soft }}>{none.map((s) => s.symbol).join(', ')}</span>
         </div>
       )}
     </div>
@@ -1421,7 +1607,7 @@ function Timeline({ replayT, playing, onScrub, onPlay }: TimelineProps) {
   );
 }
 
-function Legend({ layer }: { layer: Layer }) {
+function Legend({ layer, view }: { layer: Layer; view: RadarView }) {
   if (layer !== 'exposure') {
     return (
       <Panel style={{ width: 470, flexShrink: 0, padding: '10px 16px', display: 'flex', alignItems: 'center' }}>
@@ -1432,29 +1618,105 @@ function Legend({ layer }: { layer: Layer }) {
       </Panel>
     );
   }
+  const t = view.thresholds;
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const ranges = [`under ${pct(t.warning)}`, `${pct(t.warning)}–${pct(t.high)}`, `${pct(t.high)}–${pct(t.critical)}`, `${pct(t.critical)} and over`];
+  const cap = view.capacity;
   return (
     <Panel style={{ width: 470, flexShrink: 0, padding: '9px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.text, fontWeight: 600 }}>
-        <span>Share of B-Book exposure</span>
-        <span style={{ color: C.faint, fontWeight: 400 }}>USD notional</span>
+        <span>Risk ÷ loss capacity left this month</span>
+        <span style={{ color: C.faint, fontWeight: 400 }}>
+          {cap.state === 'ok' ? `limit ${fmtUsd(cap.limit)}` : cap.state === 'no_limit' ? 'no limit set' : 'limit not loaded'}
+        </span>
       </div>
-      <div style={{ height: 8, borderRadius: 4, margin: '6px 0 4px', background: rampGradientCss(), boxShadow: '0 0 12px rgba(255, 120, 0, 0.25)' }} />
+      <div style={{ height: 8, borderRadius: 4, margin: '6px 0 4px', background: rampGradientCss(), boxShadow: '0 0 12px rgba(255, 120, 0, 0.25)', opacity: cap.state === 'ok' ? 1 : 0.35 }} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
         {BANDS.map((b, i) => (
           <div key={b.id} style={{ fontSize: 11.5, color: C.text }}>
             {b.label}
-            <span className="font-mono" style={{ display: 'block', fontSize: 10.5, color: C.faint }}>
-              {i === 0 ? `under ${BANDS[1].from * 100}%` : i === BANDS.length - 1 ? `${b.from * 100}% and over` : `${b.from * 100}–${BANDS[i + 1].from * 100}%`}
-            </span>
+            <span className="font-mono" style={{ display: 'block', fontSize: 10.5, color: C.faint }}>{ranges[i]}</span>
           </div>
         ))}
       </div>
       <div style={{ display: 'flex', gap: 14, marginTop: 5, fontSize: 11, color: C.faint, whiteSpace: 'nowrap' }}>
+        <span><span style={{ color: C.soft }}>○</span> unrated</span>
         <span><span style={{ color: C.soft }}>◇</span> unpriced</span>
-        <span><span style={{ color: '#5d6b7c' }}>●</span> no B-Book position</span>
-        <span>The dot is the reading; the glow is illustrative</span>
+        <span><span style={{ color: '#5d6b7c' }}>●</span> nothing at risk</span>
+        <span>The dot is the reading</span>
       </div>
     </Panel>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Notes over the map — what the colours cannot say
+// ═══════════════════════════════════════════════════════════════════════════
+
+function MapNote({ children, tone, action }: { children: ReactNode; tone: string; action?: ReactNode }) {
+  return (
+    <div
+      role="note"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        background: 'rgba(8, 12, 18, 0.94)', border: `1px solid ${tone}99`, borderRadius: 6,
+        padding: '7px 11px', fontSize: 12.5, color: tone, lineHeight: 1.45, pointerEvents: 'auto',
+      }}
+    >
+      <span>{children}</span>
+      {action}
+    </div>
+  );
+}
+
+function MapNotes({ view, mt5Check }: { view: RadarView; mt5Check: RiskRadarMt5Book | null }) {
+  const cap = view.capacity;
+  const notes: ReactNode[] = [];
+  if (cap.state === 'no_limit') {
+    notes.push(
+      <MapNote key="limit" tone="#ffb020" action={<LimitsLink />}>
+        No monthly loss limit is set. Risk is shown in USD, but nothing can be coloured until one is.
+      </MapNote>,
+    );
+  } else if (cap.state === 'ok' && (cap.remaining ?? 0) <= 0) {
+    notes.push(
+      <MapNote key="used" tone="#ff3b30" action={<LimitsLink />}>
+        This month's losses have used up the loss limit: every instrument with risk is Critical.
+      </MapNote>,
+    );
+  } else if (cap.state === 'no_pnl') {
+    notes.push(<MapNote key="pnl" tone="#ffb020">Month-to-date P&amp;L not loaded yet, so the capacity left is not known.</MapNote>);
+  }
+  if (!view.movesReady) {
+    notes.push(<MapNote key="moves" tone="#ffb020">Adverse moves not loaded: instruments are unrated.</MapNote>);
+  } else if (view.unrated > 0) {
+    notes.push(
+      <MapNote key="unrated" tone={C.soft}>
+        {view.unrated} instrument{view.unrated === 1 ? ' is' : 's are'} unrated: not enough daily closes yet for an
+        adverse move. {view.unrated === 1 ? 'It is' : 'They are'} left out of the book risk.
+      </MapNote>,
+    );
+  }
+  if (view.feedGaps > 0 && mt5Check) {
+    notes.push(
+      <MapNote key="gaps" tone="#ffb020">
+        The exposure feed has no figure for {view.feedGaps} instrument{view.feedGaps === 1 ? '' : 's'} MT5 holds
+        B-Book positions in ({mt5Check.total_positions} open position{mt5Check.total_positions === 1 ? '' : 's'},
+        read {fmtUtcTime(parseTime(mt5Check.as_of))}). {view.feedGaps === 1 ? 'It is' : 'They are'} drawn grey, lots only.
+      </MapNote>,
+    );
+  }
+  if (notes.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: 'absolute', left: 10, bottom: 30, maxWidth: 'calc(100% - 20px)',
+        display: 'flex', flexDirection: 'column', gap: 6, zIndex: 2,
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {notes}
+    </div>
   );
 }
 
@@ -1463,7 +1725,9 @@ function Legend({ layer }: { layer: Layer }) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function RiskRadarPage() {
-  const { snapshot, socket, lastLiveAt } = useRadarFeed();
+  const { snapshot, socket, lastLiveAt, realizedMtd } = useRadarFeed();
+  const moves = useDailyMoves();
+  const limits = useRiskLimits();
   const largest1Day = useLargest1Day();
   const tree = useSymbolTree();
   const mt5Book = useMt5Book();
@@ -1485,9 +1749,11 @@ export function RiskRadarPage() {
   // a one-off reading of MT5 would raise false gaps.
   const mt5Check = !replaying && lastLiveAt === null ? mt5Book : null;
 
+  const ctx = useMemo<RiskContext>(() => ({ moves, limits, realizedMtd }), [moves, limits, realizedMtd]);
+
   const view = useMemo(
-    () => buildView(shownSnapshot, largest1Day, scope, mt5Check?.by_symbol ?? null),
-    [shownSnapshot, largest1Day, scope, mt5Check],
+    () => buildView(shownSnapshot, largest1Day, scope, mt5Check?.by_symbol ?? null, ctx),
+    [shownSnapshot, largest1Day, scope, mt5Check, ctx],
   );
   const selectedSymbol = selected ? view.bySymbol.get(selected) ?? null : null;
 
@@ -1620,7 +1886,7 @@ export function RiskRadarPage() {
         ) : pendingPlatform ? (
           <PendingCards labels={EXPOSURE_CARDS} />
         ) : (
-          <ExposureCards view={view} upto={upto} scope={scope} />
+          <ExposureCards view={view} upto={upto} ctx={ctx} scope={scope} />
         )}
 
         {/* Map + inspector */}
@@ -1750,21 +2016,8 @@ export function RiskRadarPage() {
                     {emptyText}
                   </div>
                 )}
-                {layer === 'exposure' && !pendingPlatform && view.feedGaps > 0 && mt5Check && (
-                  <div
-                    role="note"
-                    style={{
-                      position: 'absolute', left: 10, bottom: 30, maxWidth: 'calc(100% - 20px)',
-                      background: 'rgba(8, 12, 18, 0.94)', border: '1px solid #ffb02099', borderRadius: 6,
-                      padding: '7px 11px', fontSize: 12.5, color: '#ffb020', lineHeight: 1.45,
-                      pointerEvents: 'none', zIndex: 2,
-                    }}
-                  >
-                    The exposure feed has no figure for {view.feedGaps} instrument{view.feedGaps === 1 ? '' : 's'} MT5 holds
-                    B-Book positions in ({mt5Check.total_positions} open position{mt5Check.total_positions === 1 ? '' : 's'},
-                    read {fmtUtcTime(parseTime(mt5Check.as_of))}). {view.feedGaps === 1 ? 'It is' : 'They are'} drawn grey, lots only,
-                    until the feed prices {view.feedGaps === 1 ? 'it' : 'them'}.
-                  </div>
+                {layer === 'exposure' && !pendingPlatform && (
+                  <MapNotes view={view} mt5Check={mt5Check} />
                 )}
               </RadarMap>
             </div>
@@ -1776,9 +2029,9 @@ export function RiskRadarPage() {
             ) : pendingPlatform ? (
               <PlatformPendingInspector platform={pendingPlatform} />
             ) : selectedSymbol ? (
-              <SymbolDetail s={selectedSymbol} view={view} upto={upto} scope={scope} scopeText={scopeText} region={imap.regionOf(selectedSymbol.symbol)} onClose={() => setSelected(null)} />
+              <SymbolDetail s={selectedSymbol} view={view} upto={upto} ctx={ctx} scope={scope} scopeText={scopeText} region={imap.regionOf(selectedSymbol.symbol)} onClose={() => setSelected(null)} />
             ) : (
-              <RankedList view={view} scopeText={scopeText} emptyText={emptyText} onSelect={setSelected} />
+              <RankedList view={view} scope={scope} scopeText={scopeText} emptyText={emptyText} onSelect={setSelected} />
             )}
           </Panel>
         </div>
@@ -1786,7 +2039,7 @@ export function RiskRadarPage() {
         {/* Timeline + legend */}
         <div style={{ display: 'flex', gap: 12 }}>
           <Timeline replayT={replaying ? replayT : null} playing={playing} onScrub={scrub} onPlay={togglePlay} />
-          <Legend layer={layer} />
+          <Legend layer={layer} view={view} />
         </div>
       </div>
     </div>

@@ -1,36 +1,53 @@
 // ============================================
 // Risk Radar — Exposure layer model
 //
-// Turns one per-symbol exposure snapshot into what the page shows. Pure
-// functions only: the same snapshot always gives the same picture, which is
-// what makes replay of buffered snapshots exact.
+// Turns one per-symbol exposure snapshot, plus the broker's risk limits, the
+// adverse move per symbol and the realised P&L of the month, into what the
+// page shows. Pure functions only: the same inputs always give the same
+// picture, which is what makes replay of buffered snapshots exact.
 //
-// EXPOSURE BASIS (stated on the page as well):
-//   The measure is the B-Book USD notional per instrument — the exposure the
-//   broker carries itself. It is the only USD exposure figure the service
-//   publishes today, and the one the Cockpit already uses.
+// THE MEASURE (Briefs/Taiga Risk Radar - Risk Measure.md, agreed 12 Oct):
+//   per instrument, MT5 and cTrader together
+//     net lots      = B + A + C, broker view (net_exposure_lots)
+//     USD per lot   = contract_size × price × quote_usd_rate
+//     U             = unrealised B + A + C, USD, broker view
+//     move loss     = |net lots| × USD per lot × move_pct
+//     stressed P&L  = U − move loss
+//     risk          = max(0, −stressed P&L)
+//   remaining capacity = monthly loss limit − max(0, −realised P&L MTD)
+//   level              = risk ÷ remaining capacity   (instrument)
+//   book level         = Σ risk ÷ remaining capacity (gains do not offset)
+//   bands              = the broker's Warning / High / Critical, % of capacity
+//
+// NOTHING IS GUESSED:
+//   unpriced — the row has a position but no USD value (priced: false), or the
+//              P&L of one of its books is unknown;
+//   unrated  — priced, but no adverse move yet for the symbol (move_pct null);
+//   no level — no loss limit is set, or the month's P&L is not loaded yet:
+//              risk is shown in USD, but nothing is coloured.
 //
 // PLATFORMS:
-//   Every figure is for the chosen scope — MT5, cTrader, or both merged. Merged,
-//   the same instrument is netted across the two platforms (see rowsInScope).
-//
-// COLOUR CALIBRATION:
-//   Each instrument is coloured by its SHARE of total B-Book exposure
-//   (concentration). The bands below are fixed, so an evenly spread book stays
-//   green and only real concentration turns red. They are a relative scale:
-//   they say where the risk sits, not whether the book as a whole is large.
-//   Absolute limits per instrument are a backend item.
+//   The risk of an instrument is always measured on the whole book. The LP
+//   hedges and the C-Book are not split per platform, so a platform's own
+//   risk cannot be told without guessing. The MT5 / cTrader views show the
+//   instruments that platform holds, with the whole-book risk, and that
+//   platform's own B-Book figures beside it.
 // ============================================
 
-import type { PortfolioExposureSymbolsData, PortfolioExposureSymbolRow } from '@/services/api';
+import type {
+  DailyMovesData,
+  PortfolioExposureSymbolsData,
+  PortfolioExposureSymbolRow,
+  RiskLimitsSection,
+} from '@/services/api';
 
-export type Band = 'low' | 'moderate' | 'high' | 'critical';
+// ── Bands ────────────────────────────────────────────────────
+
+export type Band = 'low' | 'warning' | 'high' | 'critical';
 
 export interface BandDef {
   id: Band;
   label: string;
-  /** Lower bound, share of total B-Book exposure (0..1). */
-  from: number;
   /** Badge / marker colour. Always shown together with the label. */
   color: string;
   /** Text colour that reads on `color`. */
@@ -38,80 +55,56 @@ export interface BandDef {
 }
 
 export const BANDS: BandDef[] = [
-  { id: 'low',      label: 'Low',      from: 0.00, color: '#3ddc57', ink: '#04130a' },
-  { id: 'moderate', label: 'Moderate', from: 0.10, color: '#ffe01f', ink: '#1a1500' },
-  { id: 'high',     label: 'High',     from: 0.25, color: '#ff8a14', ink: '#1c0d00' },
-  { id: 'critical', label: 'Critical', from: 0.40, color: '#ff3b30', ink: '#ffffff' },
+  { id: 'low',      label: 'Low',      color: '#3ddc57', ink: '#04130a' },
+  { id: 'warning',  label: 'Warning',  color: '#ffe01f', ink: '#1a1500' },
+  { id: 'high',     label: 'High',     color: '#ff8a14', ink: '#1c0d00' },
+  { id: 'critical', label: 'Critical', color: '#ff3b30', ink: '#ffffff' },
 ];
 
 export const BAND_BY_ID: Record<Band, BandDef> = {
-  low: BANDS[0], moderate: BANDS[1], high: BANDS[2], critical: BANDS[3],
+  low: BANDS[0], warning: BANDS[1], high: BANDS[2], critical: BANDS[3],
 };
 
-export function bandOf(share: number): Band {
-  if (share >= BANDS[3].from) return 'critical';
-  if (share >= BANDS[2].from) return 'high';
-  if (share >= BANDS[1].from) return 'moderate';
+/** Band thresholds as fractions of the remaining capacity. */
+export interface Thresholds { warning: number; high: number; critical: number }
+
+export const DEFAULT_THRESHOLDS: Thresholds = { warning: 0.5, high: 0.75, critical: 1 };
+
+export function thresholdsOf(limits: RiskLimitsSection | null): Thresholds {
+  const b = limits?.bands;
+  if (!b) return DEFAULT_THRESHOLDS;
+  const w = b.warning_pct / 100, h = b.high_pct / 100, c = b.critical_pct / 100;
+  return [w, h, c].every((v) => Number.isFinite(v) && v > 0) && w < h && h <= c
+    ? { warning: w, high: h, critical: c }
+    : DEFAULT_THRESHOLDS;
+}
+
+export function bandOf(level: number, t: Thresholds): Band {
+  if (level >= t.critical) return 'critical';
+  if (level >= t.high) return 'high';
+  if (level >= t.warning) return 'warning';
   return 'low';
 }
 
-// Share → position on the colour ramp. Band boundaries land on the ramp's
-// quarter points (0.25 / 0.50 / 0.75), so a badge and its patch always agree.
-const HEAT_KNOTS: Array<[number, number]> = [
-  [0.00, 0.17], [0.10, 0.25], [0.25, 0.50], [0.40, 0.75], [0.70, 1.00],
-];
-
-export function heatOf(share: number): number {
-  if (!(share > 0)) return 0;
-  for (let i = 1; i < HEAT_KNOTS.length; i++) {
-    const [s1, t1] = HEAT_KNOTS[i];
-    if (share <= s1) {
-      const [s0, t0] = HEAT_KNOTS[i - 1];
-      return t0 + ((share - s0) / (s1 - s0)) * (t1 - t0);
-    }
+/**
+ * Level → position on the colour ramp. Band boundaries land on the ramp's
+ * quarter points (0.25 / 0.50 / 0.75), so a badge and its patch always agree.
+ * Twice the Critical level reaches the top of the ramp.
+ */
+export function heatOf(level: number, t: Thresholds): number {
+  if (!(level > 0)) return 0;
+  const knots: Array<[number, number]> = [
+    [0, 0.12], [t.warning, 0.25], [t.high, 0.5], [t.critical, 0.75], [t.critical * 2, 1],
+  ];
+  for (let i = 1; i < knots.length; i++) {
+    const [l1, h1] = knots[i];
+    const [l0, h0] = knots[i - 1];
+    if (level <= l1) return l1 > l0 ? h0 + ((level - l0) / (l1 - l0)) * (h1 - h0) : h1;
   }
   return 1;
 }
 
-/**
- * priced   — has a B-Book position and a USD value;
- * unpriced — has a B-Book position but the feed carries no USD value for it;
- * flat     — no B-Book position (the instrument is held in A/C books only).
- */
-export type Pricing = 'priced' | 'unpriced' | 'flat';
-
-export type WorstDayState = 'ok' | 'no_history' | 'excluded' | 'unpriced';
-
-export interface RadarSymbol {
-  symbol: string;
-  pricing: Pricing;
-  /** |B-Book USD notional|. 0 unless priced. */
-  usd: number;
-  /** Share of total priced B-Book exposure, 0..1. */
-  share: number;
-  band: Band | null;
-  heat: number;
-  /** 1-based rank by B-Book exposure among priced instruments. */
-  rank: number | null;
-  bLots: number;
-  aLots: number;
-  cLots: number;
-  netLots: number;
-  longLots: number;
-  shortLots: number;
-  impact1pct: number | null;
-  worstRange: number | null;
-  worstDayLoss: number | null;
-  worstDay: WorstDayState;
-  unrealized: number | null;
-  pnlMtd: number | null;
-  /** Where the B-Book position sits, per platform (one entry when one platform is shown). */
-  parts: PlatformPart[];
-  /** Priced, but one platform's part has no USD value and is missing from `usd`. */
-  partlyUnpriced: boolean;
-  /** The exposure feed has no B-Book figure for it; the lots come from the MT5 servers. */
-  fromMt5Book: boolean;
-}
+// ── Inputs ───────────────────────────────────────────────────
 
 /** Open B-Book positions per symbol, as the MT5 servers report them (client side). */
 export interface Mt5BookRow {
@@ -122,57 +115,17 @@ export interface Mt5BookRow {
   logins: number;
 }
 
-export interface RadarView {
-  /** Snapshot time, epoch ms; null if the service sent none we can read. */
-  asOf: number | null;
-  symbols: RadarSymbol[];
-  bySymbol: Map<string, RadarSymbol>;
-  /** Σ |B-Book USD notional| over priced instruments. */
-  totalUsd: number;
-  impact1pct: number;
-  /** Σ worst-day loss over instruments that have a usable range; null if none. */
-  worstDayTotal: number | null;
-  worstDayCovered: number;
-  /** null until the worst-day ranges have been fetched. */
-  worstDayReady: boolean;
-  priced: number;
-  unpriced: number;
-  flat: number;
-  bandCounts: Record<Band, number>;
-  /** Instruments MT5 holds B-Book positions in that the exposure feed has no figure for. */
-  feedGaps: number;
-}
-
-/** Same guard as the Cockpit: a one-day range above 10 % is a bad bar. */
-export const MAX_DAILY_RANGE = 0.10;
-
-const EPS_LOTS = 1e-9;
-
-function num(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
-}
-
-function optNum(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
-/** ISO 8601 or PostgreSQL timestamp text → epoch ms (UTC when no zone given). */
-export function parseTime(text: string | null | undefined): number | null {
-  if (!text) return null;
-  let t = text.trim().replace(' ', 'T');
-  if (!/(Z|[+-]\d{2}(:?\d{2})?)$/.test(t)) t += 'Z';
-  t = t.replace(/([+-]\d{2})$/, '$1:00');
-  const ms = Date.parse(t);
-  return Number.isFinite(ms) ? ms : null;
+/** What the measure needs besides the snapshot. Constant across replayed samples. */
+export interface RiskContext {
+  /** Adverse move per symbol. null until loaded. */
+  moves: DailyMovesData | null;
+  /** The Risk Limits section. null until loaded. */
+  limits: RiskLimitsSection | null;
+  /** Realised P&L of the whole book, month to date, broker view. null until loaded. */
+  realizedMtd: number | null;
 }
 
 // ── Platforms ────────────────────────────────────────────────
-// The radar can be read for one trading platform or for both merged.
-//
-// A row says which platform it belongs to in `platform`. Rows without it are
-// the MT5 book — that is what the exposure feed carries today. The snapshot
-// may list what it covers in `platforms`; when it does not, coverage is what
-// the rows show. A platform that is not covered is "no data", never "flat".
 
 export type Platform = 'MT5' | 'CTRADER';
 export type PlatformScope = 'ALL' | Platform;
@@ -207,149 +160,276 @@ export function coverageOf(snapshot: PortfolioExposureSymbolsData | null): Set<P
   return out;
 }
 
-/**
- * Since the backend merges the cTrader MASTER into the same rows (Books
- * cTrader 1.0), a row without `platform` holds both platforms, with the
- * cTrader share of the B and A lots given apart. For one platform the row is
- * cut in two: lots exactly; notional pro rata of the B-Book lots (same symbol,
- * same contract size). P&L is not given per platform, so a part has none.
- */
-function partsOfRow(r: PortfolioExposureSymbolRow, scope: PlatformScope): PortfolioExposureSymbolRow[] {
-  if (r.platform || typeof r.b_book_lots_ctrader !== 'number' || scope === 'ALL') return [r];
-  const bCt = num(r.b_book_lots_ctrader);
-  const aCt = num(r.a_book_lots_ctrader);
-  const bAll = num(r.b_book_lots);
-  const usdAll = Math.abs(num(r.b_book_notional_usd));
-  const perLot = Math.abs(bAll) > EPS_LOTS ? usdAll / Math.abs(bAll) : 0;
-  const cut = (b: number, a: number, c: number, platform: string): PortfolioExposureSymbolRow => {
-    const net = b + a + c;
-    return {
-      ...r, platform,
-      b_book_lots: b, a_book_lots: a, c_book_lots: c, net_exposure_lots: net,
-      long_lots: Math.max(net, 0), short_lots: Math.max(-net, 0),
-      b_book_notional_usd: perLot > 0 ? Math.abs(b) * perLot : 0,
-      unrealized_pnl: undefined, realized_pnl_mtd: undefined, pnl_total_mtd: undefined,
-    };
-  };
-  return scope === 'CTRADER'
-    ? [cut(bCt, aCt, 0, 'CTRADER')]
-    : [cut(bAll - bCt, num(r.a_book_lots) - aCt, num(r.c_book_lots), 'MT5')];
-}
-
-/** One platform's share of an instrument. */
+/** One platform's B-Book share of an instrument. */
 export interface PlatformPart {
   platform: Platform;
-  /** |B-Book USD notional| on this platform; null when it has lots but no USD value. */
-  usd: number | null;
   bLots: number;
+  /** |B-Book lots| in USD; null when unpriced. */
+  bUsd: number | null;
+  /** B-Book unrealised P&L on this platform, USD, broker view; null when not known. */
+  bU: number | null;
 }
 
-interface Merged {
+// ── Output ───────────────────────────────────────────────────
+
+/**
+ * rated    — risk is known (or the net position is flat: no move needed);
+ * unrated  — priced, but the symbol has no adverse move yet;
+ * unpriced — no USD value for the position, or a book's P&L is unknown.
+ */
+export type Rating = 'rated' | 'unrated' | 'unpriced';
+
+export type WorstDayState = 'ok' | 'no_history' | 'excluded' | 'unpriced' | 'flat';
+
+export interface RadarSymbol {
   symbol: string;
-  /** Σ signed B-Book USD notional over the priced parts (sign from the B-Book lots). */
-  signedUsd: number;
-  pricedParts: number;
-  unpricedParts: number;
+  rating: Rating;
+  /** Why it is unpriced, in words ("no price", "A-Book P&L unknown"…). */
+  missing: string[];
+  /** null when there is no level (unrated, unpriced, or no capacity). */
+  band: Band | null;
+  heat: number;
+  /** 1-based rank by risk among instruments with risk > 0. */
+  rank: number | null;
+
   bLots: number;
   aLots: number;
   cLots: number;
   netLots: number;
-  longLots: number;
-  shortLots: number;
-  unrealized: number | null;
+
+  /** Unrealised P&L per book and in total, USD, broker view. null = unknown. */
+  bU: number | null;
+  aU: number | null;
+  cU: number | null;
+  u: number | null;
+
+  usdPerLot: number | null;
+  /** |net lots| in USD. */
+  netUsd: number | null;
+  /** |B-Book lots| in USD. Information only. */
+  bUsd: number | null;
+  /** Share of the priced B-Book in USD, 0..1. Information only. */
+  share: number;
+
+  /** Adverse move, percent (0.92 = 0.92 %). */
+  movePct: number | null;
+  moveSamples: number | null;
+  moveLoss: number | null;
+  stressed: number | null;
+  risk: number | null;
+  /** risk ÷ remaining capacity; Infinity when capacity is used up. null without capacity. */
+  level: number | null;
+
+  worstRange: number | null;
+  worstDayLoss: number | null;
+  worstDay: WorstDayState;
+
+  /** B-Book P&L month to date, USD (all platforms). */
   pnlMtd: number | null;
+  /** B-Book by platform. */
   parts: PlatformPart[];
+  /** The exposure feed has no figure for it; the lots come from the MT5 servers. */
   fromMt5Book: boolean;
 }
 
-function addOpt(a: number | null, b: number | null): number | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return a + b;
+export type CapacityState = 'loading' | 'no_limit' | 'no_pnl' | 'ok';
+
+export interface Capacity {
+  state: CapacityState;
+  currency: string;
+  month: string | null;
+  limit: number | null;
+  carriedOver: boolean;
+  realizedMtd: number | null;
+  /** max(0, −realised MTD). */
+  lossTaken: number | null;
+  /** limit − loss taken. May be ≤ 0 when the limit is used up. */
+  remaining: number | null;
 }
 
-/**
- * Rows in scope, one per instrument. For both platforms merged, the same
- * instrument is NETTED: long on one platform against short on the other
- * leaves only the difference, which is what the broker carries.
- */
-function rowsInScope(snapshot: PortfolioExposureSymbolsData | null, scope: PlatformScope): Merged[] {
-  const byKey = new Map<string, Merged>();
-  for (const whole of snapshot?.by_symbol ?? []) {
-    if (!whole || typeof whole.symbol !== 'string' || !whole.symbol) continue;
-    for (const r of partsOfRow(whole, scope)) {
-    const platform = platformOfRow(r);
-    if (scope !== 'ALL' && platform !== scope) continue;
+export interface RadarView {
+  /** Snapshot time, epoch ms; null if the service sent none we can read. */
+  asOf: number | null;
+  /** Instruments in the chosen platform scope. */
+  symbols: RadarSymbol[];
+  bySymbol: Map<string, RadarSymbol>;
+  thresholds: Thresholds;
+  capacity: Capacity;
+  /** Σ risk of the rated instruments — always the whole book. */
+  bookRisk: number;
+  bookLevel: number | null;
+  bookBand: Band | null;
+  /** Counts over the instruments shown. */
+  rated: number;
+  unrated: number;
+  unpriced: number;
+  atRisk: number;
+  bandCounts: Record<Band, number>;
+  /** Σ |B-Book USD| over priced instruments shown. Information only. */
+  totalBUsd: number;
+  /** Σ worst-day loss over instruments shown that have a usable range; null if none. */
+  worstDayTotal: number | null;
+  worstDayCovered: number;
+  worstDayReady: boolean;
+  movesReady: boolean;
+  /** Instruments MT5 holds B-Book positions in that the exposure feed has no figure for. */
+  feedGaps: number;
+}
 
+/** Same guard as the Cockpit: a one-day range above 10 % is a bad bar. */
+export const MAX_DAILY_RANGE = 0.10;
+
+const EPS_LOTS = 1e-9;
+
+function num(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+function optNum(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+function flat(lots: number): boolean {
+  return Math.abs(lots) < EPS_LOTS;
+}
+
+/** null = unknown, except that a book with no position has nothing to lose. */
+function leg(v: unknown, lots: number): number | null {
+  const n = optNum(v);
+  if (n !== null) return n;
+  return flat(lots) ? 0 : null;
+}
+
+function addOpt(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : a + b;
+}
+
+/** ISO 8601 or PostgreSQL timestamp text → epoch ms (UTC when no zone given). */
+export function parseTime(text: string | null | undefined): number | null {
+  if (!text) return null;
+  let t = text.trim().replace(' ', 'T');
+  if (!/(Z|[+-]\d{2}(:?\d{2})?)$/.test(t)) t += 'Z';
+  t = t.replace(/([+-]\d{2})$/, '$1:00');
+  const ms = Date.parse(t);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// ── Capacity ─────────────────────────────────────────────────
+
+export function capacityOf(ctx: RiskContext): Capacity {
+  const l = ctx.limits;
+  const base: Capacity = {
+    state: 'loading', currency: l?.currency || 'USD', month: l?.limit?.month ?? null,
+    limit: null, carriedOver: !!l?.limit?.carried_over, realizedMtd: ctx.realizedMtd,
+    lossTaken: ctx.realizedMtd === null ? null : Math.max(0, -ctx.realizedMtd), remaining: null,
+  };
+  if (!l) return base;
+  const limit = optNum(l.limit?.monthly_loss_limit);
+  if (limit === null || !(limit > 0)) return { ...base, state: 'no_limit' };
+  if (base.lossTaken === null) return { ...base, limit, state: 'no_pnl' };
+  return { ...base, limit, state: 'ok', remaining: limit - base.lossTaken };
+}
+
+function levelOf(risk: number, cap: Capacity): number | null {
+  if (cap.state !== 'ok' || cap.remaining === null) return null;
+  if (cap.remaining > 0) return risk / cap.remaining;
+  return risk > 0 ? Infinity : 0;
+}
+
+// ── Per instrument, whole book ───────────────────────────────
+
+interface Acc {
+  symbol: string;
+  bLots: number; aLots: number; cLots: number; netLots: number;
+  bU: number | null; aU: number | null; cU: number | null;
+  /** First USD-per-lot found (rows come MT5 first). */
+  usdPerLot: number | null;
+  /** A row with lots had no USD value. */
+  unpricedLots: boolean;
+  pnlMtd: number | null;
+  parts: Array<{ platform: Platform; bLots: number; bU: number | null }>;
+  fromMt5Book: boolean;
+}
+
+function usdPerLotOf(r: PortfolioExposureSymbolRow): number | null {
+  if (r.priced === false) return null;
+  const cs = optNum(r.contract_size), px = optNum(r.price), fx = optNum(r.quote_usd_rate);
+  if (cs === null || px === null || fx === null) return null;
+  const v = cs * px * fx;
+  return v > 0 ? v : null;
+}
+
+function addPart(m: Acc, platform: Platform, bLots: number, bU: number | null) {
+  if (flat(bLots)) return;
+  const p = m.parts.find((x) => x.platform === platform);
+  if (p) { p.bLots += bLots; p.bU = addOpt(p.bU, bU); }
+  else m.parts.push({ platform, bLots, bU });
+}
+
+function accumulate(snapshot: PortfolioExposureSymbolsData | null): Map<string, Acc> {
+  const byKey = new Map<string, Acc>();
+  for (const r of snapshot?.by_symbol ?? []) {
+    if (!r || typeof r.symbol !== 'string' || !r.symbol) continue;
     const key = typeof r.instrument === 'string' && r.instrument ? r.instrument : r.symbol;
     let m = byKey.get(key);
     if (!m) {
       m = {
-        symbol: key, signedUsd: 0, pricedParts: 0, unpricedParts: 0,
-        bLots: 0, aLots: 0, cLots: 0, netLots: 0, longLots: 0, shortLots: 0,
-        unrealized: null, pnlMtd: null, parts: [], fromMt5Book: false,
+        symbol: key, bLots: 0, aLots: 0, cLots: 0, netLots: 0, bU: 0, aU: 0, cU: 0,
+        usdPerLot: null, unpricedLots: false, pnlMtd: null, parts: [], fromMt5Book: false,
       };
       byKey.set(key, m);
     }
+    const b = num(r.b_book_lots), a = num(r.a_book_lots), c = num(r.c_book_lots);
+    const net = typeof r.net_exposure_lots === 'number' ? num(r.net_exposure_lots) : b + a + c;
+    const bU = leg(r.unrealized_pnl, b);
+    m.bLots += b; m.aLots += a; m.cLots += c; m.netLots += net;
+    m.bU = addOpt(m.bU, bU);
+    m.aU = addOpt(m.aU, leg(r.a_book_unrealized_usd, a));
+    m.cU = addOpt(m.cU, leg(r.c_book_unrealized_usd, c));
+    const perLot = usdPerLotOf(r);
+    if (perLot !== null) { if (m.usdPerLot === null) m.usdPerLot = perLot; }
+    else if (!flat(net) || !flat(b)) m.unpricedLots = true;
+    const mtd = optNum(r.pnl_total_mtd);
+    if (mtd !== null) m.pnlMtd = (m.pnlMtd ?? 0) + mtd;
 
-    const usd = Math.abs(num(r.b_book_notional_usd));
-    const bLots = num(r.b_book_lots);
-    const hasLots = Math.abs(bLots) > EPS_LOTS;
-    if (usd > 0) { m.signedUsd += bLots < 0 ? -usd : usd; m.pricedParts++; }
-    else if (hasLots) m.unpricedParts++;
-
-    m.bLots += bLots;
-    m.aLots += num(r.a_book_lots);
-    m.cLots += num(r.c_book_lots);
-    m.netLots += num(r.net_exposure_lots);
-    m.longLots += num(r.long_lots);
-    m.shortLots += num(r.short_lots);
-    m.unrealized = addOpt(m.unrealized, optNum(r.unrealized_pnl));
-    m.pnlMtd = addOpt(m.pnlMtd, optNum(r.pnl_total_mtd));
-    if (!r.platform && typeof r.b_book_lots_ctrader === 'number' && scope === 'ALL') {
-      // A merged row on the Both view: its two platforms' parts, pro rata.
+    if (r.platform) {
+      addPart(m, platformOfRow(r), b, bU);
+    } else if (typeof r.b_book_lots_ctrader === 'number') {
+      // A merged row: the cTrader share of the B-Book is given apart.
       const bCt = num(r.b_book_lots_ctrader);
-      const perLot = Math.abs(bLots) > EPS_LOTS ? usd / Math.abs(bLots) : 0;
-      for (const [p, b] of [['MT5', bLots - bCt], ['CTRADER', bCt]] as const) {
-        if (Math.abs(b) > EPS_LOTS) m.parts.push({ platform: p, usd: perLot > 0 ? Math.abs(b) * perLot : null, bLots: b });
-      }
-    } else if (usd > 0 || hasLots) {
-      m.parts.push({ platform, usd: usd > 0 ? usd : null, bLots });
-    }
+      const uCt = optNum(r.unrealized_pnl_ctrader) ?? (flat(bCt) ? 0 : null);
+      addPart(m, 'MT5', b - bCt, bU === null || uCt === null ? null : bU - uCt);
+      addPart(m, 'CTRADER', bCt, uCt);
+    } else {
+      addPart(m, 'MT5', b, bU);
     }
   }
-  return [...byKey.values()];
+  return byKey;
 }
 
 /**
  * Instruments the MT5 servers hold open B-Book positions in, for which the
- * exposure feed carries no B-Book figure. They are added as unpriced rows —
- * lots only, broker view — so a gap in the feed shows as a grey instrument
+ * exposure feed carries no figure. They are added as unpriced rows — lots
+ * only, broker view — so a gap in the feed shows as a grey instrument
  * instead of a missing one.
  */
-function addFeedGaps(rows: Merged[], mt5Book: Mt5BookRow[]): number {
-  const have = new Map(rows.map((r) => [r.symbol, r] as const));
+function addFeedGaps(rows: Map<string, Acc>, mt5Book: Mt5BookRow[]): number {
   let gaps = 0;
   for (const b of mt5Book) {
     const lots = num(b.sell_lots) - num(b.buy_lots);          // client buy = broker short
     const gross = num(b.sell_lots) + num(b.buy_lots);
     if (!(gross > EPS_LOTS)) continue;
-    const row = have.get(b.symbol);
+    const row = rows.get(b.symbol);
     if (row && row.parts.some((p) => p.platform === 'MT5')) continue;   // the feed has it
-
-    const part: PlatformPart = { platform: 'MT5', usd: null, bLots: lots };
     if (row) {
-      row.bLots += lots;
-      row.netLots += lots;
-      row.unpricedParts++;
-      row.parts.push(part);
-      row.fromMt5Book = true;
+      row.bLots += lots; row.netLots += lots; row.bU = null;
+      row.unpricedLots = true; row.fromMt5Book = true;
+      row.parts.push({ platform: 'MT5', bLots: lots, bU: null });
     } else {
-      rows.push({
-        symbol: b.symbol, signedUsd: 0, pricedParts: 0, unpricedParts: 1,
-        bLots: lots, aLots: 0, cLots: 0, netLots: lots,
-        longLots: num(b.sell_lots), shortLots: num(b.buy_lots),
-        unrealized: null, pnlMtd: null, parts: [part], fromMt5Book: true,
+      rows.set(b.symbol, {
+        symbol: b.symbol, bLots: lots, aLots: 0, cLots: 0, netLots: lots,
+        bU: null, aU: 0, cU: 0, usdPerLot: null, unpricedLots: true, pnlMtd: null,
+        parts: [{ platform: 'MT5', bLots: lots, bU: null }], fromMt5Book: true,
       });
     }
     gaps++;
@@ -357,102 +437,170 @@ function addFeedGaps(rows: Merged[], mt5Book: Mt5BookRow[]): number {
   return gaps;
 }
 
+function moveOf(moves: DailyMovesData | null, symbol: string): { pct: number | null; samples: number | null } {
+  const e = moves?.symbols?.[symbol] ?? moves?.ctrader_symbols?.[symbol];
+  if (!e) return { pct: null, samples: null };
+  const pct = optNum(e.move_pct);
+  return { pct: pct !== null && pct >= 0 ? pct : null, samples: optNum(e.samples) };
+}
+
+function measure(
+  m: Acc,
+  ctx: RiskContext,
+  cap: Capacity,
+  t: Thresholds,
+  largest1Day: Record<string, number> | null,
+): RadarSymbol {
+  const u = addOpt(addOpt(m.bU, m.aU), m.cU);
+  const priced = m.usdPerLot !== null && !m.unpricedLots;
+  const netFlat = flat(m.netLots);
+  const move = moveOf(ctx.moves, m.symbol);
+
+  const missing: string[] = [];
+  if (!priced && !netFlat) missing.push(m.fromMt5Book ? 'not in the exposure feed' : 'no USD value (price, contract size or rate)');
+  if (m.bU === null && !m.fromMt5Book) missing.push('B-Book P&L unknown');
+  if (m.aU === null) missing.push('A-Book P&L unknown');
+  if (m.cU === null) missing.push('C-Book P&L unknown');
+
+  let rating: Rating;
+  if (missing.length > 0) rating = 'unpriced';
+  else if (!netFlat && move.pct === null) rating = 'unrated';
+  else rating = 'rated';
+
+  const usdPerLot = m.usdPerLot;
+  const netUsd = usdPerLot !== null ? Math.abs(m.netLots) * usdPerLot : null;
+  const bUsd = usdPerLot !== null && !m.unpricedLots ? Math.abs(m.bLots) * usdPerLot : null;
+
+  let moveLoss: number | null = null, stressed: number | null = null, risk: number | null = null;
+  if (rating === 'rated' && u !== null) {
+    moveLoss = netFlat ? 0 : (netUsd as number) * (move.pct as number) / 100;
+    stressed = u - moveLoss;
+    risk = Math.max(0, -stressed);
+  }
+  const level = risk !== null ? levelOf(risk, cap) : null;
+  const band = level !== null ? bandOf(level, t) : null;
+
+  let worstRange: number | null = null, worstDayLoss: number | null = null;
+  let worstDay: WorstDayState = netFlat ? 'flat' : netUsd === null ? 'unpriced' : 'no_history';
+  if (!netFlat && netUsd !== null) {
+    const range = largest1Day ? largest1Day[m.symbol] : undefined;
+    if (typeof range === 'number' && range > 0) {
+      if (range > MAX_DAILY_RANGE) worstDay = 'excluded';
+      else { worstDay = 'ok'; worstRange = range; worstDayLoss = range * netUsd; }
+    }
+  }
+
+  return {
+    symbol: m.symbol, rating, missing, band,
+    heat: level !== null ? heatOf(level, t) : 0,
+    rank: null,
+    bLots: m.bLots, aLots: m.aLots, cLots: m.cLots, netLots: m.netLots,
+    bU: m.bU, aU: m.aU, cU: m.cU, u,
+    usdPerLot, netUsd, bUsd, share: 0,
+    movePct: move.pct, moveSamples: move.samples, moveLoss, stressed, risk, level,
+    worstRange, worstDayLoss, worstDay,
+    pnlMtd: m.pnlMtd,
+    parts: m.parts.map((p) => ({
+      platform: p.platform, bLots: p.bLots, bU: p.bU,
+      bUsd: usdPerLot !== null && !m.unpricedLots ? Math.abs(p.bLots) * usdPerLot : null,
+    })),
+    fromMt5Book: m.fromMt5Book,
+  };
+}
+
+function inScope(s: RadarSymbol, scope: PlatformScope): boolean {
+  if (scope === 'ALL') return true;
+  if (s.parts.some((p) => p.platform === scope)) return true;
+  // cTrader book A is the cTrader platform's too; no split of it is given
+  // apart from lots, so an instrument held only there shows under Both.
+  return false;
+}
+
+// Whole-book risk per snapshot, cached: replay and the trend lines ask for
+// the same snapshots many times.
+const riskCache = new WeakMap<PortfolioExposureSymbolsData, { ctx: RiskContext; total: number; bySymbol: Map<string, number> }>();
+
+function wholeBookRisk(snapshot: PortfolioExposureSymbolsData, ctx: RiskContext) {
+  const hit = riskCache.get(snapshot);
+  if (hit && hit.ctx === ctx) return hit;
+  const cap = capacityOf(ctx);
+  const t = thresholdsOf(ctx.limits);
+  const bySymbol = new Map<string, number>();
+  let total = 0;
+  for (const m of accumulate(snapshot).values()) {
+    const s = measure(m, ctx, cap, t, null);
+    if (s.risk !== null) { bySymbol.set(s.symbol, s.risk); total += s.risk; }
+  }
+  const out = { ctx, total, bySymbol };
+  riskCache.set(snapshot, out);
+  return out;
+}
+
 export function buildView(
   snapshot: PortfolioExposureSymbolsData | null,
   largest1Day: Record<string, number> | null,
-  scope: PlatformScope = 'ALL',
-  mt5Book: Mt5BookRow[] | null = null,
+  scope: PlatformScope,
+  mt5Book: Mt5BookRow[] | null,
+  ctx: RiskContext,
 ): RadarView {
-  const rows = rowsInScope(snapshot, scope);
+  const rows = accumulate(snapshot);
   const feedGaps = mt5Book && scope !== 'CTRADER' ? addFeedGaps(rows, mt5Book) : 0;
+  const cap = capacityOf(ctx);
+  const t = thresholdsOf(ctx.limits);
 
-  let totalUsd = 0;
-  for (const r of rows) totalUsd += Math.abs(r.signedUsd);
+  const all = [...rows.values()].map((m) => measure(m, ctx, cap, t, largest1Day));
 
-  const symbols: RadarSymbol[] = [];
-  const bandCounts: Record<Band, number> = { low: 0, moderate: 0, high: 0, critical: 0 };
-  let worstDayTotal = 0;
-  let worstDayCovered = 0;
-  let unpriced = 0;
-  let flat = 0;
+  // The book is the whole book, whatever the platform shown.
+  let bookRisk = 0;
+  for (const s of all) if (s.risk !== null) bookRisk += s.risk;
+  const bookLevel = levelOf(bookRisk, cap);
 
-  for (const r of rows) {
-    const usd = Math.abs(r.signedUsd);
-    // Priced parts that cancel out leave a flat instrument, not an unpriced one.
-    const pricing: Pricing = usd > 0 ? 'priced' : r.unpricedParts > 0 ? 'unpriced' : 'flat';
-    const share = pricing === 'priced' && totalUsd > 0 ? usd / totalUsd : 0;
-    const band = pricing === 'priced' ? bandOf(share) : null;
+  const symbols = all.filter((s) => inScope(s, scope));
 
-    let worstRange: number | null = null;
-    let worstDayLoss: number | null = null;
-    let worstDay: WorstDayState = 'unpriced';
-    if (pricing === 'priced') {
-      const range = largest1Day ? largest1Day[r.symbol] : undefined;
-      if (!(typeof range === 'number' && range > 0)) worstDay = 'no_history';
-      else if (range > MAX_DAILY_RANGE) worstDay = 'excluded';
-      else {
-        worstDay = 'ok';
-        worstRange = range;
-        worstDayLoss = range * usd;
-        worstDayTotal += worstDayLoss;
-        worstDayCovered++;
-      }
-    }
+  let totalBUsd = 0;
+  for (const s of symbols) if (s.bUsd !== null) totalBUsd += s.bUsd;
+  for (const s of symbols) s.share = s.bUsd !== null && totalBUsd > 0 ? s.bUsd / totalBUsd : 0;
 
-    if (band) bandCounts[band]++;
-    if (pricing === 'unpriced') unpriced++;
-    if (pricing === 'flat') flat++;
-
-    symbols.push({
-      symbol: r.symbol,
-      pricing,
-      usd: pricing === 'priced' ? usd : 0,
-      share,
-      band,
-      heat: pricing === 'priced' ? heatOf(share) : 0,
-      rank: null,
-      bLots: r.bLots,
-      aLots: r.aLots,
-      cLots: r.cLots,
-      netLots: r.netLots,
-      longLots: r.longLots,
-      shortLots: r.shortLots,
-      impact1pct: pricing === 'priced' ? usd * 0.01 : null,
-      worstRange,
-      worstDayLoss,
-      worstDay,
-      unrealized: r.unrealized,
-      pnlMtd: r.pnlMtd,
-      parts: r.parts,
-      partlyUnpriced: pricing === 'priced' && r.unpricedParts > 0,
-      fromMt5Book: r.fromMt5Book,
-    });
-  }
-
-  // Priced first by exposure, then unpriced by lots, then flat by name.
-  const order: Record<Pricing, number> = { priced: 0, unpriced: 1, flat: 2 };
+  // Risk first (largest first), then unrated by size, then unpriced, then the
+  // instruments with nothing at risk.
+  const order = (s: RadarSymbol) =>
+    s.rating === 'rated' && (s.risk ?? 0) > 0 ? 0 : s.rating === 'unrated' ? 1 : s.rating === 'unpriced' ? 2 : 3;
   symbols.sort((a, b) =>
-    order[a.pricing] - order[b.pricing] ||
-    b.usd - a.usd ||
-    Math.abs(b.bLots) - Math.abs(a.bLots) ||
+    order(a) - order(b) ||
+    (b.risk ?? 0) - (a.risk ?? 0) ||
+    (b.netUsd ?? 0) - (a.netUsd ?? 0) ||
+    Math.abs(b.netLots) - Math.abs(a.netLots) ||
     a.symbol.localeCompare(b.symbol),
   );
-  let rank = 0;
-  for (const s of symbols) if (s.pricing === 'priced') s.rank = ++rank;
+
+  const bandCounts: Record<Band, number> = { low: 0, warning: 0, high: 0, critical: 0 };
+  let rank = 0, rated = 0, unrated = 0, unpriced = 0;
+  let worstDayTotal = 0, worstDayCovered = 0;
+  for (const s of symbols) {
+    if (s.rating === 'rated') rated++;
+    else if (s.rating === 'unrated') unrated++;
+    else unpriced++;
+    if ((s.risk ?? 0) > 0) s.rank = ++rank;
+    if (s.band) bandCounts[s.band]++;
+    if (s.worstDayLoss !== null) { worstDayTotal += s.worstDayLoss; worstDayCovered++; }
+  }
 
   return {
     asOf: parseTime(snapshot?.as_of),
     symbols,
     bySymbol: new Map(symbols.map((s) => [s.symbol, s] as const)),
-    totalUsd,
-    impact1pct: totalUsd * 0.01,
+    thresholds: t,
+    capacity: cap,
+    bookRisk,
+    bookLevel,
+    bookBand: bookLevel !== null ? bandOf(bookLevel, t) : null,
+    rated, unrated, unpriced, atRisk: rank,
+    bandCounts,
+    totalBUsd,
     worstDayTotal: worstDayCovered > 0 ? worstDayTotal : null,
     worstDayCovered,
     worstDayReady: largest1Day !== null,
-    priced: rank,
-    unpriced,
-    flat,
-    bandCounts,
+    movesReady: ctx.moves !== null,
     feedGaps,
   };
 }
@@ -468,19 +616,14 @@ export interface Sample {
 export const HISTORY_WINDOW_MS = 30 * 60 * 1000;
 export const SAMPLE_EVERY_MS = 5_000;
 
-/** B-Book exposure of one instrument in a snapshot, in the given scope. */
-export function usdOf(snapshot: PortfolioExposureSymbolsData, symbol: string, scope: PlatformScope): number {
-  for (const r of rowsInScope(snapshot, scope)) {
-    if (r.symbol === symbol) return Math.abs(r.signedUsd);
-  }
-  return 0;
+/** Risk of one instrument in a snapshot (whole book); 0 when not rated. */
+export function riskOf(snapshot: PortfolioExposureSymbolsData, symbol: string, ctx: RiskContext): number {
+  return wholeBookRisk(snapshot, ctx).bySymbol.get(symbol) ?? 0;
 }
 
-/** Total B-Book exposure of a snapshot, in the given scope. */
-export function totalUsdOf(snapshot: PortfolioExposureSymbolsData, scope: PlatformScope): number {
-  let t = 0;
-  for (const r of rowsInScope(snapshot, scope)) t += Math.abs(r.signedUsd);
-  return t;
+/** Book risk of a snapshot: Σ instrument risks, whole book. */
+export function bookRiskOf(snapshot: PortfolioExposureSymbolsData, ctx: RiskContext): number {
+  return wholeBookRisk(snapshot, ctx).total;
 }
 
 export type TrendDir = 'building' | 'easing' | 'steady';
@@ -538,10 +681,16 @@ export function fmtUsd(v: number | null | undefined): string {
 }
 
 export function fmtPct(share: number, digits = 0): string {
-  if (!Number.isFinite(share)) return '—';
+  if (!Number.isFinite(share)) return share > 0 ? 'over limit' : '—';
   const p = share * 100;
   if (p > 0 && p < 1 && digits === 0) return '<1%';
   return `${p.toFixed(digits)}%`;
+}
+
+/** Percent figure already in percent (move_pct). */
+export function fmtMovePct(v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return '—';
+  return `${v.toFixed(2)}%`;
 }
 
 export function fmtLots(v: number): string {

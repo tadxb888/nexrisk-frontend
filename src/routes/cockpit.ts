@@ -132,6 +132,34 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/v1/risk-radar/month-pnl
+   * Realised P&L of the whole book, month to date, broker view — the loss the
+   * book has already taken this month, which Risk Radar takes off the monthly
+   * loss limit. Read from /api/v1/portfolio/summary?period=month (total) and
+   * reduced to what the page uses, so that it follows the Risk Radar access
+   * rule (the 'cockpit' module) instead of the Portfolio one. The live value
+   * comes on the topic portfolio.summary.month.
+   */
+  fastify.get(
+    '/risk-radar/month-pnl',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<{ from?: string; to?: string; total?: { realized?: unknown } }>(
+        '/api/v1/portfolio/summary',
+        { period: 'month' },
+      );
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      const d = response.data;
+      const realized = typeof d?.total?.realized === 'number' && Number.isFinite(d.total.realized) ? d.total.realized : null;
+      return reply.send({ from: d?.from ?? null, to: d?.to ?? null, realized });
+    }
+  );
+
+  /**
    * GET /api/v1/risk-radar/exposure
    * Risk Radar, Exposure layer — the per-symbol exposure snapshot the page
    * opens with (and all it has while the market is shut and the

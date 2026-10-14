@@ -1790,8 +1790,28 @@ export interface PortfolioExposureSymbolRow {
   realized_pnl_mtd?:    number;
   unrealized_pnl?:      number;
   pnl_total_mtd?:       number;
-  // Per-symbol B-Book USD notional (Card 3 Rows 2 & 3).
+  // Per-symbol B-Book notional (Card 3 Rows 2 & 3). Despite the name it is
+  // lots × contract size (base units), NOT USD. For USD use
+  // lots × contract_size × price × quote_usd_rate.
   b_book_notional_usd?: number;
+  // ── Exposure pricing (Books cTrader 1.1). null = unknown; a book with no
+  //    position in the symbol sends 0. MT5's spec and price come first; a
+  //    cTrader-only symbol uses cTrader's.
+  /** Mid price now, in the quote currency. */
+  price?:                  number | null;
+  /** Units per lot. One per row (MT5's when it has one). */
+  contract_size?:          number | null;
+  profit_currency?:        string | null;
+  /** 1 unit of profit_currency in USD; 1 for USD. */
+  quote_usd_rate?:         number | null;
+  /** false when price, contract_size or quote_usd_rate is null: draw unpriced. */
+  priced?:                 boolean;
+  /** A-Book floating P&L (LP hedges + cTrader book A), USD, broker view. */
+  a_book_unrealized_usd?:  number | null;
+  /** C-Book floating P&L (manual LP trades), USD, broker view. */
+  c_book_unrealized_usd?:  number | null;
+  /** The cTrader share of unrealized_pnl. */
+  unrealized_pnl_ctrader?: number | null;
 }
 
 /** Push payload for topic "portfolio.exposure.symbols". */
@@ -1864,7 +1884,9 @@ export function connectPortfolioExposureWebSocket(
 // ============================================================================
 
 export const RISK_RADAR_EXPOSURE_TOPIC = 'portfolio.exposure.symbols';
-const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC];
+/** Realised P&L month to date: the loss taken this month comes off the limit. */
+export const RISK_RADAR_MONTH_TOPIC = 'portfolio.summary.month';
+const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC, RISK_RADAR_MONTH_TOPIC];
 
 /**
  * One-shot snapshot the Exposure layer opens with — same shape as the topic,
@@ -1893,14 +1915,23 @@ export interface RiskRadarMt5Book {
   by_symbol: { symbol: string; buy_lots: number; sell_lots: number; positions: number; logins: number }[];
 }
 
+/** Realised P&L of the whole book, month to date, broker view. */
+export interface RiskRadarMonthPnl {
+  from: string | null;
+  to: string | null;
+  realized: number | null;
+}
+
 export const riskRadarApi = {
   getInstruments: () => fetchAPI<RiskRadarInstruments>('/api/v1/risk-radar/instruments'),
   getMt5Book: () => fetchAPI<RiskRadarMt5Book>('/api/v1/risk-radar/mt5-book'),
+  getMonthPnl: () => fetchAPI<RiskRadarMonthPnl>('/api/v1/risk-radar/month-pnl'),
 };
 
 export function connectRiskRadarWebSocket(
   onExposure: (data: PortfolioExposureSymbolsData) => void,
   onStatus?: (status: 'open' | 'closed') => void,
+  onMonth?: (data: PortfolioSummaryData) => void,
 ): () => void {
   let ws: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1919,12 +1950,21 @@ export function connectRiskRadarWebSocket(
 
     ws.onmessage = (ev: MessageEvent<string>) => {
       const raw = ev.data;
-      if (typeof raw !== 'string' || !raw.includes(RISK_RADAR_EXPOSURE_TOPIC)) return;
+      // Cheap text test first: the shared socket also carries ~1 MB position frames.
+      if (typeof raw !== 'string') return;
+      const isExposure = raw.includes(RISK_RADAR_EXPOSURE_TOPIC);
+      const isMonth = !isExposure && !!onMonth && raw.includes(RISK_RADAR_MONTH_TOPIC);
+      if (!isExposure && !isMonth) return;
       try {
         const envelope = JSON.parse(raw);
-        if (envelope.topic !== RISK_RADAR_EXPOSURE_TOPIC || envelope.type !== 'SNAPSHOT') return;
-        const data = envelope.data as PortfolioExposureSymbolsData | undefined;
-        if (data && Array.isArray(data.by_symbol)) onExposure(data);
+        if (envelope.type !== 'SNAPSHOT') return;
+        if (envelope.topic === RISK_RADAR_EXPOSURE_TOPIC) {
+          const data = envelope.data as PortfolioExposureSymbolsData | undefined;
+          if (data && Array.isArray(data.by_symbol)) onExposure(data);
+        } else if (envelope.topic === RISK_RADAR_MONTH_TOPIC && onMonth) {
+          const data = envelope.data as PortfolioSummaryData | undefined;
+          if (data && data.total) onMonth(data);
+        }
       } catch { /* not ours */ }
     };
 
