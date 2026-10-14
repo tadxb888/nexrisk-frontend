@@ -20,9 +20,15 @@
 // A part has `floating` (live floating P/L) where a book has `unrealized`
 // (the change since the baseline, kept per book only). Under a single
 // platform the Unrl row therefore reads Floating P/L, in every column.
+//
+// Partly priced books (Books 1.2): each book says how many of its open
+// positions could not be priced (`unpriced_positions`, `pricing_hint`). The
+// count is per whole book; a column that shows only part of a book (A under
+// MT5, or under cTrader once LP is split) says so in the hint. MT5 positions
+// are always priced, so the B-Book count is the cTrader B-Book's.
 // ============================================
 
-import { EMPTY_BOOK_STATS, type BookCardStats } from '@/stores/PortfolioStatsContext';
+import { EMPTY_BOOK_STATS, type BookCardStats, type BookPricing, type BooksPricing } from '@/stores/PortfolioStatsContext';
 import type { PortfolioBySource, PortfolioSourceFields } from '@/services/api';
 
 import type { PortfolioPlatform } from './PlatformSelector';
@@ -44,7 +50,35 @@ export interface PlatformColumns {
   sumHedgeDirectionNotional:  number | null;
   /** Amber-asterisk notes per column (money or attribution missing). */
   notes: { portfolio: string[]; bbook: string[]; abook: string[]; cbook: string[] };
+  /** Marker on the P/L cell per column: positions left out of the floating P/L. */
+  priceMarks: { portfolio: PriceMark | null; bbook: PriceMark | null; abook: PriceMark | null; cbook: PriceMark | null };
 }
+
+/** Positions left out of a column's floating P/L, and why (tooltip). */
+export interface PriceMark {
+  count: number;
+  hint:  string;
+}
+
+const NO_BOOK_PRICING: BooksPricing = { A: null, B: null, C: null };
+
+function priceMark(p: BookPricing | null, prefix = ''): PriceMark | null {
+  if (!p || !(p.unpriced > 0)) return null;
+  const hint = p.hint
+    ?? `${p.unpriced} position${p.unpriced === 1 ? '' : 's'} not priced. Their floating P&L is left out; their volume is counted.`;
+  return { count: p.unpriced, hint: prefix + hint };
+}
+
+function sumMarks(parts: Array<[string, PriceMark | null]>): PriceMark | null {
+  const shown = parts.filter((x): x is [string, PriceMark] => x[1] != null);
+  if (shown.length === 0) return null;
+  return {
+    count: shown.reduce((s, [, m]) => s + m.count, 0),
+    hint:  shown.map(([book, m]) => `${book}: ${m.hint}`).join('\n'),
+  };
+}
+
+const WHOLE_A = 'Whole A-Book, not this platform alone. ';
 
 const NUM_KEYS = [
   'positions', 'volume', 'volume_notional',
@@ -93,16 +127,18 @@ export function addStats(...xs: (BookCardStats | null)[]): BookCardStats {
   return out;
 }
 
-/** cTrader money left out of the figures (master down, unpriced, no USD rate). */
-export function ctMoneyNote(ct: PortfolioSourceFields | undefined): string | null {
+/** cTrader money left out of the figures (master down, unpriced, no USD rate).
+ *  With `counted` (the book carries Books 1.2 pricing), the unpriced and
+ *  no-rate counts are on the P/L marker instead and are not repeated here. */
+export function ctMoneyNote(ct: PortfolioSourceFields | undefined, counted = false): string | null {
   if (!ct) return null;
   const lines: string[] = [];
   if (ct.available === false) {
     lines.push('The cTrader master is not connected: its positions count in positions and volume, not in money.');
-  } else if ((ct.unpriced ?? 0) > 0) {
+  } else if (!counted && (ct.unpriced ?? 0) > 0) {
     lines.push(`${ct.unpriced} cTrader position${ct.unpriced === 1 ? ' has' : 's have'} no price yet and ${ct.unpriced === 1 ? 'is' : 'are'} not in the P/L.`);
   }
-  if ((ct.no_usd_rate ?? 0) > 0) {
+  if (!counted && (ct.no_usd_rate ?? 0) > 0) {
     lines.push(`${ct.no_usd_rate} cTrader position${ct.no_usd_rate === 1 ? ' has' : 's have'} no rate to USD and ${ct.no_usd_rate === 1 ? 'is' : 'are'} not in the P/L.`);
   }
   return lines.length ? lines.join(' ') : null;
@@ -122,22 +158,32 @@ export function platformColumns(
   platform: PortfolioPlatform,
   books: { bbook: BookCardStats; abook: BookCardStats; cbook: BookCardStats },
   src: BooksBySource,
+  pricing: BooksPricing = NO_BOOK_PRICING,
 ): PlatformColumns {
   const { bbook, abook, cbook } = books;
+  const cMark = priceMark(pricing.C);
 
   if (platform === 'All') {
-    const b = [ctMoneyNote(src.B?.CTRADER)].filter(has);
-    const a = [ctMoneyNote(src.A?.CTRADER)].filter(has);
+    const b = [ctMoneyNote(src.B?.CTRADER, pricing.B != null)].filter(has);
+    const a = [ctMoneyNote(src.A?.CTRADER, pricing.A != null)].filter(has);
+    const bMark = priceMark(pricing.B), aMark = priceMark(pricing.A);
     return {
       bbook, abook, cbook,
       sum: null, sumHedgeDirection: null, sumHedgeDirectionNotional: null,
       notes: { portfolio: [...b, ...a], bbook: b, abook: a, cbook: [] },
+      priceMarks: {
+        portfolio: sumMarks([['B-Book', bMark], ['A-Book', aMark], ['C-Book', cMark]]),
+        bbook: bMark, abook: aMark, cbook: cMark,
+      },
     };
   }
 
   const notes: PlatformColumns['notes'] = { portfolio: [], bbook: [], abook: [], cbook: [] };
   let b: BookCardStats;
   let a: BookCardStats;
+  let bMark: PriceMark | null = null;
+  let aMark: PriceMark | null;
+  const lpSplit = !!(src.A?.LP_MT5 || src.A?.LP_CTRADER);
 
   if (platform === 'MT5') {
     // A payload without by_source is the MT5 book alone.
@@ -149,6 +195,10 @@ export function platformColumns(
       a = partStats(src.A?.LP) ?? (src.A ? { ...EMPTY_BOOK_STATS } : abook);
       notes.abook.push(LP_NOT_SPLIT_NOTE);
     }
+    // MT5 positions are always priced: no B mark. The A count is the whole
+    // book's unless the column is the whole book (LP not split, no cTrader A).
+    const wholeA = !lpSplit && !((src.A?.CTRADER?.positions ?? 0) > 0);
+    aMark = priceMark(pricing.A, wholeA ? '' : WHOLE_A);
   } else {
     b = partStats(src.B?.CTRADER) ?? { ...EMPTY_BOOK_STATS };
     const lp = partStats(src.A?.LP_CTRADER);
@@ -158,10 +208,13 @@ export function platformColumns(
       a = addStats(partStats(src.A?.CTRADER), partStats(src.A?.LP));
       if (src.A?.LP) notes.abook.push(LP_NOT_SPLIT_NOTE);
     }
-    notes.bbook.push(...[ctMoneyNote(src.B?.CTRADER)].filter(has));
-    notes.abook.unshift(...[ctMoneyNote(src.A?.CTRADER)].filter(has));
+    notes.bbook.push(...[ctMoneyNote(src.B?.CTRADER, pricing.B != null)].filter(has));
+    notes.abook.unshift(...[ctMoneyNote(src.A?.CTRADER, pricing.A != null)].filter(has));
+    // B: only cTrader positions can be unpriced, so the book count is exact.
+    bMark = priceMark(pricing.B);
+    aMark = priceMark(pricing.A, lpSplit ? WHOLE_A : '');
   }
-  if (src.A?.LP_MT5 || src.A?.LP_CTRADER) {
+  if (lpSplit) {
     const u = unassignedNote(src.A?.LP_UNASSIGNED);
     if (u) notes.abook.push(u);
   }
@@ -180,5 +233,9 @@ export function platformColumns(
     sumHedgeDirection:         hedge('net_volume'),
     sumHedgeDirectionNotional: hedge('net_volume_notional'),
     notes,
+    priceMarks: {
+      portfolio: sumMarks([['B-Book', bMark], ['A-Book', aMark], ['C-Book', cMark]]),
+      bbook: bMark, abook: aMark, cbook: cMark,
+    },
   };
 }

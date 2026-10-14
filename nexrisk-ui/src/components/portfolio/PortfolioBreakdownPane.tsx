@@ -11,6 +11,7 @@
 //     and stays in sync with the TopBar Cards Period selector via
 //     PortfolioStatsContext.cardsPeriod)
 //   • Platform selector: All / MT5 (Master) / cTrader (Master)
+//   • Notices from the backend (info banners), when there are any
 //   • Portfolio (parent) summary card — Net of Costs
 //   • B-Book / A-Book / C-Book (child cards, indented)
 //
@@ -19,7 +20,7 @@
 // inside the chart container.
 // ============================================
 
-import { ChevronRight, ChevronLeft } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Info } from 'lucide-react';
 
 import { CardsPeriodSelector } from './CardsPeriodSelector';
 import { PlatformSelector, type PortfolioPlatform } from './PlatformSelector';
@@ -45,6 +46,7 @@ export function PortfolioBreakdownPane({
   const {
     bbook, abook, cbook, total, lastUpdated, vsPriorMonth,
     bbookBySource, abookBySource, cbookBySource,
+    pricing, notices,
   } = usePortfolioStats();
 
   // ── Collapsed state: 28px vertical strip with chevron + rotated label
@@ -113,6 +115,21 @@ export function PortfolioBreakdownPane({
           that book. Cards keep their identity via per-column borders +
           accent stripes (Portfolio yellow, B/A/C teal). */}
       <div className="flex-1 min-h-0 overflow-y-auto p-2">
+        {/* Notices (Books 1.2): what the user should know about the figures
+            shown, one info banner each. Sent by the backend while they apply;
+            usually none. */}
+        {notices.map((n, i) => (
+          <div
+            key={`${n.code}-${i}`}
+            className="mb-2 px-3 py-2 rounded flex items-start gap-2"
+            style={{ backgroundColor: '#232225', border: '1px solid #3a3a3c', borderLeft: '3px solid #49b3b3' }}
+            role="status"
+          >
+            <Info className="flex-shrink-0 mt-0.5" style={{ width: 13, height: 13, color: '#49b3b3' }} />
+            <span className="leading-snug" style={{ fontSize: 12, color: '#e0e0e4' }}>{n.message}</span>
+          </div>
+        ))}
+
         <BreakdownGrid
           total={total}
           bbook={bbook}
@@ -120,6 +137,7 @@ export function PortfolioBreakdownPane({
           cbook={cbook}
           platform={platform}
           bySource={{ B: bbookBySource, A: abookBySource, C: cbookBySource }}
+          pricing={pricing}
         />
 
         {/* ── Under-total slim row: This Month vs prior month, NET REALIZED.

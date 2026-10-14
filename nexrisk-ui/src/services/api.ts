@@ -1598,6 +1598,30 @@ export interface PortfolioWsBookFields {
   commissions:  number;
   swaps:        number;
   rebates:      number;
+  /** Books cTrader 1.2. Open positions whose floating P&L could not be priced
+   *  (LP or cTrader; MT5 never). They count in positions and volumes, not in
+   *  unrealized / floating. Absent from older payloads. */
+  unpriced_positions?: number;
+  /** true when some, not all, positions are priced: the P&L is a part sum. */
+  partially_priced?:   boolean;
+  /** Tooltip sentence; null when every position is priced. */
+  pricing_hint?:       string | null;
+}
+
+/** Books cTrader 1.2: something the user should know about the figures shown.
+ *  severity 'info': nothing is wrong, the figures mean something a little
+ *  different. Other fields are per code. */
+export interface PortfolioNotice {
+  code:     string;
+  severity: string;
+  message:  string;
+  since?:      string;
+  right_from?: string;
+  books?:      string[];
+  /** CROSS_PAIRS_PRICED: cross-pair LP positions open now, per book. */
+  cross_pair_positions?:    Record<string, number>;
+  /** CROSS_PAIRS_PRICED: their floating P&L now, USD, broker view, per book. */
+  cross_pair_floating_usd?: Record<string, number>;
 }
 
 /** Total block on the portfolio.summary payload. Same shape as per-book plus
@@ -1673,6 +1697,8 @@ export interface PortfolioSummaryData {
   total: PortfolioWsTotalFields;
   /** Prior-month pace comparison — present on period=month only. */
   vs_prior_month?: PortfolioVsPriorMonth;
+  /** Books cTrader 1.2: notices for a banner above the books. Usually empty. */
+  notices?: PortfolioNotice[];
 }
 
 export type PortfolioWsEvent =
@@ -1812,6 +1838,29 @@ export interface PortfolioExposureSymbolRow {
   c_book_unrealized_usd?:  number | null;
   /** The cTrader share of unrealized_pnl. */
   unrealized_pnl_ctrader?: number | null;
+  // ── Books cTrader 1.2. cTrader lots are counted in the row's lot (base
+  //    units / MT5's contract_size), so lots x contract_size x price x
+  //    quote_usd_rate holds for every row.
+  /** Units in one cTrader lot as the cTrader server sizes it; null when unknown.
+   *  cTrader's own lots: b_book_lots_ctrader x contract_size / contract_size_ctrader. */
+  contract_size_ctrader?: number | null;
+  /** Open positions in the symbol (LP legs, cTrader positions). */
+  a_book_positions?:         number;
+  c_book_positions?:         number;
+  b_book_positions_ctrader?: number;
+  /** Of those, not priced: left out of the matching P&L field. */
+  a_book_unpriced_positions?:         number;
+  c_book_unpriced_positions?:         number;
+  b_book_unpriced_positions_ctrader?: number;
+  /** Some, not all, priced: the P&L shown is a part sum. false when none is
+   *  priced (the P&L field is then null). */
+  a_book_partially_priced?:         boolean;
+  c_book_partially_priced?:         boolean;
+  b_book_partially_priced_ctrader?: boolean;
+  /** Tooltip sentence; null when all are priced. */
+  a_book_pricing_hint?:         string | null;
+  c_book_pricing_hint?:         string | null;
+  b_book_pricing_hint_ctrader?: string | null;
 }
 
 /** Push payload for topic "portfolio.exposure.symbols". */

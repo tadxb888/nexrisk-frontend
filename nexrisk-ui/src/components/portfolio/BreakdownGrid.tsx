@@ -33,17 +33,19 @@
 // ============================================
 
 import { useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
 
 import {
   fmtHdrMoney,
   fmtHdrCompact,
   pnlColor,
   type BookCardStats,
+  type BooksPricing,
   type TotalCardStats,
 } from '@/stores/PortfolioStatsContext';
 
 import type { PortfolioPlatform } from './PlatformSelector';
-import { platformColumns, type BooksBySource } from './platformBooks';
+import { platformColumns, type BooksBySource, type PriceMark } from './platformBooks';
 
 interface Props {
   total: TotalCardStats;
@@ -53,6 +55,8 @@ interface Props {
   /** Platform selector. All: the books as sent; MT5 / cTrader: see platformBooks. */
   platform: PortfolioPlatform;
   bySource: BooksBySource;
+  /** Books 1.2: positions left out of each book's floating P/L. */
+  pricing: BooksPricing;
 }
 
 const C_BOOK_HINT =
@@ -156,7 +160,7 @@ function rollUp(stats: BookCardStats, volumeMode: VolumeMode): ColumnStats {
 }
 
 // ── Main ────────────────────────────────────────────────────────
-export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }: Props) {
+export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource, pricing }: Props) {
   // Volume display mode — Lots (raw) or Notional (lots × per-symbol contract size).
   // Mirrors CBookPage's identical toggle. Local to this component; doesn't
   // need persistence (cheap to flip again).
@@ -164,7 +168,7 @@ export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }
 
   const inLots = volumeMode === 'lots';
   const perPlatform = platform !== 'All';
-  const cols = platformColumns(platform, { bbook, abook, cbook }, bySource);
+  const cols = platformColumns(platform, { bbook, abook, cbook }, bySource, pricing);
 
   const wholeBook: ColumnStats = {
     // Net Realized = Realized − Cost (uniform across all books).
@@ -209,18 +213,18 @@ export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }
     : wholeBook;
 
   const platformName = platform === 'cTrader' ? 'cTrader' : 'MT5';
-  const columns: Array<{ kind: 'parent' | 'child'; label: string; sublabel?: string; stats: ColumnStats; tooltip?: string; notes: string[] }> = [
-    { kind: 'parent', label: 'PORTFOLIO', stats: portfolio,
+  const columns: Array<{ kind: 'parent' | 'child'; label: string; sublabel?: string; stats: ColumnStats; tooltip?: string; notes: string[]; priceMark: PriceMark | null }> = [
+    { kind: 'parent', label: 'PORTFOLIO', stats: portfolio, priceMark: cols.priceMarks.portfolio,
       sublabel: perPlatform ? `${platformName} + C-Book` : undefined,
       tooltip: perPlatform ? `Portfolio: the sum of the ${platformName} B-Book, the ${platformName} A-Book and the C-Book.` : undefined,
       notes: cols.notes.portfolio },
-    { kind: 'child',  label: 'B-BOOK',    stats: rollUp(cols.bbook, volumeMode),
+    { kind: 'child',  label: 'B-BOOK',    stats: rollUp(cols.bbook, volumeMode), priceMark: cols.priceMarks.bbook,
       sublabel: perPlatform ? platformName : undefined,
       tooltip: perPlatform
         ? `B-Book: internalized flow held against the house, ${platformName} master only.`
         : 'B-Book: Internalized flow held against the house.',
       notes: cols.notes.bbook },
-    { kind: 'child',  label: 'A-BOOK',    stats: rollUp(cols.abook, volumeMode),
+    { kind: 'child',  label: 'A-BOOK',    stats: rollUp(cols.abook, volumeMode), priceMark: cols.priceMarks.abook,
       sublabel: perPlatform ? platformName : undefined,
       tooltip: platform === 'MT5'
         ? 'A-Book: LP positions opened by the hedging strategies on the MT5 B-Book.'
@@ -228,7 +232,7 @@ export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }
         ? 'A-Book: cTrader book A (passed to its LP) and the LP positions opened by the hedging strategies on the cTrader B-Book.'
         : 'A-Book: positions opened by hedging strategies (automated execution).',
       notes: cols.notes.abook },
-    { kind: 'child',  label: 'C-BOOK',    stats: rollUp(cols.cbook, volumeMode),
+    { kind: 'child',  label: 'C-BOOK',    stats: rollUp(cols.cbook, volumeMode), priceMark: cols.priceMarks.cbook,
       sublabel: perPlatform ? 'All platforms' : undefined,
       tooltip: `C-Book: positions executed manually via Terminal or DOM Trader. ${C_BOOK_HINT}`,
       notes: cols.notes.cbook },
@@ -346,7 +350,7 @@ export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }
               <div
                 key={row.key}
                 style={{ gridColumn: gridCol, gridRow: i + 2 }}
-                className="flex items-center justify-center px-3 z-10"
+                className="flex items-center justify-center gap-1.5 px-3 z-10"
               >
                 <ValueCell
                   row={row}
@@ -354,6 +358,7 @@ export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }
                   isPortfolio={isParent}
                   inLots={inLots}
                 />
+                {row.key === 'unrl' && col.priceMark && <PriceMarker mark={col.priceMark} />}
               </div>
             ))}
           </div>
@@ -361,6 +366,23 @@ export function BreakdownGrid({ total, bbook, abook, cbook, platform, bySource }
       })}
       </div>
     </div>
+  );
+}
+
+// ── PriceMarker — positions left out of the floating P/L ───────
+// Amber triangle + count next to the P/L; the backend's pricing hint is the
+// tooltip. Usually short-lived (no tick yet after a start, a reconnect).
+function PriceMarker({ mark }: { mark: PriceMark }) {
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 cursor-help"
+      style={{ color: '#c09060' }}
+      title={mark.hint}
+      aria-label={`${mark.count} position${mark.count === 1 ? '' : 's'} not priced`}
+    >
+      <AlertTriangle style={{ width: 12, height: 12 }} />
+      <span className="font-mono" style={{ fontSize: 11 }}>{mark.count}</span>
+    </span>
   );
 }
 

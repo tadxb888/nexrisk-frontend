@@ -70,7 +70,15 @@ export function ChartPanel({
         onPinChart={onPinChart}
       />
 
-      {platform !== 'All' && (
+      {entry.id === 'top-holders' ? (
+        <div
+          className="px-3 py-1 border-b border-[#3a3a3c] text-[11px] flex-shrink-0"
+          style={{ backgroundColor: '#232225', color: '#e0e0e4' }}
+          title="Traders are listed by login, and cTrader traders are not stored yet (a cTrader login can be the number of an MT5 one)."
+        >
+          Top holders: MT5 only. cTrader traders are not listed yet.
+        </div>
+      ) : platform !== 'All' && (
         <div
           className="px-3 py-1 border-b border-[#3a3a3c] text-[11px] flex-shrink-0"
           style={{ backgroundColor: '#232225', color: '#e0e0e4' }}

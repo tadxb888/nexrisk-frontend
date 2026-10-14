@@ -30,6 +30,7 @@ import {
   type PortfolioSummaryData,
   type PortfolioBySource,
   type PortfolioVsPriorMonth,
+  type PortfolioNotice,
 } from '@/services/api';
 
 // =============================================================================
@@ -130,6 +131,33 @@ const EMPTY_TOTAL_STATS: TotalCardStats = {
   cost: null,
 };
 
+/** Books cTrader 1.2: how much of a book's floating P&L could be priced. */
+export interface BookPricing {
+  /** Open positions of the book left out of its floating P&L. */
+  unpriced: number;
+  /** Some, not all, priced: the P&L is a part sum. */
+  partial:  boolean;
+  hint:     string | null;
+}
+
+export interface BooksPricing {
+  A: BookPricing | null;
+  B: BookPricing | null;
+  C: BookPricing | null;
+}
+
+const NO_PRICING: BooksPricing = { A: null, B: null, C: null };
+
+/** null for a payload without the 1.2 fields. */
+function pricingOf(b: PortfolioWsBookFields | undefined): BookPricing | null {
+  if (!b || typeof b.unpriced_positions !== 'number') return null;
+  return {
+    unpriced: b.unpriced_positions,
+    partial:  b.partially_priced === true,
+    hint:     b.pricing_hint ?? null,
+  };
+}
+
 export interface PortfolioStatsValue {
   bbook: BookCardStats;
   /** The B-Book split by platform (books.B.by_source): MT5 and CTRADER.
@@ -144,6 +172,12 @@ export interface PortfolioStatsValue {
   cbook: BookCardStats;
   cost:  CostCardStats;
   total: TotalCardStats;
+
+  /** Books cTrader 1.2: per book, positions left out of the floating P&L.
+   *  null per book until a payload carrying the fields arrives. */
+  pricing: BooksPricing;
+  /** Books cTrader 1.2: notices for a banner above the books. */
+  notices: PortfolioNotice[];
 
   cardsPeriod:    CardsPeriod;
   setCardsPeriod: (p: CardsPeriod) => void;
@@ -170,6 +204,8 @@ const DEFAULT_VALUE: PortfolioStatsValue = {
   cbook: EMPTY_BOOK_STATS,
   cost:  EMPTY_COST_STATS,
   total: EMPTY_TOTAL_STATS,
+  pricing: NO_PRICING,
+  notices: [],
   cardsPeriod:    'this_month',
   setCardsPeriod: () => { /* no-op fallback */ },
   periodFrom:   null,
@@ -343,6 +379,8 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   const [cbookBySource, setCbookBySource] = useState<PortfolioBySource | null>(null);
   const [cbook, setCbook] = useState<BookCardStats>(EMPTY_BOOK_STATS);
   const [total, setTotal] = useState<TotalCardStats>(EMPTY_TOTAL_STATS);
+  const [pricing, setPricing] = useState<BooksPricing>(NO_PRICING);
+  const [notices, setNotices] = useState<PortfolioNotice[]>([]);
 
   const [periodFrom,   setPeriodFrom]   = useState<string | null>(null);
   const [periodTo,     setPeriodTo]     = useState<string | null>(null);
@@ -362,6 +400,8 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
     setCbook(EMPTY_BOOK_STATS);
     setCbookBySource(null);
     setTotal(EMPTY_TOTAL_STATS);
+    setPricing(NO_PRICING);
+    setNotices([]);
     setVsPriorMonth(null);
 
     let cancelled = false;
@@ -377,6 +417,10 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       setCbook(mapBook(d.books.C));
       setCbookBySource(d.books.C.by_source ?? null);
       setTotal(mapTotal(d.total));
+      setPricing({ A: pricingOf(d.books.A), B: pricingOf(d.books.B), C: pricingOf(d.books.C) });
+      setNotices(Array.isArray(d.notices)
+        ? d.notices.filter((n) => n && typeof n.message === 'string' && n.message.length > 0)
+        : []);
       setPeriodFrom(d.from ?? null);
       setPeriodTo(d.to ?? null);
       setBaselineDate(d.baseline ?? null);
@@ -411,6 +455,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<PortfolioStatsValue>(
     () => ({
       bbook, bbookBySource, abook, abookBySource, cbook, cbookBySource, cost, total,
+      pricing, notices,
       cardsPeriod, setCardsPeriod,
       periodFrom, periodTo, baselineDate,
       lastUpdated: fmtLastUpdated(periodTo),
@@ -418,6 +463,7 @@ export function PortfolioStatsProvider({ children }: { children: ReactNode }) {
       wsStatus,
     }),
     [bbook, bbookBySource, abook, abookBySource, cbook, cbookBySource, cost, total,
+     pricing, notices,
      cardsPeriod, setCardsPeriod,
      periodFrom, periodTo, baselineDate,
      vsPriorMonth,
