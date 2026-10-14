@@ -545,7 +545,7 @@ function ExposureCards({
   const capAccent = cap.state !== 'ok' ? '#ffb020' : (cap.remaining ?? 0) <= 0 ? '#ff3b30' : C.blue;
 
   const bookNote = !measured
-    ? (view.unrated + view.unpriced > 0 ? 'No instrument can be rated yet' : 'No open exposure in this snapshot')
+    ? (view.unrated + view.unpriced > 0 ? 'No instrument can be rated' : 'No open exposure in this snapshot')
     : [
         view.bookLevel !== null ? `${fmtPct(view.bookLevel)} of capacity left` : 'no level without a limit',
         `${view.atRisk} instrument${view.atRisk === 1 ? '' : 's'} at risk`,
@@ -718,7 +718,7 @@ function placeSymbols(
 
 function symbolAria(s: RadarSymbol): string {
   if (s.rating === 'unpriced') return `${s.symbol}: unpriced, ${s.missing.join(', ')}`;
-  if (s.rating === 'unrated') return `${s.symbol}: unrated, no adverse move yet, net ${fmtLots(s.netLots)} lots`;
+  if (s.rating === 'unrated') return `${s.symbol}: unrated, no adverse move, net ${fmtLots(s.netLots)} lots`;
   if (!((s.risk ?? 0) > 0)) return `${s.symbol}: nothing at risk`;
   const lvl = s.level !== null ? `, ${fmtPct(s.level)} of the capacity left` : ', no level';
   return `${s.symbol}: ${s.band ? BAND_BY_ID[s.band].label : 'risk'} ${fmtUsd(s.risk)}${lvl}`;
@@ -909,7 +909,7 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
               className="rr-node"
               role="button"
               tabIndex={0}
-              aria-label={active ? symbolAria(s) : `${s.symbol}: no measurement on this layer yet`}
+              aria-label={active ? symbolAria(s) : `${s.symbol}: no measurement on this layer`}
               aria-pressed={isSel}
               onClick={(e) => { e.stopPropagation(); onSelect(isSel ? null : s.symbol); }}
               onKeyDown={(e) => {
@@ -986,7 +986,7 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
           </div>
           <div style={{ fontSize: 12, color: C.soft, marginTop: 5, lineHeight: 1.45 }}>
             {!active
-              ? 'No measurement on this layer yet.'
+              ? 'No measurement on this layer.'
               : <HoverText s={hoveredItem.s} />}
           </div>
         </div>
@@ -1025,7 +1025,7 @@ function HoverText({ s }: { s: RadarSymbol }) {
   const strong = (t: string) => <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{t}</span>;
   if (s.rating === 'unpriced') return <>Unpriced: {s.missing.join('; ')}.</>;
   if (s.rating === 'unrated') {
-    return <>Unrated: no adverse move yet{s.moveSamples !== null ? ` (${s.moveSamples} daily closes)` : ''}. Net {strong(fmtUsd(s.netUsd))}.</>;
+    return <>Unrated: no adverse move{s.moveSamples !== null ? ` (${s.moveSamples} daily closes)` : ''}. Net {strong(fmtUsd(s.netUsd))}.</>;
   }
   if (!((s.risk ?? 0) > 0)) {
     return <>Nothing at risk: {Math.abs(s.netLots) < 0.005 ? 'the books offset each other' : 'the unrealised gain covers the adverse move'}.</>;
@@ -1182,7 +1182,7 @@ function SymbolDetail({
       )}
       {s.rating === 'unrated' && (
         <Para>
-          There is no adverse move for this symbol yet: fewer than 20 daily closes on file. Its risk is not
+          There is no adverse move for this symbol: fewer than 20 daily closes on file. Its risk is not
           measured and it is left out of the book risk until the history fills. It is not a low reading.
         </Para>
       )}
@@ -1190,7 +1190,7 @@ function SymbolDetail({
         <Para color="#ffb020">
           {view.capacity.state === 'no_limit'
             ? 'No monthly loss limit is set, so the risk has no level.'
-            : 'The loss capacity is not known yet, so the risk has no level.'}
+            : 'The loss capacity is not known, so the risk has no level.'}
         </Para>
       )}
       {s.rating !== 'unpriced' && s.partial.length > 0 && (
@@ -1404,7 +1404,7 @@ function RankedList({
       {unrated.length > 0 && (
         <div style={{ margin: '12px 0 0' }}>
           <div style={{ padding: '0 16px', fontSize: 12, color: C.soft }}>
-            Unrated — no adverse move yet (too few daily closes)
+            Unrated — no adverse move (too few daily closes)
           </div>
           {unrated.map((s) => (
             <div
@@ -1478,8 +1478,8 @@ function PlatformPendingInspector({ platform }: { platform: Platform }) {
       <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{PLATFORM_LABEL[platform]} exposure</div>
       <div style={{ margin: '10px 0 8px' }}><GreyBadge text="AWAITING DATA FEED" /></div>
       <p style={{ fontSize: 13, color: C.soft, lineHeight: 1.5, margin: '8px 0' }}>
-        The exposure feed does not carry {PLATFORM_LABEL[platform]} positions yet. This view fills in by itself
-        when they are published.
+        The exposure feed carries no {PLATFORM_LABEL[platform]} positions. This view fills in by itself
+        when it does.
       </p>
       <p style={{ fontSize: 12, color: C.faint, lineHeight: 1.5, marginTop: 12 }}>
         Nothing is shown rather than an empty book: no data is not the same as no exposure.
@@ -1593,7 +1593,7 @@ function Timeline({ replayT, playing, onScrub, onPlay }: TimelineProps) {
           </div>
           <div
             aria-hidden="true"
-            title="Scenario projection is not connected yet"
+            title="Scenario projection: not available"
             style={{ width: 96, borderTop: `2px dashed ${C.line}`, position: 'relative', top: 0 }}
           />
         </div>
@@ -1617,7 +1617,7 @@ function Legend({ layer, view }: { layer: Layer; view: RadarView }) {
     return (
       <Panel style={{ width: 470, flexShrink: 0, padding: '10px 16px', display: 'flex', alignItems: 'center' }}>
         <div style={{ fontSize: 12.5, color: C.soft, lineHeight: 1.5 }}>
-          <span style={{ color: C.text, fontWeight: 600 }}>No colour scale on this layer yet.</span>{' '}
+          <span style={{ color: C.text, fontWeight: 600 }}>No colour scale on this layer.</span>{' '}
           Instruments are shown in grey because there is no measurement for them — grey never means low.
         </div>
       </Panel>
@@ -1690,14 +1690,14 @@ function MapNotes({ view, mt5Check }: { view: RadarView; mt5Check: RiskRadarMt5B
       </MapNote>,
     );
   } else if (cap.state === 'no_pnl') {
-    notes.push(<MapNote key="pnl" tone="#ffb020">Month-to-date P&amp;L not loaded yet, so the capacity left is not known.</MapNote>);
+    notes.push(<MapNote key="pnl" tone="#ffb020">Month-to-date P&amp;L not loaded, so the capacity left is not known.</MapNote>);
   }
   if (!view.movesReady) {
     notes.push(<MapNote key="moves" tone="#ffb020">Adverse moves not loaded: instruments are unrated.</MapNote>);
   } else if (view.unrated > 0) {
     notes.push(
       <MapNote key="unrated" tone={C.soft}>
-        {view.unrated} instrument{view.unrated === 1 ? ' is' : 's are'} unrated: not enough daily closes yet for an
+        {view.unrated} instrument{view.unrated === 1 ? ' is' : 's are'} unrated: not enough daily closes for an
         adverse move. {view.unrated === 1 ? 'It is' : 'They are'} left out of the book risk.
       </MapNote>,
     );
@@ -1925,7 +1925,7 @@ export function RiskRadarPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
                 {missing.length > 0 && shownAlone.length > 0 && (
                   <div style={{ fontSize: 12, color: '#ffb020', whiteSpace: 'nowrap' }}>
-                    {missing.map((p) => PLATFORM_LABEL[p]).join(' and ')} not in the feed yet · showing{' '}
+                    {missing.map((p) => PLATFORM_LABEL[p]).join(' and ')} not in the feed · showing{' '}
                     {shownAlone.map((p) => PLATFORM_LABEL[p]).join(' and ')} only
                   </div>
                 )}
@@ -2007,7 +2007,7 @@ export function RiskRadarPage() {
                       {PLATFORM_LABEL[pendingPlatform]} exposure — awaiting data feed
                     </div>
                     <div style={{ fontSize: 12.5, color: C.soft, marginTop: 6, lineHeight: 1.5 }}>
-                      The exposure feed does not carry {PLATFORM_LABEL[pendingPlatform]} positions yet.
+                      The exposure feed carries no {PLATFORM_LABEL[pendingPlatform]} positions.
                     </div>
                   </div>
                 )}

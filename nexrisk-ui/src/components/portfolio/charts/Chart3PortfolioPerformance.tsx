@@ -157,7 +157,7 @@ export function Chart3PortfolioPerformance({ period }: ChartComponentProps) {
     return <BodyMessage>{note}</BodyMessage>;
   }
   if (points.length === 0) {
-    return <BodyMessage>No P/L history yet for this period</BodyMessage>;
+    return <BodyMessage>No P/L history for this period</BodyMessage>;
   }
 
   return (

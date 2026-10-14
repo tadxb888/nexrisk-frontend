@@ -21,7 +21,7 @@ interface Props {
 
 export function PlatformSelector({ value, onChange, masters }: Props) {
   const { mt5Active, ctActive, ctMaster } = masters;
-  const ctTitle = ctMaster === undefined ? 'cTrader master: not known yet'
+  const ctTitle = ctMaster === undefined ? 'cTrader master: not known'
     : ctMaster === null ? 'No cTrader MASTER node is configured'
     : `cTrader master: ${ctMaster.name} (${ctMaster.status})`;
 

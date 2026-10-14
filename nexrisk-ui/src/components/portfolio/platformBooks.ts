@@ -136,7 +136,7 @@ export function ctMoneyNote(ct: PortfolioSourceFields | undefined, counted = fal
   if (ct.available === false) {
     lines.push('The cTrader master is not connected: its positions count in positions and volume, not in money.');
   } else if (!counted && (ct.unpriced ?? 0) > 0) {
-    lines.push(`${ct.unpriced} cTrader position${ct.unpriced === 1 ? ' has' : 's have'} no price yet and ${ct.unpriced === 1 ? 'is' : 'are'} not in the P/L.`);
+    lines.push(`${ct.unpriced} cTrader position${ct.unpriced === 1 ? ' has' : 's have'} no price and ${ct.unpriced === 1 ? 'is' : 'are'} not in the P/L.`);
   }
   if (!counted && (ct.no_usd_rate ?? 0) > 0) {
     lines.push(`${ct.no_usd_rate} cTrader position${ct.no_usd_rate === 1 ? ' has' : 's have'} no rate to USD and ${ct.no_usd_rate === 1 ? 'is' : 'are'} not in the P/L.`);

@@ -198,7 +198,7 @@ export function Chart2Combination({ period }: ChartComponentProps) {
   if (points.length === 0) {
     return (
       <BodyMessage>
-        No realised P/L yet for this period — chart will populate as fills come in
+        No realised P/L for this period. The chart fills in as positions close.
       </BodyMessage>
     );
   }
@@ -243,7 +243,7 @@ export function Chart2Combination({ period }: ChartComponentProps) {
             pointerEvents: 'none',
           }}
         >
-          No closes recorded yet for this period
+          No closes recorded for this period
         </div>
       )}
     </div>
