@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-enterprise';
 import type { ColDef, GridOptions, RowSelectionOptions, ValueFormatterParams, GetContextMenuItemsParams, MenuItemDef, GridReadyEvent, IRowNode } from 'ag-grid-community';
@@ -304,6 +305,23 @@ export function BBookPage() {
   // No "All Servers" option — single-node-at-a-time only.
   const [filterServer, setFilterServer] = useState<string>('');
 
+  // ?login_ids=7001,7002 — set by the Cockpit "Critical traders" link. Trader
+  // risk is MT5 only (cTrader traders are not stored), so the logins narrow
+  // the MT5 rows; a cTrader account with the same number is not shown.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const loginIds = useMemo(
+    () => (searchParams.get('login_ids') ?? '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0),
+    [searchParams],
+  );
+  const clearLoginIds = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('login_ids');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   // Lots / Units toggle for the Volume cell on the B-Book card.
   const [volumeDisplayMode, setVolumeDisplayMode] = useState<'Lots' | 'Units'>('Lots');
 
@@ -321,19 +339,23 @@ export function BBookPage() {
 
   // Toolbar filter values mirrored into a ref so the grid's external-filter
   // callbacks always read current values without being re-bound on each render.
-  const filtersRef = useRef<{ group: string; symbol: string; server: string; platform: PlatformFilter }>(
-    { group: '', symbol: '', server: '', platform: 'All' },
+  const filtersRef = useRef<{ group: string; symbol: string; server: string; platform: PlatformFilter; logins: Set<number> }>(
+    { group: '', symbol: '', server: '', platform: 'All', logins: new Set() },
   );
   useEffect(() => {
-    filtersRef.current = { group: groupInput, symbol: symbolInput, server: filterServer, platform: platformFilter };
+    filtersRef.current = {
+      group: groupInput, symbol: symbolInput, server: filterServer, platform: platformFilter,
+      logins: new Set(loginIds),
+    };
     gridRef.current?.api?.onFilterChanged();
-  }, [groupInput, symbolInput, filterServer, platformFilter]);
+  }, [groupInput, symbolInput, filterServer, platformFilter, loginIds]);
 
   // Does a row pass the toolbar filters. Mirrors the previous React-side filter
   // exactly; reads filtersRef so it never goes stale inside the grid callback.
   const rowPassesFilters = useCallback((p: BBookPosition): boolean => {
-    const { group, symbol, server, platform } = filtersRef.current;
+    const { group, symbol, server, platform, logins } = filtersRef.current;
     if (platform !== 'All' && p.platform !== platform) return false;
+    if (logins.size > 0 && !(p.platform === 'MT5' && logins.has(p.login))) return false;
     const gTerm = group.trim().toUpperCase();
     const sTerm = symbol.trim().toUpperCase();
     if (gTerm) {
@@ -816,8 +838,8 @@ export function BBookPage() {
   // External (toolbar) filter — runs inside the grid so live transaction
   // updates are filtered in place without ever re-binding rowData.
   const isExternalFilterPresent = useCallback(() => {
-    const { group, symbol, server, platform } = filtersRef.current;
-    return group.trim() !== '' || symbol.trim() !== '' || server !== '' || platform !== 'All';
+    const { group, symbol, server, platform, logins } = filtersRef.current;
+    return group.trim() !== '' || symbol.trim() !== '' || server !== '' || platform !== 'All' || logins.size > 0;
   }, []);
   const doesExternalFilterPass = useCallback(
     (node: IRowNode<BBookPosition>) => (node.data ? rowPassesFilters(node.data) : true),
@@ -875,7 +897,7 @@ export function BBookPage() {
     };
   }, [filteredPositions]);
 
-  const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '';
+  const hasActiveFilters = groupInput.trim() !== '' || symbolInput.trim() !== '' || loginIds.length > 0;
 
   // The charts sum profit; a position without one counts as nothing there.
   const chartPositions = useMemo(
@@ -956,7 +978,7 @@ export function BBookPage() {
     if (ct.available === false) {
       lines.push('The cTrader master is not connected: its positions count in positions and volume, not in money.');
     } else if ((ct.unpriced ?? 0) > 0) {
-      lines.push(`${ct.unpriced} cTrader position${ct.unpriced === 1 ? ' has' : 's have'} no price yet and ${ct.unpriced === 1 ? 'is' : 'are'} not in the P/L.`);
+      lines.push(`${ct.unpriced} cTrader position${ct.unpriced === 1 ? ' has' : 's have'} no price and ${ct.unpriced === 1 ? 'is' : 'are'} not in the P/L.`);
     }
     if ((ct.no_usd_rate ?? 0) > 0) {
       lines.push(`${ct.no_usd_rate} cTrader position${ct.no_usd_rate === 1 ? ' has' : 's have'} no rate to USD and ${ct.no_usd_rate === 1 ? 'is' : 'are'} not in the P/L.`);
@@ -1136,6 +1158,27 @@ export function BBookPage() {
           <option value="cTrader" disabled={!ctActive}>{ctActive ? 'cTrader' : 'cTrader (not connected)'}</option>
         </select>
 
+        {/* Logins from the Cockpit "Critical traders" link (?login_ids=). */}
+        {loginIds.length > 0 && (
+          <span
+            className="inline-flex items-center gap-2 px-2 py-0.5 rounded text-xs text-white"
+            style={{ backgroundColor: '#232225', border: '1px solid #49b3b3' }}
+            title={`MT5 logins: ${loginIds.join(', ')}`}
+          >
+            MT5 logins
+            <span className="font-mono">
+              {loginIds.length <= 3 ? loginIds.join(', ') : loginIds.length}
+            </span>
+            <button
+              onClick={clearLoginIds}
+              aria-label="Remove the login filter"
+              className="text-[#c8c8cc] hover:text-white transition-colors"
+            >
+              ✕
+            </button>
+          </span>
+        )}
+
         <div className="relative">
           <input
             type="text"
@@ -1179,7 +1222,7 @@ export function BBookPage() {
 
         {hasActiveFilters && (
           <button
-            onClick={() => { setGroupInput(''); setSymbolInput(''); }}
+            onClick={() => { setGroupInput(''); setSymbolInput(''); if (loginIds.length > 0) clearLoginIds(); }}
             className="text-xs text-[#999] hover:text-white transition-colors"
           >
             ✕ Clear
