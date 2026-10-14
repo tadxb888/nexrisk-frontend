@@ -1335,12 +1335,15 @@ export function FocusPage() {
   const { selectedTrader, setSelectedTrader } = useSelectionStore();
   const [selectedCluster, setSelectedCluster] = useState<ClusterProfile | null>(null);
 
-  // Check for trader param in URL
+  // URL params: ?trader=<login> opens that trader (risk view);
+  // ?view=cluster opens the cluster view (Cockpit "Active risk clusters").
   useEffect(() => {
     const traderParam = searchParams.get('trader');
     if (traderParam) {
       setSelectedTrader(Number(traderParam));
       setViewMode('risk');
+    } else if (searchParams.get('view') === 'cluster') {
+      setViewMode('cluster');
     }
   }, [searchParams, setSelectedTrader]);
 

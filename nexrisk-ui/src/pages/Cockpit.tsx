@@ -722,10 +722,9 @@ function Card3SymbolRisk({ symbols, largest1Day }: Card3Props) {
 // camelCase before responses reach the frontend (snakeToCamel in
 // nexrisk-api.ts).
 //
-// TODO(routing): the Trader Intelligence page is being renamed. Update the
-// paths in handleBehavioralClick and handleClustersClick once the rename
-// lands. Row 1's /b-book?login_ids=... route also requires the B-Book page
-// to read the URL param and apply it to its AG-Grid filter.
+// Rows 2 and 3 open the Traders page (/flow): the risk view, or the cluster
+// view with ?view=cluster. Row 1's /b-book?login_ids=... route requires the
+// B-Book page to read the URL param and apply it to its AG-Grid filter.
 
 interface Card4Props {
   data: CockpitTraderRisk | null;
@@ -741,11 +740,11 @@ function Card4TraderRisk({ data }: Card4Props) {
   };
 
   const handleBehavioralClick = () => {
-    navigate('/trader-intelligence');
+    navigate('/flow');
   };
 
   const handleClustersClick = () => {
-    navigate('/trader-intelligence?tab=clusters');
+    navigate('/flow?view=cluster');
   };
 
   return (
