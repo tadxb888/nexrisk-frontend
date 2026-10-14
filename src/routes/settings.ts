@@ -1356,6 +1356,55 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // ══════════════════════════════════════════════════════════
+  // RISK LIMITS (docs/NexRisk_Risk_Limits_API.md)
+  // ══════════════════════════════════════════════════════════
+  //
+  // Monthly loss limit of the whole book, the level bands and the adverse-move
+  // settings that Risk Radar measures against. Raw pass-through both ways.
+  //   GET  → { currency, limit, next_month, history[], bands, adverse_move }
+  //   PUT  → { success, data: <whole section> }
+  //   400  → { success:false, errors:[...] } — every problem found
+  //   409  → the request reached the Standby
+  // The PUTs carry the session's Authorization: the backend takes set_by from
+  // it and answers 401 without it.
+
+  /** GET /api/v1/settings/risk-limits */
+  fastify.get(
+    '/settings/risk-limits',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/risk-limits', reply);
+    }
+  );
+
+  /** PUT /api/v1/settings/risk-limits/limit — { month: "YYYY-MM", monthly_loss_limit } */
+  fastify.put(
+    '/settings/risk-limits/limit',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/risk-limits/limit', request.body, reply, bearerFromSession(request));
+    }
+  );
+
+  /** PUT /api/v1/settings/risk-limits/bands — { warning_pct, high_pct, critical_pct } */
+  fastify.put(
+    '/settings/risk-limits/bands',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/risk-limits/bands', request.body, reply, bearerFromSession(request));
+    }
+  );
+
+  /** PUT /api/v1/settings/risk-limits/adverse-move — { percentile, lookback_days } */
+  fastify.put(
+    '/settings/risk-limits/adverse-move',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/risk-limits/adverse-move', request.body, reply, bearerFromSession(request));
+    }
+  );
+
   /**
    * GET /api/v1/settings/fixbridge/status  (§ G4 — live)
    * Queries the bridge over its command channel + core service client view.

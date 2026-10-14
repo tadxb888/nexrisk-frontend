@@ -71,6 +71,7 @@ import { SecretRotationPage }    from '@/pages/settings/SecretRotationPage';
 import { LpListPage }            from '@/pages/settings/LpListPage';
 import { LpProfilePage }         from '@/pages/settings/LpProfilePage';
 import { AlertingPage }          from '@/pages/settings/AlertingPage';
+import { RiskLimitsPage }        from '@/pages/settings/RiskLimitsPage';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -175,6 +176,7 @@ function App() {
               <Route path="/settings/lp"                 element={<LpListPage />} />
               <Route path="/settings/lp/:lp_id"          element={<LpProfilePage />} />
               <Route path="/settings/alerts"             element={<AlertingPage />} />
+              <Route path="/settings/risk-limits"        element={<RiskLimitsPage />} />
 
               {/* Legacy 6-box settings routes — redirect to the new hub.
                   Each one will be replaced with a direct route to its new

@@ -3694,6 +3694,158 @@ export const alertThresholdsApi = {
     };
   },
 };
+
+// ════════════════════════════════════════════════════════════════════════════
+// Risk Limits — /api/v1/settings/risk-limits (docs/NexRisk_Risk_Limits_API.md)
+//
+// One monthly loss limit for the whole book, the level bands and the
+// adverse-move settings Risk Radar measures against. Months are UTC
+// ("YYYY-MM"), the same boundary as portfolio.summary.month.
+// Settings reads it with config.read and writes it with config.write; Risk
+// Radar reads the same section through /risk-radar/risk-limits (cockpit module).
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface RiskLimitMonth {
+  /** "YYYY-MM", UTC. */
+  month:              string;
+  /** null while no limit is set (next month), or before any limit was ever set. */
+  monthly_loss_limit: number | null;
+  /** This month only: nobody set it, last month's value was reused. */
+  carried_over?:      boolean;
+  set_by?:            string | null;
+  set_at?:            string | null;
+}
+
+export interface RiskLimitBands {
+  warning_pct:  number;
+  high_pct:     number;
+  critical_pct: number;
+}
+
+export interface RiskLimitAdverseMove {
+  method:        string;
+  percentile:    number;
+  lookback_days: number;
+}
+
+export interface RiskLimitsSection {
+  currency:     string;
+  limit:        RiskLimitMonth;
+  next_month:   RiskLimitMonth;
+  /** Past months, newest first. */
+  history:      RiskLimitMonth[];
+  bands:        RiskLimitBands;
+  adverse_move: RiskLimitAdverseMove;
+}
+
+/** One symbol's adverse move. move_pct in percent (0.92 = 0.92 %); null = unrated. */
+export interface DailyMoveEntry {
+  move_pct: number | null;
+  samples:  number;
+  source?:  'MT5' | 'CTRADER' | string;
+}
+
+export interface DailyMovesData {
+  as_of:            string;
+  percentile:       number;
+  lookback_days:    number;
+  /** Keyed by MT5 symbol name. */
+  symbols:          Record<string, DailyMoveEntry>;
+  /** Keyed by cTrader symbol name; cTrader-only instruments are found here. */
+  ctrader_symbols?: Record<string, DailyMoveEntry>;
+}
+
+/** GET may come bare or in { success, data }; PUTs return the section in `data`. */
+function unwrapRiskLimits(body: unknown): RiskLimitsSection | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  const inner = b.data && typeof b.data === 'object' ? (b.data as Record<string, unknown>) : null;
+  const section = inner && 'limit' in inner ? inner : 'limit' in b ? b : null;
+  return section as RiskLimitsSection | null;
+}
+
+/** One line per problem the backend listed; it may send strings or objects. */
+function riskLimitErrorText(e: unknown): string {
+  if (typeof e === 'string') return e;
+  if (e && typeof e === 'object') {
+    const o = e as Record<string, unknown>;
+    const msg = o.message ?? o.error ?? o.reason;
+    const field = o.field ?? o.path;
+    if (typeof msg === 'string') return typeof field === 'string' && field ? `${field}: ${msg}` : msg;
+  }
+  return JSON.stringify(e);
+}
+
+export type RiskLimitsSaveResult =
+  | { kind: 'ok';        data: RiskLimitsSection | null }
+  /** 400 — every problem the backend found. */
+  | { kind: 'invalid';   errors: string[] }
+  /** 409 — the request reached the Standby. */
+  | { kind: 'standby';   message: string }
+  /** 401 / 403. */
+  | { kind: 'forbidden'; message: string }
+  | { kind: 'error';     status: number; message: string };
+
+async function putRiskLimits(path: string, payload: unknown): Promise<RiskLimitsSaveResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/v1/settings/risk-limits/${path}`, {
+      method:      'PUT',
+      cache:       'no-store',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify(payload),
+    });
+  } catch (e) {
+    return { kind: 'error', status: 0, message: e instanceof Error ? e.message : 'Network error' };
+  }
+
+  const body = await res.json().catch(() => ({} as Record<string, unknown>));
+  const text = (body as { message?: string; error?: string }).message
+    ?? (body as { error?: string }).error;
+
+  if (res.ok) return { kind: 'ok', data: unwrapRiskLimits(body) };
+  if (res.status === 400) {
+    const list = (body as { errors?: unknown }).errors;
+    return {
+      kind: 'invalid',
+      errors: Array.isArray(list) && list.length > 0 ? list.map(riskLimitErrorText) : [text ?? 'The values were rejected.'],
+    };
+  }
+  if (res.status === 409) {
+    return { kind: 'standby', message: text ?? 'This server is the Standby. Make the change on the active server.' };
+  }
+  if (res.status === 401 || res.status === 403) {
+    return { kind: 'forbidden', message: text ?? 'You do not have permission to change risk limits.' };
+  }
+  return { kind: 'error', status: res.status, message: text ?? `HTTP ${res.status}` };
+}
+
+export const riskLimitsApi = {
+  /** Settings page (config.read). */
+  get: async (): Promise<RiskLimitsSection> => {
+    const s = unwrapRiskLimits(await fetchAPI<unknown>('/api/v1/settings/risk-limits'));
+    if (!s) throw new Error('The risk limits section came back in an unexpected shape');
+    return s;
+  },
+  /** Risk Radar (cockpit module) — same section, read-only. */
+  getForRadar: async (): Promise<RiskLimitsSection> => {
+    const s = unwrapRiskLimits(await fetchAPI<unknown>('/api/v1/risk-radar/risk-limits'));
+    if (!s) throw new Error('The risk limits section came back in an unexpected shape');
+    return s;
+  },
+  /** month = this month or next ("YYYY-MM"); limit > 0. */
+  setLimit: (month: string, monthly_loss_limit: number) =>
+    putRiskLimits('limit', { month, monthly_loss_limit }),
+  setBands: (bands: RiskLimitBands) =>
+    putRiskLimits('bands', bands),
+  setAdverseMove: (percentile: number, lookback_days: number) =>
+    putRiskLimits('adverse-move', { percentile, lookback_days }),
+  /** Risk Radar — adverse move per symbol. Raw keys; read on open, not polled. */
+  getDailyMoves: () =>
+    fetchAPI<DailyMovesData>('/api/v1/risk/daily-moves'),
+};
+
 // ════════════════════════════════════════════════════════════════════════════
 // LP Administration (FIX Bridge) — /api/v1/fix/admin/*
 //

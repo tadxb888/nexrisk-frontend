@@ -100,6 +100,10 @@ export const NAV_SECTIONS: NavSection[] = [
       // access to MT5 Servers has access to cTrader Servers.
       { path: '/ctrader-servers', label: 'cTrader Servers', module: 'mt5_servers' },
       { path: '/alert-thresholds', label: 'Alert Thresholds', module: 'alert_thresholds' },
+      // Monthly loss limit, levels and adverse move for Risk Radar. A risk
+      // setting (applies live), so it sits here rather than on the System
+      // Settings hub; same access as System Settings.
+      { path: '/settings/risk-limits', label: 'Risk Limits', module: 'settings' },
     ],
   },
 ];

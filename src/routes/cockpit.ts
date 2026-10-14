@@ -83,6 +83,55 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/v1/risk/daily-moves
+   * Risk Radar adverse move per symbol: the configured percentile of the daily
+   * absolute close-to-close moves over the lookback (Settings → Risk Limits).
+   *   { as_of, percentile, lookback_days,
+   *     symbols:         { <MT5 symbol>:     { move_pct, samples, source } },
+   *     ctrader_symbols: { <cTrader symbol>: { move_pct, samples, source } } }
+   * move_pct is in percent; null = unrated (too little history) — never
+   * substituted. Read on page open, not polled.
+   *
+   * Same read right as the Risk Radar page (the 'cockpit' module). Sent raw:
+   * the keys are raw symbol names, which snakeToCamel would corrupt.
+   */
+  fastify.get(
+    '/risk/daily-moves',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<unknown>('/api/v1/risk/daily-moves');
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/risk-radar/risk-limits
+   * The Risk Limits settings section, read-only, for the Risk Radar page: the
+   * monthly loss limit and the bands are what its levels are measured against.
+   * Registered here so that it follows the Risk Radar access rule (the
+   * 'cockpit' module); reading and changing the section in Settings stays on
+   * /settings/risk-limits with config.read / config.write. Sent raw.
+   */
+  fastify.get(
+    '/risk-radar/risk-limits',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<unknown>('/api/v1/settings/risk-limits');
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      return reply.send(response.data);
+    }
+  );
+
+  /**
    * GET /api/v1/risk-radar/exposure
    * Risk Radar, Exposure layer — the per-symbol exposure snapshot the page
    * opens with (and all it has while the market is shut and the

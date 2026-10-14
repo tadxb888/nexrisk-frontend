@@ -25,7 +25,10 @@ export type NotificationType =
   | 'NEWS_RELEASED'
   | 'NODE_OFFLINE'
   | 'ROUTE_SANITY_BREACH'
-  | 'ATR_BREACH';
+  | 'ATR_BREACH'
+  /** MEDIUM, once a day in the last 5 days of the month until next month's
+   *  loss limit is set (Settings → Risk limits). Rendered by the generic branch. */
+  | 'RISK_LIMIT_REMINDER';
 
 export type Severity = 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
