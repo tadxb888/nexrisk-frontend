@@ -222,6 +222,8 @@ function connectBackend() {
                'ctrader.node_status', CT_POSITION_TOPIC,
                'portfolio.summary.today', 'portfolio.summary.month',
                'portfolio.exposure.symbols',
+               // Risk Radar, Flow toxicity layer (NexRisk_Risk_Radar_Flow_API.md).
+               'radar.flow.symbols',
                'quote',
                'system.health']
     }));

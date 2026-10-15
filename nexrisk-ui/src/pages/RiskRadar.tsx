@@ -15,6 +15,12 @@
 //   groups GET /api/v1/risk-radar/instruments            (once, on open)
 //   check  GET /api/v1/risk-radar/mt5-book               (once, on open)
 //
+// Flow toxicity layer (phase 1, docs/NexRisk_Risk_Radar_Flow_API.md):
+//   seed   GET /api/v1/risk-radar/flow                   (once, on open)
+//   live   topic radar.flow.symbols                      (WebSocket, ≤ 1 Hz)
+//   detail GET /api/v1/risk-radar/flow/{symbol}/accounts (on selecting an instrument)
+//   Colour = share of the B-Book flow from flagged accounts (riskRadar/flowModel.ts).
+//
 // The colour is the risk measure (riskRadar/model.ts): money the broker can
 // lose on an instrument under its historical adverse move, after the
 // unrealised P&L of B + A + C, as a share of the loss capacity left this
@@ -54,7 +60,11 @@ import {
   cockpitApi,
   riskRadarApi,
   riskLimitsApi,
+  flowApi,
   type DailyMovesData,
+  type FlowAccountRow,
+  type FlowAccountsData,
+  type FlowPayload,
   type PortfolioExposureSymbolsData,
   type RiskLimitsSection,
   type RiskRadarMt5Book,
@@ -62,6 +72,15 @@ import {
 import { usePermission } from '@/stores/usePermission';
 import { buildMap, groupsFromTree, hashSymbol, type InstrumentMap } from './riskRadar/instrumentMap';
 import { RadarIcon } from './riskRadar/RadarIcon';
+import {
+  buildFlowView,
+  bookShareOf,
+  classLabel,
+  fmtWindow,
+  shareOf,
+  type FlowSymbol,
+  type FlowView,
+} from './riskRadar/flowModel';
 import { HeatRenderer, rampGradientCss, type HeatBlob } from './riskRadar/heatField';
 import {
   BANDS,
@@ -186,6 +205,25 @@ function record(snapshot: PortfolioExposureSymbolsData, t: number): boolean {
   return true;
 }
 
+// The flow payloads, recorded the same way, for replay and the trend lines.
+interface FlowSample { t: number; payload: FlowPayload }
+const flowHistory: FlowSample[] = [];
+
+function recordFlow(payload: FlowPayload, t: number): boolean {
+  const last = flowHistory[flowHistory.length - 1];
+  if (last && t - last.t < SAMPLE_EVERY_MS) return false;
+  flowHistory.push({ t, payload });
+  while (flowHistory.length > 1 && t - flowHistory[0].t > HISTORY_WINDOW_MS) flowHistory.shift();
+  return true;
+}
+
+/** The last flow sample at or before t (the flow at that moment), else the first. */
+function flowIndexAt(t: number): number {
+  let best = -1;
+  for (let i = 0; i < flowHistory.length; i++) if (flowHistory[i].t <= t) best = i;
+  return best < 0 ? (flowHistory.length ? 0 : -1) : best;
+}
+
 type SocketState = 'connecting' | 'open' | 'closed';
 
 function useRadarFeed() {
@@ -195,6 +233,13 @@ function useRadarFeed() {
   const [socket, setSocket] = useState<SocketState>('connecting');
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [realizedMtd, setRealizedMtd] = useState<number | null>(null);
+  const [flow, setFlow] = useState<FlowPayload | null>(
+    () => (flowHistory.length ? flowHistory[flowHistory.length - 1].payload : null),
+  );
+  const [flowLiveAt, setFlowLiveAt] = useState<number | null>(null);
+  /** The seed answered: null = not yet, false = 503 / error (layer not running). */
+  const [flowSeeded, setFlowSeeded] = useState<boolean | null>(null);
+  const flowLive = useRef(false);
   const [, setHistoryVersion] = useState(0);
   const liveSeen = useRef(false);
   const monthLive = useRef(false);
@@ -224,6 +269,21 @@ function useRadarFeed() {
       })
       .catch(() => { /* capacity shows as not loaded until the topic speaks */ });
 
+    // Flow toxicity: seed, then the topic. 503 = the layer is not running yet.
+    const acceptFlow = (d: FlowPayload, live: boolean) => {
+      const now = Date.now();
+      setFlow(d);
+      if (live) setFlowLiveAt(now);
+      if (recordFlow(d, parseTime(d.as_of) ?? now)) setHistoryVersion((v) => v + 1);
+    };
+    flowApi.get()
+      .then((d) => {
+        if (cancelled) return;
+        setFlowSeeded(true);
+        if (!flowLive.current && d && Array.isArray(d.by_symbol)) acceptFlow(d, false);
+      })
+      .catch(() => { if (!cancelled) setFlowSeeded(false); });
+
     const stop = connectRiskRadarWebSocket(
       (d) => {
         if (cancelled) return;
@@ -237,12 +297,18 @@ function useRadarFeed() {
         monthLive.current = true;
         setRealizedMtd(r);
       },
+      (f) => {
+        if (cancelled) return;
+        flowLive.current = true;
+        setFlowSeeded(true);
+        acceptFlow(f, true);
+      },
     );
 
     return () => { cancelled = true; stop(); };
   }, []);
 
-  return { snapshot, socket, lastLiveAt, realizedMtd };
+  return { snapshot, socket, lastLiveAt, realizedMtd, flow, flowLiveAt, flowSeeded };
 }
 
 /** Adverse move per symbol, read once. null until it arrives. */
@@ -628,7 +694,7 @@ function PendingCards({ labels }: { labels: string[] }) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface Placed {
-  s: RadarSymbol;
+  s: MapItem;
   x: number;
   y: number;
   label: { x: number; y: number; w: number; h: number } | null;
@@ -654,7 +720,7 @@ function captionWidth(name: string): number {
 }
 
 function placeSymbols(
-  view: RadarView,
+  items: MapItem[],
   imap: InstrumentMap,
   w: number,
   h: number,
@@ -672,12 +738,12 @@ function placeSymbols(
   }
 
   // …and so is every marker: a name never sits on another instrument's dot.
-  for (const s of view.symbols) {
+  for (const s of items) {
     const pos = positions.get(s.symbol);
     if (pos) boxes.push({ x: pos.x * w - 6, y: pos.y * h - 6, w: 12, h: 12 });
   }
 
-  const ordered = [...view.symbols].sort(
+  const ordered = [...items].sort(
     (a, b) => Number(pinned.has(b.symbol)) - Number(pinned.has(a.symbol)),
   );
   let labelled = 0;
@@ -687,9 +753,8 @@ function placeSymbols(
     if (!pos) continue;
     const x = pos.x * w;
     const y = pos.y * h;
-    // Unpriced instruments are always named: they are a data gap to notice.
-    const atRisk = s.rating === 'rated' && (s.risk ?? 0) > 0;
-    const wants = pinned.has(s.symbol) || s.rating === 'unpriced' || ((atRisk || s.rating === 'unrated') && labelled < LABEL_LIMIT);
+    // 'always' items (a data gap to notice) are always named.
+    const wants = pinned.has(s.symbol) || s.label === 'always' || (s.label === 'normal' && labelled < LABEL_LIMIT);
     let label: Placed['label'] = null;
     if (wants) {
       const lw = labelWidth(s.symbol);
@@ -709,7 +774,7 @@ function placeSymbols(
       if (!label && pinned.has(s.symbol)) {
         label = { x: Math.max(2, Math.min(w - lw - 2, x + 10)), y: Math.max(2, Math.min(h - LABEL_H - 2, y - LABEL_H / 2)), w: lw, h: LABEL_H };
       }
-      if (label) { boxes.push(label); if (s.rating !== 'unpriced') labelled++; }
+      if (label) { boxes.push(label); if (s.label !== 'always') labelled++; }
     }
     out.push({ s, x, y, label });
   }
@@ -725,15 +790,16 @@ function symbolAria(s: RadarSymbol): string {
 }
 
 interface RadarMapProps {
-  view: RadarView;
+  items: MapItem[];
   imap: InstrumentMap;
-  layer: Layer;
+  /** The layer has a measurement: colour and readings are drawn. */
+  active: boolean;
   selected: string | null;
   onSelect: (symbol: string | null) => void;
   children?: ReactNode;
 }
 
-function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapProps) {
+function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMapProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HeatRenderer | null>(null);
@@ -761,11 +827,11 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
   // What each patch should reach; the picture eases towards it.
   const targets = useMemo(() => {
     const m = new Map<string, number>();
-    if (layer === 'exposure') {
-      for (const s of view.symbols) if (s.heat > 0) m.set(s.symbol, s.heat);
+    if (active) {
+      for (const s of items) if (s.heat > 0) m.set(s.symbol, s.heat);
     }
     return m;
-  }, [view, layer]);
+  }, [items, active]);
 
   const stateRef = useRef({ targets, positions, size });
   stateRef.current = { targets, positions, size };
@@ -848,13 +914,12 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
   const placed = useMemo(
-    () => (size.w > 0 ? placeSymbols(view, imap, size.w, size.h, [selected, hovered]) : []),
-    [view, imap, size, selected, hovered],
+    () => (size.w > 0 ? placeSymbols(items, imap, size.w, size.h, [selected, hovered]) : []),
+    [items, imap, size, selected, hovered],
   );
 
   // The inspector already describes the selected instrument.
   const hoveredItem = hovered && hovered !== selected ? placed.find((p) => p.s.symbol === hovered) ?? null : null;
-  const active = layer === 'exposure';
 
   return (
     <div
@@ -900,16 +965,16 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
         {placed.map(({ s, x, y, label }) => {
           const isSel = s.symbol === selected;
           const isHover = s.symbol === hovered;
-          const lit = active && s.rating === 'rated' && (s.risk ?? 0) > 0;
-          const critical = lit && s.band === 'critical';
-          const dim = !active || (s.rating === 'rated' && !lit);
+          const lit = active && s.lit;
+          const critical = lit && s.critical;
+          const dim = !active || s.marker === 'dim';
           return (
             <g
               key={s.symbol}
               className="rr-node"
               role="button"
               tabIndex={0}
-              aria-label={active ? symbolAria(s) : `${s.symbol}: no measurement on this layer`}
+              aria-label={active ? s.aria : `${s.symbol}: no measurement on this layer`}
               aria-pressed={isSel}
               onClick={(e) => { e.stopPropagation(); onSelect(isSel ? null : s.symbol); }}
               onKeyDown={(e) => {
@@ -924,18 +989,18 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
               {critical && <circle cx={x} cy={y} r={6} fill="none" stroke="#ffffff" strokeWidth={1.5} className="rr-pulse" pointerEvents="none" />}
               {isSel && <circle cx={x} cy={y} r={10} fill="none" stroke="#ffffff" strokeWidth={2} />}
 
-              {active && s.rating === 'unpriced' ? (
+              {active && s.marker === 'diamond' ? (
                 <rect
                   x={x - 4.5} y={y - 4.5} width={9} height={9} transform={`rotate(45 ${x} ${y})`}
                   fill="#0a0f15" stroke={C.grey} strokeWidth={1.6} strokeDasharray="2.5 1.5"
                 />
-              ) : active && s.rating === 'unrated' ? (
+              ) : active && s.marker === 'ring' ? (
                 <circle cx={x} cy={y} r={isHover || isSel ? 5.5 : 4.5} fill="#0a0f15" stroke={C.grey} strokeWidth={1.8} />
               ) : (
                 <circle
                   cx={x} cy={y}
                   r={dim ? 3 : isHover || isSel ? 6.5 : 5.5}
-                  fill={dim ? '#5d6b7c' : s.band ? BAND_BY_ID[s.band].color : C.blueSoft}
+                  fill={dim ? '#5d6b7c' : s.color}
                   stroke={dim ? 'none' : '#ffffff'}
                   strokeWidth={1.8}
                 />
@@ -987,7 +1052,7 @@ function RadarMap({ view, imap, layer, selected, onSelect, children }: RadarMapP
           <div style={{ fontSize: 12, color: C.soft, marginTop: 5, lineHeight: 1.45 }}>
             {!active
               ? 'No measurement on this layer.'
-              : <HoverText s={hoveredItem.s} />}
+              : hoveredItem.s.hover}
           </div>
         </div>
       )}
@@ -1452,12 +1517,12 @@ function RankedList({
 const PENDING_TEXT: Record<Exclude<Layer, 'exposure'>, { title: string; lead: string; items: string[] }> = {
   flow: {
     title: 'Flow toxicity',
-    lead: 'Colours each instrument by how far client fills move against the broker straight after execution.',
+    lead: 'Colours each instrument by the share of its B-Book flow that comes from accounts the classifier flags as toxic. The flow feed is not running, or has not built its first figures.',
     items: [
-      'Client-side markout after each fill, in USD',
-      'Flagged accounts trading the instrument',
-      'Median holding time and trades per minute',
-      'How much evidence the reading rests on',
+      'Toxic share of B-Book flow, per instrument',
+      'Flagged accounts and the flow they send',
+      'Flow by classification, and what is not classified',
+      'The accounts behind each instrument',
     ],
   },
   liquidity: {
@@ -1655,6 +1720,611 @@ function Legend({ layer, view }: { layer: Layer; view: RadarView }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Map items — what the map draws, whatever the layer
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface MapItem {
+  symbol: string;
+  heat: number;
+  /** dot = coloured reading · ring = measured, no colour (○) · diamond = cannot be measured (◇) · dim = nothing to show */
+  marker: 'dot' | 'ring' | 'diamond' | 'dim';
+  /** Fill of a 'dot'. */
+  color: string;
+  band: Band | null;
+  lit: boolean;
+  critical: boolean;
+  /** always = always named; normal = named while there is room; none = never. */
+  label: 'always' | 'normal' | 'none';
+  aria: string;
+  hover: ReactNode;
+}
+
+function exposureItems(view: RadarView): MapItem[] {
+  return view.symbols.map((s) => {
+    const lit = s.rating === 'rated' && (s.risk ?? 0) > 0;
+    return {
+      symbol: s.symbol,
+      heat: s.heat,
+      marker: s.rating === 'unpriced' ? 'diamond' : s.rating === 'unrated' ? 'ring' : lit ? 'dot' : 'dim',
+      color: s.band ? BAND_BY_ID[s.band].color : C.blueSoft,
+      band: s.band,
+      lit,
+      critical: lit && s.band === 'critical',
+      label: s.rating === 'unpriced' ? 'always' : lit || s.rating === 'unrated' ? 'normal' : 'none',
+      aria: symbolAria(s),
+      hover: <HoverText s={s} />,
+    };
+  });
+}
+
+function flowItems(fv: FlowView, others: string[]): MapItem[] {
+  const strong = (t: string) => <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{t}</span>;
+  const win = fmtWindow(fv.windowSec);
+  const out: MapItem[] = fv.symbols.map((s) => {
+    const lit = s.state === 'rated' && s.bFlaggedUsd > 0;
+    const hover: ReactNode = s.state === 'no_b_flow'
+      ? <>No B-Book flow in the last {win}: all {strong(fmtUsd(s.flowUsd))} went to the A-Book. Toxic share, all books: {strong(fmtShare(s.share))}.</>
+      : lit
+        ? <>{strong(fmtShare(s.bShare))} of B-Book flow is toxic: {strong(fmtUsd(s.bFlaggedUsd))} of {fmtUsd(s.bFlowUsd)}, {s.flaggedAccounts} flagged account{s.flaggedAccounts === 1 ? '' : 's'}.</>
+        : <>No toxic flow: {strong(fmtUsd(s.bFlowUsd))} B-Book flow, none from flagged accounts{s.unclassifiedUsd > 0 ? `; ${fmtUsd(s.unclassifiedUsd)} from accounts not classified` : ''}.</>;
+    return {
+      symbol: s.symbol,
+      heat: s.heat,
+      marker: s.state === 'no_b_flow' ? 'ring' : lit ? 'dot' : 'dim',
+      color: s.band ? BAND_BY_ID[s.band].color : C.blueSoft,
+      band: lit ? s.band : null,
+      lit,
+      critical: lit && s.band === 'critical',
+      label: lit || s.state === 'no_b_flow' ? 'normal' : 'none',
+      aria: s.state === 'no_b_flow'
+        ? `${s.symbol}: no B-Book flow`
+        : lit ? `${s.symbol}: ${s.band ? BAND_BY_ID[s.band].label : ''} ${fmtShare(s.bShare)} toxic B-Book flow, ${fmtUsd(s.bFlaggedUsd)}`
+        : `${s.symbol}: no toxic flow`,
+      hover,
+    };
+  });
+  for (const symbol of others) {
+    if (fv.bySymbol.has(symbol)) continue;
+    out.push({
+      symbol, heat: 0, marker: 'dim', color: C.grey, band: null, lit: false, critical: false, label: 'none',
+      aria: `${symbol}: no client flow in the window`,
+      hover: <>No client deal in the last {win}.</>,
+    });
+  }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Flow toxicity layer
+// ═══════════════════════════════════════════════════════════════════════════
+
+function fmtShare(v: number | null, digits = 0): string {
+  return v === null ? '—' : fmtPct(v, digits);
+}
+
+const FLOW_CARDS = ['Toxic share of B-Book flow', 'Flagged accounts', 'Most toxic B-Book flow'];
+
+function FlowSettingsLink() {
+  const navigate = useNavigate();
+  const { can } = usePermission();
+  if (!can('settings', 'VIEW')) return null;
+  return (
+    <button
+      type="button"
+      className="rr-btn"
+      onClick={() => navigate('/settings/flow-toxicity')}
+      style={{
+        padding: '6px 11px', borderRadius: 5, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+        background: 'transparent', color: '#ffffff', border: `1px solid ${C.blueSoft}88`, whiteSpace: 'nowrap',
+      }}
+    >
+      Flow settings →
+    </button>
+  );
+}
+
+/** The toxic set in force, in words: "Arbitrage ≥ 0.60 · News trader ≥ 0.60 and risk HIGH+". */
+function toxicSetText(fv: FlowView): string {
+  if (fv.toxicClasses.length === 0) return 'No class is set as toxic: nothing is flagged.';
+  return fv.toxicClasses
+    .map((c) => `${classLabel(c.cls)}${c.minConfidence !== null ? ` ≥ ${c.minConfidence.toFixed(2)}` : ''}${c.minRiskLevel ? ` and risk ${c.minRiskLevel}+` : ''}`)
+    .join(' · ');
+}
+
+function FlowCards({ fv, upto, scope }: { fv: FlowView; upto: number; scope: PlatformScope }) {
+  const shares = flowHistory.slice(0, upto + 1).map((s) => bookShareOf(s.payload));
+  const trend = trendOf(flowHistory, upto, (s) => bookShareOf(s.payload));
+  const sparkColor = trend?.dir === 'building' ? C.up : trend?.dir === 'easing' ? C.down : C.blueSoft;
+  const t = fv.totals;
+  const top = fv.symbols.find((s) => s.rank === 1) ?? null;
+  const win = fmtWindow(fv.windowSec);
+  const bookDef = fv.bookBand ? BAND_BY_ID[fv.bookBand] : null;
+  const whole = scope === 'ALL' ? '' : ' · both platforms';
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      <Card
+        accent={bookDef?.color ?? C.blue}
+        label={`Toxic share of B-Book flow${whole}`}
+        aside={<Sparkline values={shares} width={132} height={42} color={sparkColor} />}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <CardValue>{fmtShare(t.bShare, 1)}</CardValue>
+          {fv.bookBand && <BandBadge band={fv.bookBand} />}
+          {trend && t.bShare !== null && <TrendChip trend={trend} />}
+        </div>
+        <CardNote>
+          {t.bShare === null
+            ? `No B-Book flow in the last ${win}`
+            : `${fmtUsd(t.bFlaggedUsd)} toxic of ${fmtUsd(t.bFlowUsd)} B-Book flow · last ${win}`}
+        </CardNote>
+      </Card>
+
+      <Card accent={t.flaggedAccounts > 0 ? '#ff8a14' : C.blue} label={`Flagged accounts${whole}`} aside={<FlowSettingsLink />}>
+        <CardValue>
+          {t.flaggedAccounts}
+          <span style={{ fontSize: 15, color: C.soft, fontWeight: 500 }}> of {t.accounts} trading</span>
+        </CardValue>
+        <CardNote>
+          {t.unclassifiedAccounts > 0
+            ? `${t.unclassifiedAccounts} not classified (${fmtUsd(t.unclassifiedUsd)} of flow) · all books ${fmtShare(t.share)} toxic`
+            : `All accounts classified · all books ${fmtShare(t.share)} toxic`}
+        </CardNote>
+      </Card>
+
+      <Card accent={top?.band ? BAND_BY_ID[top.band].color : C.grey} label="Most toxic B-Book flow">
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <CardValue>{top ? fmtUsd(top.bFlaggedUsd) : '—'}</CardValue>
+          {top && <span className="font-mono" style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{top.symbol}</span>}
+          {top?.band && <BandBadge band={top.band} />}
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 3, flexWrap: 'nowrap', overflow: 'hidden' }}>
+          {BANDS.map((b) => (
+            <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: b.color }} />
+              {b.label}
+              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{fv.bandCounts[b.id]}</span>
+            </span>
+          ))}
+          {fv.noBFlow > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${C.grey}` }} />
+              No B-Book flow
+              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{fv.noBFlow}</span>
+            </span>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function FlowList({
+  fv, scope, scopeText, onSelect,
+}: { fv: FlowView; scope: PlatformScope; scopeText: string; onSelect: (symbol: string) => void }) {
+  const toxic = fv.symbols.filter((s) => s.rank !== null);
+  const clean = fv.symbols.filter((s) => s.rank === null && s.state === 'rated');
+  const noB = fv.symbols.filter((s) => s.state === 'no_b_flow');
+  const topUsd = toxic.length ? toxic[0].bFlaggedUsd : 0;
+  const rowProps = (symbol: string) => ({
+    className: 'rr-row',
+    role: 'button' as const,
+    tabIndex: 0,
+    onClick: () => onSelect(symbol),
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(symbol); }
+    },
+  });
+
+  return (
+    <div style={{ padding: '14px 0 10px' }}>
+      <div style={{ padding: '0 16px' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>Toxic flow by instrument</div>
+        <div style={{ fontSize: 12, color: C.faint, marginTop: 2 }}>
+          B-Book flow from flagged accounts · last {fmtWindow(fv.windowSec)} · {scopeText}
+          {scope !== 'ALL' ? ' · shares on both platforms' : ''}. Largest first; select one for detail.
+        </div>
+        <div style={{ fontSize: 11.5, color: C.soft, marginTop: 6, lineHeight: 1.45 }}>
+          <span style={{ color: C.faint }}>Toxic: </span>{toxicSetText(fv)}
+        </div>
+      </div>
+
+      {fv.symbols.length === 0 && (
+        <div style={{ padding: '18px 16px', fontSize: 13, color: C.soft, lineHeight: 1.5 }}>
+          No client deal in the last {fmtWindow(fv.windowSec)}.
+        </div>
+      )}
+
+      {toxic.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
+          <thead>
+            <tr style={{ fontSize: 11, color: C.faint, textAlign: 'left' }}>
+              <th style={{ padding: '4px 4px 4px 16px', fontWeight: 500, width: 26 }}>#</th>
+              <th style={{ padding: 4, fontWeight: 500 }}>Instrument</th>
+              <th style={{ padding: 4, fontWeight: 500, textAlign: 'right' }}>Share</th>
+              <th style={{ padding: '4px 16px 4px 4px', fontWeight: 500, textAlign: 'right' }}>Toxic flow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {toxic.map((s) => {
+              const def = s.band ? BAND_BY_ID[s.band] : null;
+              const bar = def?.color ?? C.blueSoft;
+              return (
+                <tr key={s.symbol} {...rowProps(s.symbol)} style={{ borderTop: `1px solid ${C.line}` }}>
+                  <td className="font-mono" style={{ padding: '6px 4px 6px 16px', fontSize: 12, color: C.faint }}>{s.rank}</td>
+                  <td style={{ padding: '6px 4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                      <span title={def?.label} style={{ width: 9, height: 9, borderRadius: 2, background: bar, flexShrink: 0 }} />
+                      <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.symbol}</span>
+                    </div>
+                    <div style={{ height: 3, background: '#141d28', borderRadius: 2, marginTop: 4 }}>
+                      <div style={{ height: 3, borderRadius: 2, background: bar, width: `${topUsd > 0 ? Math.max(3, (s.bFlaggedUsd / topUsd) * 100) : 0}%` }} />
+                    </div>
+                  </td>
+                  <td className="font-mono" style={{ padding: '6px 4px', fontSize: 13, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmtShare(s.bShare)}
+                    <span style={{ display: 'block', fontSize: 10.5, color: C.faint, fontFamily: 'inherit' }}>{def?.label ?? ''}</span>
+                  </td>
+                  <td className="font-mono" style={{ padding: '6px 16px 6px 4px', fontSize: 13, fontWeight: 600, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmtUsd(s.bFlaggedUsd)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {clean.length > 0 && (
+        <div style={{ padding: '12px 16px 0', fontSize: 12, color: C.faint, lineHeight: 1.5 }}>
+          No toxic B-Book flow ({clean.length}):{' '}
+          {clean.map((s, i) => (
+            <span key={s.symbol}>
+              {i > 0 && ', '}
+              <span {...rowProps(s.symbol)} className="rr-row font-mono" style={{ color: C.soft }}>{s.symbol}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {noB.length > 0 && (
+        <div style={{ padding: '10px 16px 0', fontSize: 12, color: C.faint, lineHeight: 1.5 }}>
+          ○ No B-Book flow, A-Book only ({noB.length}):{' '}
+          {noB.map((s, i) => (
+            <span key={s.symbol}>
+              {i > 0 && ', '}
+              <span {...rowProps(s.symbol)} className="rr-row font-mono" style={{ color: C.soft }}>{s.symbol}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const LEVELS = ['VERY_LOW', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+/** Why a classified account in the toxic set is not flagged, in words; null when it is, or is not in the set. */
+function notFlaggedReason(a: FlowAccountRow, fv: FlowView): string | null {
+  if (a.flagged || !a.classification) return null;
+  const rule = fv.toxicClasses.find((c) => c.cls === a.classification);
+  if (!rule) return null;
+  const why: string[] = [];
+  if (rule.minConfidence !== null && (a.confidence ?? 0) < rule.minConfidence) {
+    why.push(`confidence ${(a.confidence ?? 0).toFixed(2)} below ${rule.minConfidence.toFixed(2)}`);
+  }
+  if (rule.minRiskLevel) {
+    const lvl = a.matrix_risk_level;
+    if (!lvl) why.push(`no risk-matrix level (needs ${rule.minRiskLevel}+)`);
+    else if (LEVELS.indexOf(lvl) < LEVELS.indexOf(rule.minRiskLevel)) why.push(`risk ${lvl}, needs ${rule.minRiskLevel}+`);
+  }
+  return why.length ? `Not flagged: ${why.join('; ')}` : null;
+}
+
+function fmtHold(sec: number | null): string {
+  if (sec === null || !Number.isFinite(sec)) return '—';
+  if (sec < 90) return `${Math.round(sec)} s`;
+  if (sec < 5400) return `${Math.round(sec / 60)} min`;
+  return `${(sec / 3600).toFixed(1)} h`;
+}
+
+function FlowAccounts({ symbol, fv }: { symbol: string; fv: FlowView }) {
+  const [data, setData] = useState<FlowAccountsData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [version, setVersion] = useState(0);
+  const [all, setAll] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    flowApi.getAccounts(symbol)
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Could not load the accounts'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [symbol, version]);
+
+  const rows = data?.accounts ?? [];
+  const shown = all ? rows : rows.slice(0, 20);
+
+  return (
+    <>
+      <SectionTitle>
+        <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+          <span>Accounts <span style={{ color: C.faint, fontWeight: 400 }}>· flagged first</span></span>
+          <button
+            type="button"
+            className="rr-btn"
+            onClick={() => setVersion((v) => v + 1)}
+            disabled={loading}
+            style={{ background: 'transparent', border: 'none', color: C.blueSoft, fontSize: 12, cursor: loading ? 'default' : 'pointer', padding: 0 }}
+          >
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </span>
+      </SectionTitle>
+      {error && <div style={{ fontSize: 12.5, color: '#ff6b6b' }}>{error}</div>}
+      {data && !data.ready && <div style={{ fontSize: 12.5, color: '#ffb020' }}>The window is being built after a restart; the list fills in within seconds.</div>}
+      {data && data.ready && rows.length === 0 && <div style={{ fontSize: 12.5, color: C.faint }}>No account traded it in the window.</div>}
+      {shown.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ fontSize: 11, color: C.faint, textAlign: 'right' }}>
+              <th style={{ textAlign: 'left', fontWeight: 500, padding: '2px 0' }}>Account</th>
+              <th style={{ fontWeight: 500, padding: '2px 0' }}>Flow</th>
+              <th style={{ fontWeight: 500, padding: '2px 0 2px 6px' }} title="Client's realised P&L in the window: positive = the client made money">P&amp;L</th>
+              <th style={{ fontWeight: 500, padding: '2px 0' }} title="Median holding time of the closing deals">Hold</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((a) => {
+              const reason = notFlaggedReason(a, fv);
+              const pnl = a.realized_pnl_usd;
+              return (
+                <tr key={`${a.platform}:${a.login}`} style={{ borderTop: `1px solid ${C.line}`, verticalAlign: 'top' }}>
+                  <td style={{ padding: '5px 0', fontSize: 12.5, color: C.text }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span
+                        title={a.flagged ? 'Flagged' : a.unclassified ? 'Not classified' : 'Not flagged'}
+                        style={{
+                          width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                          background: a.flagged ? '#ff3b30' : 'transparent',
+                          border: a.flagged ? 'none' : `1.5px solid ${a.unclassified ? '#ffb020' : C.grey}`,
+                        }}
+                      />
+                      <span className="font-mono" style={{ fontWeight: 600 }}>{a.login}</span>
+                      <span style={{ fontSize: 11, color: C.faint }}>{a.platform === 'CTRADER' ? 'cTrader' : a.platform}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: a.flagged ? '#ff8a8a' : C.soft, paddingLeft: 13 }}>
+                      {classLabel(a.unclassified ? null : a.classification)}
+                      {a.confidence !== null && !a.unclassified && <span className="font-mono"> {Math.round(a.confidence * 100)}%</span>}
+                      {a.matrix_risk_level && <span style={{ color: C.faint }}> · {a.matrix_risk_level}</span>}
+                    </div>
+                    {reason && <div style={{ fontSize: 11, color: '#ffb020', paddingLeft: 13 }}>{reason}</div>}
+                  </td>
+                  <td className="font-mono" style={{ padding: '5px 0', fontSize: 12.5, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmtUsd(a.flow_usd)}
+                    <span style={{ display: 'block', fontSize: 10.5, color: C.faint }}>{a.fills} fills</span>
+                  </td>
+                  <td className="font-mono" style={{ padding: '5px 0 5px 6px', fontSize: 12.5, textAlign: 'right', whiteSpace: 'nowrap', color: pnl === null ? C.text : pnl > 0 ? '#ff5c5c' : pnl < 0 ? '#3ddc57' : C.text }}>
+                    {pnl === null ? '—' : pnl > 0 ? `+${fmtUsd(pnl)}` : fmtUsd(pnl)}
+                  </td>
+                  <td className="font-mono" style={{ padding: '5px 0', fontSize: 12.5, color: C.soft, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmtHold(a.median_hold_sec)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {rows.length > shown.length && (
+        <button
+          type="button"
+          className="rr-btn"
+          onClick={() => setAll(true)}
+          style={{ background: 'transparent', border: 'none', color: C.blueSoft, fontSize: 12, cursor: 'pointer', padding: '6px 0' }}
+        >
+          Show all {rows.length}
+        </button>
+      )}
+      {rows.length > 0 && (
+        <div style={{ fontSize: 11, color: C.faint, marginTop: 4, lineHeight: 1.45 }}>
+          Client P&amp;L is the client's realised result in the window: red = the client won, which costs the broker on the B-Book.
+        </div>
+      )}
+    </>
+  );
+}
+
+function FlowDetail({
+  s, fv, upto, scope, scopeText, region, onClose,
+}: {
+  s: FlowSymbol; fv: FlowView; upto: number; scope: PlatformScope;
+  scopeText: string; region: string; onClose: () => void;
+}) {
+  const trend = s.state === 'rated' ? trendOf(flowHistory, upto, (x) => shareOf(x.payload, s.symbol)) : null;
+  const series = flowHistory.slice(0, upto + 1).map((x) => shareOf(x.payload, s.symbol));
+  const since = flowHistory.length ? flowHistory[0].t : null;
+  const aToxic = Math.max(0, s.flaggedUsd - s.bFlaggedUsd);
+  const total = s.flowUsd || 1;
+
+  return (
+    <div style={{ padding: '14px 16px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: C.faint }}>{region} · toxic flow · {scopeText}</div>
+          <div className="font-mono" style={{ fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1.2 }}>{s.symbol}</div>
+        </div>
+        <button
+          type="button"
+          className="rr-btn"
+          onClick={onClose}
+          aria-label="Close instrument"
+          style={{ background: 'transparent', border: 'none', color: C.soft, fontSize: 20, lineHeight: 1, cursor: 'pointer', padding: 4 }}
+        >
+          ×
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '10px 0 8px' }}>
+        {s.state === 'rated' && s.band && <BandBadge band={s.band} large />}
+        {s.state === 'no_b_flow' && <GreyBadge text="NO B-BOOK FLOW" />}
+        {trend && <TrendChip trend={trend} large />}
+      </div>
+
+      {s.state === 'no_b_flow' && (
+        <Para>All of this instrument's flow in the window went to the A-Book, so there is no B-Book share to colour. The all-books figures are below.</Para>
+      )}
+      {s.unclassifiedShare !== null && s.unclassifiedShare >= 0.2 && (
+        <Para color="#ffb020">
+          {fmtPct(s.unclassifiedShare)} of the flow comes from {s.unclassifiedAccounts} account{s.unclassifiedAccounts === 1 ? '' : 's'} not
+          classified. They are never flagged, so the toxic share may read low.
+        </Para>
+      )}
+      {scope !== 'ALL' && (
+        <Para color={C.faint}>The shares are measured on both platforms: the B-Book flow is not split per platform.</Para>
+      )}
+
+      <Row label="Toxic share, B-Book" note={`${fmtUsd(s.bFlaggedUsd)} of ${fmtUsd(s.bFlowUsd)} B-Book flow`}>{fmtShare(s.bShare, 1)}</Row>
+      <Row label="Toxic share, all books" note={`${fmtUsd(s.flaggedUsd)} of ${fmtUsd(s.flowUsd)} flow`}>{fmtShare(s.share, 1)}</Row>
+      <Row label="Toxic flow to the A-Book" note="hedged at the LP">{fmtUsd(aToxic)}</Row>
+      <Row label="Fills" note={s.unpricedFills > 0 ? `${s.unpricedFills} without a USD value, left out of the flow` : `${s.flaggedFills} from flagged accounts`}>
+        {s.fills}
+      </Row>
+      <Row label="Accounts" note={`${s.flaggedAccounts} flagged · ${s.unclassifiedAccounts} not classified`}>{s.accounts}</Row>
+      <Row label="Flow not classified" note={s.unclassifiedShare !== null ? `${fmtShare(s.unclassifiedShare)} of the flow` : undefined}>{fmtUsd(s.unclassifiedUsd)}</Row>
+
+      {s.parts.length > 0 && (
+        <>
+          <SectionTitle>By platform <span style={{ color: C.faint, fontWeight: 400 }}>· all books</span></SectionTitle>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              {s.parts.map((p) => (
+                <tr key={p.platform} style={{ borderTop: `1px solid ${C.line}` }}>
+                  <td style={{ padding: '6px 0', fontSize: 13, color: C.soft }}>{PLATFORM_LABEL[p.platform]}</td>
+                  <td className="font-mono" style={{ padding: '6px 0', fontSize: 13, color: C.text, textAlign: 'right' }}>{fmtUsd(p.flowUsd)}</td>
+                  <td className="font-mono" style={{ padding: '6px 0 6px 10px', fontSize: 12.5, color: C.soft, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmtUsd(p.flaggedUsd)} toxic
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <SectionTitle>By classification <span style={{ color: C.faint, fontWeight: 400 }}>· share of the flow</span></SectionTitle>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <tbody>
+          {[...s.byClass, ...(s.unclassifiedUsd > 0 || s.unclassifiedAccounts > 0
+            ? [{ cls: '', flowUsd: s.unclassifiedUsd, fills: 0, accounts: s.unclassifiedAccounts, toxicClass: false }]
+            : [])].map((c) => (
+            <tr key={c.cls || 'unclassified'} style={{ borderTop: `1px solid ${C.line}` }}>
+              <td style={{ padding: '6px 0', fontSize: 12.5, color: c.cls ? C.text : '#ffb020', whiteSpace: 'nowrap' }}>
+                <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 6, background: c.toxicClass ? '#ff3b30' : 'transparent', border: c.toxicClass ? 'none' : `1.5px solid ${C.grey}` }} />
+                {c.cls ? classLabel(c.cls) : 'Not classified'}
+              </td>
+              <td style={{ padding: '6px 8px', width: '40%' }}>
+                <div style={{ height: 4, background: '#141d28', borderRadius: 2 }}>
+                  <div style={{ height: 4, borderRadius: 2, width: `${Math.min(100, (c.flowUsd / total) * 100)}%`, background: c.toxicClass ? '#ff3b30' : c.cls ? C.blueSoft : '#ffb020' }} />
+                </div>
+              </td>
+              <td className="font-mono" style={{ padding: '6px 0', fontSize: 12.5, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                {fmtUsd(c.flowUsd)}
+                <span style={{ color: C.faint }}> · {c.accounts}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: C.faint, marginTop: 4 }}>● class in the toxic set · ○ not · the last figure is the number of accounts</div>
+
+      <FlowAccounts symbol={s.symbol} fv={fv} />
+
+      {s.state === 'rated' && (
+        <>
+          <SectionTitle>
+            Toxic share, B-Book{' '}
+            <span style={{ color: C.faint, fontWeight: 400 }}>· observed{since !== null ? ` since ${fmtUtcTime(since)}` : ''}</span>
+          </SectionTitle>
+          <Sparkline
+            values={series}
+            width={306}
+            height={56}
+            color={trend?.dir === 'building' ? C.up : trend?.dir === 'easing' ? C.down : C.blueSoft}
+          />
+        </>
+      )}
+
+      <ActionButtons />
+    </div>
+  );
+}
+
+function FlowLegend({ fv }: { fv: FlowView }) {
+  const t = fv.thresholds;
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const ranges = [`under ${pct(t.warning)}`, `${pct(t.warning)}–${pct(t.high)}`, `${pct(t.high)}–${pct(t.critical)}`, `${pct(t.critical)} and over`];
+  return (
+    <Panel style={{ width: 470, flexShrink: 0, padding: '9px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.text, fontWeight: 600 }}>
+        <span>Toxic share of B-Book flow</span>
+        <span style={{ color: C.faint, fontWeight: 400 }}>last {fmtWindow(fv.windowSec)}</span>
+      </div>
+      <div style={{ height: 8, borderRadius: 4, margin: '6px 0 4px', background: rampGradientCss(), boxShadow: '0 0 12px rgba(255, 120, 0, 0.25)' }} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        {BANDS.map((b, i) => (
+          <div key={b.id} style={{ fontSize: 11.5, color: C.text }}>
+            {b.label}
+            <span className="font-mono" style={{ display: 'block', fontSize: 10.5, color: C.faint }}>{ranges[i]}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 5, fontSize: 11, color: C.faint, whiteSpace: 'nowrap' }}>
+        <span><span style={{ color: C.soft }}>○</span> no B-Book flow</span>
+        <span><span style={{ color: '#5d6b7c' }}>●</span> no toxic flow, or no flow</span>
+        <span>The dot is the reading</span>
+      </div>
+    </Panel>
+  );
+}
+
+function FlowMapNotes({ fv, running }: { fv: FlowView; running: boolean }) {
+  const notes: ReactNode[] = [];
+  const t = fv.totals;
+  if (!running) {
+    notes.push(<MapNote key="off" tone="#ffb020">The flow feed is not running, or has not built its first figures. The layer fills in when it does.</MapNote>);
+  } else {
+    if (t.flowUsd > 0 && t.unclassifiedUsd / t.flowUsd >= 0.1) {
+      notes.push(
+        <MapNote key="uncl" tone="#ffb020">
+          {fmtPct(t.unclassifiedUsd / t.flowUsd)} of client flow comes from {t.unclassifiedAccounts} account{t.unclassifiedAccounts === 1 ? '' : 's'} not
+          classified. They are never flagged: their flow counts as not toxic.
+        </MapNote>,
+      );
+    }
+    if (t.unpricedFills > 0) {
+      notes.push(<MapNote key="unpriced" tone={C.soft}>{t.unpricedFills} fill{t.unpricedFills === 1 ? ' has' : 's have'} no USD value and {t.unpricedFills === 1 ? 'is' : 'are'} left out of the flow.</MapNote>);
+    }
+    if (fv.toxicClasses.length === 0) {
+      notes.push(<MapNote key="none" tone="#ffb020" action={<FlowSettingsLink />}>No class is set as toxic, so nothing is flagged.</MapNote>);
+    }
+  }
+  if (notes.length === 0) return null;
+  return (
+    <div
+      style={{ position: 'absolute', left: 10, bottom: 30, maxWidth: 'calc(100% - 20px)', display: 'flex', flexDirection: 'column', gap: 6, zIndex: 2 }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {notes}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Notes over the map — what the colours cannot say
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1730,7 +2400,7 @@ function MapNotes({ view, mt5Check }: { view: RadarView; mt5Check: RiskRadarMt5B
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function RiskRadarPage() {
-  const { snapshot, socket, lastLiveAt, realizedMtd } = useRadarFeed();
+  const { snapshot, socket, lastLiveAt, realizedMtd, flow, flowLiveAt, flowSeeded } = useRadarFeed();
   const moves = useDailyMoves();
   const limits = useRiskLimits();
   const largest1Day = useLargest1Day();
@@ -1762,9 +2432,26 @@ export function RiskRadarPage() {
   );
   const selectedSymbol = selected ? view.bySymbol.get(selected) ?? null : null;
 
+  // Flow toxicity: the payload of the moment shown (replay picks the one in force then).
+  const flowIndex = replaying ? flowIndexAt(replayT as number) : flowHistory.length - 1;
+  const shownFlow = replaying ? (flowIndex >= 0 ? flowHistory[flowIndex].payload : null) : flow;
+  const fv = useMemo(() => buildFlowView(shownFlow, scope), [shownFlow, scope]);
+  const selectedFlow = selected ? fv.bySymbol.get(selected) ?? null : null;
+  const flowRunning = flowSeeded !== false || flow !== null;
+
+  // One map for every layer: same instruments, same places.
+  const allSymbols = useMemo(() => {
+    const set = new Set(view.symbols.map((s) => s.symbol));
+    for (const s of fv.symbols) set.add(s.symbol);
+    return [...set];
+  }, [view, fv]);
   const imap = useMemo(
-    () => buildMap(tree.groupOf, tree.order, view.symbols.map((s) => s.symbol)),
-    [tree, view],
+    () => buildMap(tree.groupOf, tree.order, allSymbols),
+    [tree, allSymbols],
+  );
+  const items = useMemo(
+    () => (layer === 'flow' ? flowItems(fv, allSymbols) : exposureItems(view)),
+    [layer, fv, view, allSymbols],
   );
 
   // What an empty map means, in words.
@@ -1773,12 +2460,16 @@ export function RiskRadarPage() {
     ? `No open B-Book positions on MT5 (${mt5Names}), checked ${fmtUtcTime(parseTime(mt5Check.as_of))}.`
     : 'No open exposure in this snapshot.';
 
-  // Which platforms the snapshot actually has data for.
+  // Which platforms the snapshot actually has data for (exposure layer; the
+  // flow payload names its own platforms).
   const covered = useMemo(() => coverageOf(shownSnapshot), [shownSnapshot]);
   const pendingPlatform: Platform | null =
-    shownSnapshot && scope !== 'ALL' && !covered.has(scope) ? scope : null;
-  const missing = shownSnapshot && scope === 'ALL' ? PLATFORMS.filter((p) => !covered.has(p)) : [];
-  const shownAlone = PLATFORMS.filter((p) => covered.has(p));
+    layer === 'exposure' && shownSnapshot && scope !== 'ALL' && !covered.has(scope) ? scope : null;
+  const flowCovered = new Set(fv.platforms);
+  const missing = layer === 'flow'
+    ? (shownFlow && scope === 'ALL' && fv.platforms.length > 0 ? PLATFORMS.filter((p) => !flowCovered.has(p)) : [])
+    : shownSnapshot && scope === 'ALL' ? PLATFORMS.filter((p) => !covered.has(p)) : [];
+  const shownAlone = PLATFORMS.filter((p) => (layer === 'flow' ? flowCovered : covered).has(p));
   // Name what is actually on screen: "Both" over an MT5-only feed is the MT5 book.
   const scopeText = scope === 'ALL' && missing.length > 0 && shownAlone.length > 0
     ? shownAlone.map((p) => PLATFORM_LABEL[p]).join(' + ')
@@ -1819,21 +2510,27 @@ export function RiskRadarPage() {
     setReplayT(t);
   }, []);
 
-  // Freshness
-  const liveFresh = socket === 'open' && lastLiveAt !== null && now - lastLiveAt < LIVE_STALE_MS;
+  // Freshness — of the layer on screen.
+  const onFlow = layer === 'flow';
+  const liveAt = onFlow ? flowLiveAt : lastLiveAt;
+  const hasData = onFlow ? flow !== null : snapshot !== null;
+  const shownAsOf = onFlow ? fv.asOf : view.asOf;
+  const liveFresh = socket === 'open' && liveAt !== null && now - liveAt < LIVE_STALE_MS;
   let chip: { color: string; text: string; blink?: boolean };
   if (replaying) {
     chip = { color: '#ffb020', text: `Replay · ${fmtUtcTime(history[replayIndex].t)}` };
-  } else if (!snapshot) {
+  } else if (!hasData) {
     chip = socket === 'closed'
       ? { color: '#ff3b30', text: 'Live updates offline' }
-      : { color: C.grey, text: 'Waiting for exposure data…' };
+      : onFlow && flowSeeded === false
+        ? { color: '#ffb020', text: 'Flow feed not running' }
+        : { color: C.grey, text: onFlow ? 'Waiting for flow data…' : 'Waiting for exposure data…' };
   } else if (liveFresh) {
-    chip = { color: '#3ddc57', text: `Live · as of ${fmtUtcTime(view.asOf)}`, blink: true };
+    chip = { color: '#3ddc57', text: `Live · as of ${fmtUtcTime(shownAsOf)}`, blink: true };
   } else if (socket === 'closed') {
-    chip = { color: '#ff3b30', text: `Live updates offline · showing ${fmtUtcDateTime(view.asOf)}` };
+    chip = { color: '#ff3b30', text: `Live updates offline · showing ${fmtUtcDateTime(shownAsOf)}` };
   } else {
-    chip = { color: '#ffb020', text: `Feed quiet · last snapshot ${fmtUtcDateTime(view.asOf)}` };
+    chip = { color: '#ffb020', text: `Feed quiet · last snapshot ${fmtUtcDateTime(shownAsOf)}` };
   }
 
   return (
@@ -1886,7 +2583,9 @@ export function RiskRadarPage() {
         </div>
 
         {/* Summary cards */}
-        {layer !== 'exposure' ? (
+        {layer === 'flow' ? (
+          shownFlow ? <FlowCards fv={fv} upto={flowIndex} scope={scope} /> : <PendingCards labels={FLOW_CARDS} />
+        ) : layer !== 'exposure' ? (
           <PendingCards labels={PENDING_CARDS[layer]} />
         ) : pendingPlatform ? (
           <PendingCards labels={EXPOSURE_CARDS} />
@@ -1960,8 +2659,14 @@ export function RiskRadarPage() {
             </div>
 
             <div style={{ position: 'relative', flex: 1, minHeight: 0, margin: '0 6px 6px' }}>
-              <RadarMap view={view} imap={imap} layer={layer} selected={selected} onSelect={setSelected}>
-                {layer !== 'exposure' && (
+              <RadarMap
+                items={items}
+                imap={imap}
+                active={layer === 'exposure' || (layer === 'flow' && shownFlow !== null)}
+                selected={selected}
+                onSelect={setSelected}
+              >
+                {layer === 'liquidity' && (
                   <div
                     style={{
                       position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
@@ -2024,12 +2729,21 @@ export function RiskRadarPage() {
                 {layer === 'exposure' && !pendingPlatform && (
                   <MapNotes view={view} mt5Check={mt5Check} />
                 )}
+                {layer === 'flow' && <FlowMapNotes fv={fv} running={flowRunning && shownFlow !== null} />}
               </RadarMap>
             </div>
           </Panel>
 
           <Panel style={{ width: 340, flexShrink: 0, overflowY: 'auto' }}>
-            {layer !== 'exposure' ? (
+            {layer === 'flow' ? (
+              !shownFlow ? (
+                <PendingInspector layer="flow" />
+              ) : selectedFlow ? (
+                <FlowDetail s={selectedFlow} fv={fv} upto={flowIndex} scope={scope} scopeText={scopeLabel(scope)} region={imap.regionOf(selectedFlow.symbol)} onClose={() => setSelected(null)} />
+              ) : (
+                <FlowList fv={fv} scope={scope} scopeText={scopeLabel(scope)} onSelect={setSelected} />
+              )
+            ) : layer !== 'exposure' ? (
               <PendingInspector layer={layer} />
             ) : pendingPlatform ? (
               <PlatformPendingInspector platform={pendingPlatform} />
@@ -2044,7 +2758,7 @@ export function RiskRadarPage() {
         {/* Timeline + legend */}
         <div style={{ display: 'flex', gap: 12 }}>
           <Timeline replayT={replaying ? replayT : null} playing={playing} onScrub={scrub} onPlay={togglePlay} />
-          <Legend layer={layer} view={view} />
+          {layer === 'flow' && shownFlow ? <FlowLegend fv={fv} /> : <Legend layer={layer} view={view} />}
         </div>
       </div>
     </div>

@@ -104,6 +104,8 @@ export const NAV_SECTIONS: NavSection[] = [
       // setting (applies live), so it sits here rather than on the System
       // Settings hub; same access as System Settings.
       { path: '/settings/risk-limits', label: 'Risk Limits', module: 'settings' },
+      // Toxic classes, window and bands of the Risk Radar's Flow toxicity layer.
+      { path: '/settings/flow-toxicity', label: 'Flow Toxicity', module: 'settings' },
     ],
   },
 ];

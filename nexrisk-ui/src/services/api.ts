@@ -1935,7 +1935,7 @@ export function connectPortfolioExposureWebSocket(
 export const RISK_RADAR_EXPOSURE_TOPIC = 'portfolio.exposure.symbols';
 /** Realised P&L month to date: the loss taken this month comes off the limit. */
 export const RISK_RADAR_MONTH_TOPIC = 'portfolio.summary.month';
-const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC, RISK_RADAR_MONTH_TOPIC];
+const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC, RISK_RADAR_MONTH_TOPIC, 'radar.flow.symbols'];
 
 /**
  * One-shot snapshot the Exposure layer opens with — same shape as the topic,
@@ -1981,6 +1981,7 @@ export function connectRiskRadarWebSocket(
   onExposure: (data: PortfolioExposureSymbolsData) => void,
   onStatus?: (status: 'open' | 'closed') => void,
   onMonth?: (data: PortfolioSummaryData) => void,
+  onFlow?: (data: FlowPayload) => void,
 ): () => void {
   let ws: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2003,9 +2004,16 @@ export function connectRiskRadarWebSocket(
       if (typeof raw !== 'string') return;
       const isExposure = raw.includes(RISK_RADAR_EXPOSURE_TOPIC);
       const isMonth = !isExposure && !!onMonth && raw.includes(RISK_RADAR_MONTH_TOPIC);
-      if (!isExposure && !isMonth) return;
+      const isFlow = !isExposure && !isMonth && !!onFlow && raw.includes('radar.flow.symbols');
+      if (!isExposure && !isMonth && !isFlow) return;
       try {
         const envelope = JSON.parse(raw);
+        if (isFlow) {
+          // The flow topic's envelope is {topic, timestamp_ms, data}: no SNAPSHOT type is promised.
+          const data = envelope.topic === 'radar.flow.symbols' ? envelope.data as FlowPayload | undefined : undefined;
+          if (data && Array.isArray(data.by_symbol) && data.totals) onFlow?.(data);
+          return;
+        }
         if (envelope.type !== 'SNAPSHOT') return;
         if (envelope.topic === RISK_RADAR_EXPOSURE_TOPIC) {
           const data = envelope.data as PortfolioExposureSymbolsData | undefined;
@@ -3933,6 +3941,163 @@ export const riskLimitsApi = {
   /** Risk Radar — adverse move per symbol. Raw keys; read on open, not polled. */
   getDailyMoves: () =>
     fetchAPI<DailyMovesData>('/api/v1/risk/daily-moves'),
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Risk Radar — Flow toxicity, phase 1 (docs/NexRisk_Risk_Radar_Flow_API.md v1.0)
+//
+// Client flow per instrument over a rolling window, and the part of it from
+// accounts whose latest classification is toxic. Live on topic
+// radar.flow.symbols; the REST route returns the last payload (503 until the
+// first one is built). Drill-down and settings as documented.
+// ════════════════════════════════════════════════════════════════════════════
+
+export const RISK_RADAR_FLOW_TOPIC = 'radar.flow.symbols';
+
+export interface FlowToxicClass {
+  min_confidence: number;
+  /** VERY_LOW | LOW | MEDIUM | HIGH | CRITICAL; null = no minimum. */
+  min_risk_level?: string | null;
+}
+
+export interface FlowBands { warning_pct: number; high_pct: number; critical_pct: number }
+
+export interface FlowFigures {
+  flow_usd: number;
+  flagged_flow_usd: number;
+  /** null when flow_usd is 0. */
+  toxic_share: number | null;
+  b_flow_usd: number;
+  b_flagged_flow_usd: number;
+  /** null when b_flow_usd is 0. */
+  b_toxic_share: number | null;
+  fills: number;
+  flagged_fills: number;
+  unpriced_fills: number;
+  /** Distinct accounts (platform + login). Totals are not the sum of the rows. */
+  accounts: number;
+  flagged_accounts: number;
+  unclassified_accounts: number;
+  unclassified_flow_usd: number;
+  flow_usd_ctrader: number;
+  flagged_flow_usd_ctrader: number;
+}
+
+export interface FlowSymbolRow extends FlowFigures {
+  symbol: string;
+  /** Classified accounts only; Σ flow_usd + unclassified_flow_usd = flow_usd. */
+  by_class: Record<string, { flow_usd: number; fills: number; accounts: number }>;
+}
+
+export interface FlowPayload {
+  as_of: string;
+  window_sec: number;
+  toxic_classes: Record<string, FlowToxicClass>;
+  bands: FlowBands;
+  platforms: string[];
+  totals: FlowFigures;
+  /** Largest flow first; symbols with no deal in the window are left out. */
+  by_symbol: FlowSymbolRow[];
+}
+
+export interface FlowAccountRow {
+  platform: string;
+  login: number;
+  classification: string | null;
+  confidence: number | null;
+  risk_score: number | null;
+  effective_risk: number | null;
+  /** Band of effective_risk, as on the trader lists. */
+  risk_level: string | null;
+  /** Risk-matrix level; the news gate uses it. null when the matrix had no row. */
+  matrix_risk_level: string | null;
+  unclassified: boolean;
+  flagged: boolean;
+  flow_usd: number;
+  b_flow_usd: number;
+  fills: number;
+  unpriced_fills: number;
+  /** Client view: positive = the client made money. */
+  realized_pnl_usd: number | null;
+  realized_unpriced_deals: number;
+  median_hold_sec: number | null;
+  last_fill: string | null;
+}
+
+export interface FlowAccountsData {
+  symbol: string;
+  window_sec: number;
+  as_of: string;
+  ready: boolean;
+  accounts: FlowAccountRow[];
+}
+
+export interface FlowToxicitySettings {
+  window_sec: number;
+  toxic_classes: Record<string, FlowToxicClass>;
+  bands: FlowBands;
+  classes_available: string[];
+  risk_levels_available: string[];
+  limits: { window_sec_min: number; window_sec_max: number };
+}
+
+export type FlowSettingsSaveResult =
+  | { kind: 'ok';        data: FlowToxicitySettings | null; warnings: string[] }
+  | { kind: 'invalid';   errors: string[] }
+  | { kind: 'standby';   message: string }
+  | { kind: 'forbidden'; message: string }
+  | { kind: 'error';     status: number; message: string };
+
+function unwrapFlowSettings(body: unknown): FlowToxicitySettings | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  const inner = b.data && typeof b.data === 'object' ? (b.data as Record<string, unknown>) : null;
+  const section = inner && 'toxic_classes' in inner ? inner : 'toxic_classes' in b ? b : null;
+  return section as FlowToxicitySettings | null;
+}
+
+async function putFlowSettings(path: string, payload: unknown): Promise<FlowSettingsSaveResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/v1/settings/flow-toxicity/${path}`, {
+      method:      'PUT',
+      cache:       'no-store',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify(payload),
+    });
+  } catch (e) {
+    return { kind: 'error', status: 0, message: e instanceof Error ? e.message : 'Network error' };
+  }
+  const body = await res.json().catch(() => ({} as Record<string, unknown>));
+  const text = (body as { message?: string; error?: string }).message ?? (body as { error?: string }).error;
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(riskLimitErrorText) : []);
+  if (res.ok) return { kind: 'ok', data: unwrapFlowSettings(body), warnings: list((body as { warnings?: unknown }).warnings) };
+  if (res.status === 400) {
+    const errs = list((body as { errors?: unknown }).errors);
+    return { kind: 'invalid', errors: errs.length ? errs : [text ?? 'The values were rejected.'] };
+  }
+  if (res.status === 409) return { kind: 'standby', message: text ?? 'This server is the Standby. Make the change on the active server.' };
+  if (res.status === 401 || res.status === 403) return { kind: 'forbidden', message: text ?? 'You do not have permission to change these settings.' };
+  return { kind: 'error', status: res.status, message: text ?? `HTTP ${res.status}` };
+}
+
+export const flowApi = {
+  /** Last payload (Radar, cockpit module). Rejects on 503 before the first one is built. */
+  get: () => fetchAPI<FlowPayload>('/api/v1/risk-radar/flow'),
+  /** Accounts behind one symbol's flow. */
+  getAccounts: (symbol: string) =>
+    fetchAPI<FlowAccountsData>(`/api/v1/risk-radar/flow/${encodeURIComponent(symbol)}/accounts`),
+  settings: {
+    get: async (): Promise<FlowToxicitySettings> => {
+      const s = unwrapFlowSettings(await fetchAPI<unknown>('/api/v1/settings/flow-toxicity'));
+      if (!s) throw new Error('The flow toxicity settings came back in an unexpected shape');
+      return s;
+    },
+    setWindow: (window_sec: number) => putFlowSettings('window', { window_sec }),
+    setClasses: (toxic_classes: Record<string, FlowToxicClass>) => putFlowSettings('classes', { toxic_classes }),
+    setBands: (bands: FlowBands) => putFlowSettings('bands', bands),
+  },
 };
 
 // ════════════════════════════════════════════════════════════════════════════

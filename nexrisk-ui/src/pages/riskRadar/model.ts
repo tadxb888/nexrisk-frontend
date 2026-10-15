@@ -663,10 +663,10 @@ const TREND_THRESHOLD = 0.05;
  * now against five minutes earlier (or the oldest sample, once a minute of
  * history exists). Null while there is too little history to say.
  */
-export function trendOf(
-  history: Sample[],
+export function trendOf<S extends { t: number }>(
+  history: S[],
   uptoIndex: number,
-  pick: (s: Sample) => number,
+  pick: (s: S) => number,
 ): Trend | null {
   if (uptoIndex < 1 || uptoIndex >= history.length) return null;
   const now = history[uptoIndex];

@@ -1405,6 +1405,50 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // ══════════════════════════════════════════════════════════
+  // FLOW TOXICITY (docs/NexRisk_Risk_Radar_Flow_API.md §3)
+  // ══════════════════════════════════════════════════════════
+  //
+  // Window, toxic classes and bands of the Risk Radar's Flow toxicity layer.
+  // Raw pass-through, same conventions as risk_limits: 400 lists every
+  // problem, 409 = Standby, the PUTs carry the session's Authorization.
+
+  /** GET /api/v1/settings/flow-toxicity */
+  fastify.get(
+    '/settings/flow-toxicity',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/flow-toxicity', reply);
+    }
+  );
+
+  /** PUT /api/v1/settings/flow-toxicity/window — { window_sec } */
+  fastify.put(
+    '/settings/flow-toxicity/window',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/flow-toxicity/window', request.body, reply, bearerFromSession(request));
+    }
+  );
+
+  /** PUT /api/v1/settings/flow-toxicity/classes — { toxic_classes: { CLASS: { min_confidence, min_risk_level? } } } */
+  fastify.put(
+    '/settings/flow-toxicity/classes',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/flow-toxicity/classes', request.body, reply, bearerFromSession(request));
+    }
+  );
+
+  /** PUT /api/v1/settings/flow-toxicity/bands — { warning_pct?, high_pct?, critical_pct? } */
+  fastify.put(
+    '/settings/flow-toxicity/bands',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/flow-toxicity/bands', request.body, reply, bearerFromSession(request));
+    }
+  );
+
   /**
    * GET /api/v1/settings/fixbridge/status  (§ G4 — live)
    * Queries the bridge over its command channel + core service client view.

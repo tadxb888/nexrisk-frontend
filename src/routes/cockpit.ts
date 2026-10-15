@@ -132,6 +132,50 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/v1/risk-radar/flow
+   * Risk Radar, Flow toxicity layer — the last radar.flow.symbols payload
+   * (docs/NexRisk_Risk_Radar_Flow_API.md v1.0). 503 until the backend has
+   * built its first one; forwarded as is. Sent raw: keys are symbol names.
+   */
+  fastify.get(
+    '/risk-radar/flow',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<unknown>('/api/v1/risk-radar/flow');
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/risk-radar/flow/:symbol/accounts
+   * The accounts behind one instrument's flow in the window, flagged first.
+   * Fastify hands the symbol decoded; it is encoded again for the service,
+   * since symbols may hold '#', '.' or '/'.
+   */
+  fastify.get(
+    '/risk-radar/flow/:symbol/accounts',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { symbol } = request.params as { symbol: string };
+      if (typeof symbol !== 'string' || !symbol || symbol.length > 64) {
+        return reply.code(400).send({ success: false, error: 'Invalid symbol' });
+      }
+      const response = await nexriskApi.get<unknown>(`/api/v1/risk-radar/flow/${encodeURIComponent(symbol)}/accounts`);
+
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+
+      return reply.send(response.data);
+    }
+  );
+
+  /**
    * GET /api/v1/risk-radar/month-pnl
    * Realised P&L of the whole book, month to date, broker view — the loss the
    * book has already taken this month, which Risk Radar takes off the monthly
