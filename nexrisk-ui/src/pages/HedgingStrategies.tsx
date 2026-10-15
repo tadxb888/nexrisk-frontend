@@ -182,7 +182,10 @@ interface Mt5Node {
   node_type:         string;  // MASTER | STANDBY | BACKUP | CLIENT | PARTNER
   connection_status: string;
   is_enabled:        boolean;
+  platform?:         'MT5' | 'CTRADER';
 }
+
+const nodeLabel = (n: Mt5Node) => `${n.node_name} (${n.platform === 'CTRADER' ? 'cTrader' : 'MT5'})`;
 
 interface EscalatedPosition {
   record_id:         number;
@@ -785,9 +788,10 @@ function DayPicker({ value, onChange }: { value: number; onChange: (v: number) =
 
 // ── Strategy card (left panel) ────────────────────────────────
 function StrategyCard({
-  rule, selected, hasConflict, escalationCount, lpHealthMap, onClick,
+  rule, selected, hasConflict, escalationCount, lpHealthMap, onClick, targetLabel,
 }: {
   rule:            HedgeRule;
+  targetLabel:     string;
   selected:        boolean;
   hasConflict:     boolean;
   escalationCount: number;
@@ -833,12 +837,12 @@ function StrategyCard({
 
       {/* Middle row — chips */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 7, paddingLeft: 36 }}>
-        {rule.mt5_servers.length > 0 && (
+        {targetLabel && (
           <span style={{
-            padding: '1px 6px', borderRadius: 2, fontSize: 10, fontFamily: FONT_MONO,
+            padding: '1px 6px', borderRadius: 2, fontSize: 10,
             backgroundColor: BG_FIELD, color: TEXT_SEC, border: `1px solid ${BORDER}`,
           }}>
-            {rule.mt5_servers[0]}
+            {targetLabel}
           </span>
         )}
         <span style={{
@@ -970,6 +974,8 @@ export function HedgeRulesPage() {
   const [lpHealthMap, setLpHealthMap] = useState<Map<string, LpHealth>>(new Map());
   const [lpOptions,   setLpOptions]   = useState<LpOption[]>([]);
   const [mt5Nodes,    setMt5Nodes]    = useState<Mt5Node[]>([]);
+  const [ctNodes,     setCtNodes]     = useState<Mt5Node[]>([]);
+  const [ctLoaded,    setCtLoaded]    = useState(false);   // cTrader node list fetched (or failed)
   const [bBookGroups, setBBookGroups] = useState<string[]>([]);
 
   // ── Selection & mode ────────────────────────────────────────
@@ -1009,6 +1015,7 @@ export function HedgeRulesPage() {
   const [calPickerOpen,    setCalPickerOpen]    = useState(false);
   const [selectedCalEvent, setSelectedCalEvent] = useState<CalendarEvent | null>(null);
   const [mt5Symbols,       setMt5Symbols]       = useState<string[]>([]);
+  const [ctSymbols,        setCtSymbols]        = useState<string[]>([]);
 
   const mountedRef = useRef(true);
 
@@ -1071,8 +1078,38 @@ export function HedgeRulesPage() {
       const json = await res.json();
       // C++ response: { nodes: [...] } — also guard data/array fallbacks
       const arr: Mt5Node[] = json.nodes ?? json.data?.nodes ?? json.data ?? json ?? [];
-      setMt5Nodes(Array.isArray(arr) ? arr : []);
+      setMt5Nodes(Array.isArray(arr) ? arr.map(n => ({ ...n, platform: 'MT5' as const })) : []);
     } catch { /* silent */ }
+  }, []);
+
+  // cTrader nodes — seed only (live status is WebSocket); a rule may name the cTrader MASTER.
+  const loadCtNodes = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/ctrader/nodes/status');
+      if (!res.ok || !mountedRef.current) return;
+      const json = await res.json();
+      const arr: any[] = json.nodes ?? [];
+      setCtNodes(arr.map(n => ({
+        id:                n.node_id ?? n.id,
+        node_name:         n.node_name,
+        node_type:         n.node_type ?? (n.is_master ? 'MASTER' : ''),
+        connection_status: n.connection_status,
+        is_enabled:        n.is_enabled,
+        platform:          'CTRADER' as const,
+      })));
+    } catch { /* silent */ }
+    finally { if (mountedRef.current) setCtLoaded(true); }
+  }, []);
+
+  // cTrader symbols of a node (archived hidden) — suggestions for a cTrader rule.
+  const loadCtSymbols = useCallback(async (nodeId: number) => {
+    try {
+      const res = await fetch(`/api/v1/ctrader/nodes/${nodeId}/symbols`);
+      if (!res.ok || !mountedRef.current) return;
+      const json = await res.json();
+      const syms: { symbol: string; archived?: boolean }[] = json.symbols ?? [];
+      setCtSymbols(syms.filter(s => !s.archived).map(s => s.symbol.toUpperCase()));
+    } catch { /* silent — freeform entry still works */ }
   }, []);
 
   const loadMt5Symbols = useCallback(async () => {
@@ -1094,6 +1131,17 @@ export function HedgeRulesPage() {
       // C++ response: { groups: [{ assignment_id, group_name, ... }] }
       const groups: { group_name: string }[] = json.groups ?? json.assignments ?? json.data ?? [];
       setBBookGroups(Array.isArray(groups) ? groups.map(g => g.group_name) : []);
+    } catch { setBBookGroups([]); }
+  }, []);
+
+  // cTrader: book A/B is set per position, not per group — every enabled group is offered.
+  const loadCtGroups = useCallback(async (nodeId: number) => {
+    try {
+      const res = await fetch(`/api/v1/ctrader/nodes/${nodeId}/groups`);
+      if (!res.ok || !mountedRef.current) { setBBookGroups([]); return; }
+      const json = await res.json();
+      const groups: { group: string; enabled?: boolean }[] = json.groups ?? [];
+      setBBookGroups(groups.filter(g => g.enabled !== false).map(g => g.group));
     } catch { setBBookGroups([]); }
   }, []);
 
@@ -1165,11 +1213,12 @@ export function HedgeRulesPage() {
     mountedRef.current = true;
     loadLpOptions();
     loadMt5Nodes();
+    loadCtNodes();
     loadMt5Symbols();
     const saved = sessionStorage.getItem(SS_KEY);
     if (saved) setSelectedId(parseInt(saved, 10));
     return () => { mountedRef.current = false; };
-  }, [loadLpOptions, loadMt5Nodes, loadMt5Symbols]);
+  }, [loadLpOptions, loadMt5Nodes, loadCtNodes, loadMt5Symbols]);
 
   // 30s rules poll
   useEffect(() => {
@@ -1230,11 +1279,32 @@ export function HedgeRulesPage() {
   const masterNode = mt5Nodes.find(n => n.node_type === 'MASTER' && n.is_enabled)
                   ?? mt5Nodes.find(n => n.is_enabled); // fallback: first enabled node
 
-  // Load B-Book groups from master node whenever it is available
+  // cTrader MASTER — a rule names one MASTER: the MT5 one or the cTrader one.
+  const ctMaster = ctNodes.find(n => n.node_type === 'MASTER' && n.is_enabled);
+  const targets  = [masterNode, ctMaster].filter((n): n is Mt5Node => !!n);
+  const allNodes = [...mt5Nodes, ...ctNodes];
+  // Empty mt5_servers = the MT5 MASTER.
+  const targetNode = targets.find(t => String(t.id) === draftRule.mt5_server_id)
+                  ?? (draftRule.mt5_server_id === '' ? masterNode : undefined);
+  const isCtTarget = targetNode?.platform === 'CTRADER';
+
+  const targetLabelOf = (r: HedgeRule): string => {
+    const id = r.mt5_servers[0];
+    if (!id) return masterNode ? nodeLabel(masterNode) : 'MT5 Master';
+    const n = allNodes.find(x => String(x.id) === id);
+    return n ? nodeLabel(n) : `node ${id}`;
+  };
+
+  // Groups and symbols of the target server
   useEffect(() => {
-    if (masterNode) loadBBookGroups(String(masterNode.id));
-    else setBBookGroups([]);
-  }, [masterNode, loadBBookGroups]);
+    if (!targetNode) { setBBookGroups([]); return; }
+    if (targetNode.platform === 'CTRADER') {
+      loadCtGroups(targetNode.id);
+      loadCtSymbols(targetNode.id);
+    } else {
+      loadBBookGroups(String(targetNode.id));
+    }
+  }, [targetNode?.id, targetNode?.platform, loadBBookGroups, loadCtGroups, loadCtSymbols]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync sanity lp_id with primary LP
   useEffect(() => {
@@ -1243,13 +1313,17 @@ export function HedgeRulesPage() {
     }
   }, [draftRule.hedging_lp_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Always keep mt5_server_id in sync with the master node.
-  // Covers: new strategies, existing rules with empty mt5_servers[], late node loads.
+  // Keep mt5_server_id on a MASTER. Empty or naming a node that is no longer a
+  // MASTER (STANDBY, or the old MASTER after a takeover) → that platform's MASTER.
+  // Waits for the cTrader list so a cTrader rule is not moved to MT5 while it loads.
   useEffect(() => {
-    if (masterNode && draftRule.mt5_server_id !== String(masterNode.id)) {
-      setDraftRule(d => ({ ...d, mt5_server_id: String(masterNode.id) }));
-    }
-  }, [masterNode]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!masterNode || !ctLoaded) return;
+    const cur = draftRule.mt5_server_id;
+    if (targets.some(t => String(t.id) === cur)) return;
+    const curNode = allNodes.find(n => String(n.id) === cur);
+    const next = curNode?.platform === 'CTRADER' && ctMaster ? ctMaster : masterNode;
+    setDraftRule(d => ({ ...d, mt5_server_id: String(next.id) }));
+  }, [masterNode?.id, ctMaster?.id, ctLoaded, draftRule.mt5_server_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════════
   // HANDLERS
@@ -1284,6 +1358,18 @@ export function HedgeRulesPage() {
     setDraftRule(d => ({ ...d, ...patch }));
     setIsRuleDirty(true);
   }, []);
+
+  // Target server. Groups belong to one platform, so they are cleared on a platform
+  // change. cTrader has no P&L source: PNL_TRIGGER and the guard clause are reset.
+  const pickTarget = useCallback((n: Mt5Node) => {
+    const patch: Partial<DraftRule> = { mt5_server_id: String(n.id) };
+    if (n.platform !== targetNode?.platform) patch.groups = [];
+    if (n.platform === 'CTRADER') {
+      if (draftRule.activation_type === 'PNL_TRIGGER') patch.activation_type = 'ALWAYS';
+      if (draftRule.condition_type !== 'NONE')        patch.condition_type  = 'NONE';
+    }
+    setRule(patch);
+  }, [setRule, targetNode?.platform, draftRule.activation_type, draftRule.condition_type]);
 
   const handleOpenCalPicker = useCallback(() => {
     if (calEvents.length === 0) loadCalendarEvents();
@@ -1520,11 +1606,11 @@ export function HedgeRulesPage() {
     const needsSchedule   = d.activation_type === 'SCHEDULE';
     const needsPnlTrigger = d.activation_type === 'PNL_TRIGGER';
     const needsGuard      = d.condition_type !== 'NONE';
-    const hasEnabledNode  = mt5Nodes.some(n => n.is_enabled);
+    const hasEnabledNode  = !!targetNode;
 
     const items: { key: string; label: string; done: boolean; required: boolean }[] = [
       { key: 'name',      label: 'Strategy name',      done: d.name.trim().length > 0,                      required: true },
-      { key: 'source',    label: 'MT5 server',         done: hasEnabledNode,                                 required: true },
+      { key: 'source',    label: 'Target server',      done: hasEnabledNode,                                 required: true },
       { key: 'scope',     label: 'Scope (groups/logins/cohorts)', done: d.groups.length > 0 || d.login_ids.trim().length > 0 || d.trader_classifications.length > 0, required: false },
       { key: 'symbols',   label: 'Symbols',            done: d.symbols.length > 0,                          required: false },
       { key: 'volume',    label: 'Hedge volume %',     done: parseFloat(d.hedge_volume_pct) > 0,            required: true },
@@ -1679,6 +1765,7 @@ export function HedgeRulesPage() {
                   hasConflict={conflictSet.has(r.rule_id)}
                   escalationCount={escalationsByRule.get(r.rule_id) ?? 0}
                   lpHealthMap={lpHealthMap}
+                  targetLabel={targetLabelOf(r)}
                   onClick={() => handleSelectRule(r.rule_id)}
                 />
               ))
@@ -1873,42 +1960,55 @@ export function HedgeRulesPage() {
                 <SectionCard n={2} label="Source Targeting">
                   <InfoBanner msg="Empty selections match all within B-Book scope. Groups must already be assigned to B-Book in MT5 Server configuration." />
 
-                  {/* MT5 Server — always the Master node, shown as static (not a dropdown) */}
-                  <FormRow label="MT5 Server" required hint="strategies always target the Master node">
-                    {masterNode ? (
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 10,
-                        padding: '7px 12px', borderRadius: 4,
-                        backgroundColor: BG_FIELD, border: `1px solid ${BORDER}`,
-                      }}>
-                        <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, backgroundColor:
-                          masterNode.connection_status === 'CONNECTED' ? GREEN :
-                          masterNode.connection_status === 'DEGRADED'  ? AMBER : RED,
-                        }} />
-                        <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: TEXT_PRI, fontWeight: 500 }}>
-                          {masterNode.node_name}
-                        </span>
-                        <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: TEXT_MUT }}>
-                          {masterNode.node_type}
-                        </span>
-                        <span style={{
-                          marginLeft: 'auto', fontFamily: FONT_MONO, fontSize: 10, fontWeight: 600,
-                          color: masterNode.connection_status === 'CONNECTED' ? GREEN : AMBER,
-                        }}>
-                          {masterNode.connection_status}
-                        </span>
+                  {/* Target server — the MT5 MASTER or the cTrader MASTER (one per rule) */}
+                  <FormRow label="Target Server" required hint="a strategy hedges the B-Book of one Master: MT5 or cTrader">
+                    {targets.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {targets.map(n => {
+                          const active = targetNode?.id === n.id && targetNode?.platform === n.platform;
+                          const st = n.connection_status;
+                          return (
+                            <button key={`${n.platform}-${n.id}`} type="button"
+                              onClick={() => { if (!active && canEdit) pickTarget(n); }}
+                              disabled={!canEdit}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+                                padding: '7px 12px', borderRadius: 4, cursor: canEdit ? 'pointer' : 'default',
+                                backgroundColor: BG_FIELD, border: `1px solid ${active ? TEAL : BORDER}`,
+                              }}>
+                              <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, backgroundColor:
+                                st === 'CONNECTED' ? GREEN : st === 'DEGRADED' ? AMBER : RED,
+                              }} />
+                              <span style={{ fontSize: 12, color: active ? TEAL : TEXT_PRI, fontWeight: 500 }}>
+                                {nodeLabel(n)}
+                              </span>
+                              <span style={{ fontSize: 10, color: TEXT_MUT }}>MASTER</span>
+                              <span style={{
+                                marginLeft: 'auto', fontFamily: FONT_MONO, fontSize: 10, fontWeight: 600,
+                                color: st === 'CONNECTED' ? GREEN : AMBER,
+                              }}>
+                                {st}
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {isCtTarget && (
+                          <div style={{ fontSize: 10, color: TEXT_MUT }}>
+                            cTrader has no P&amp;L source for the rule engine: P&amp;L trigger and guard clause are not available.
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div style={{ padding: '7px 12px', borderRadius: 4, backgroundColor: BG_FIELD, border: `1px solid ${BORDER}` }}>
                         <span style={{ fontSize: 12, color: TEXT_MUT }}>
-                          No enabled MT5 node — configure one in MT5 Servers
+                          No enabled Master node — configure one in MT5 Servers or cTrader Servers
                         </span>
                       </div>
                     )}
                   </FormRow>
 
                   {/* B-Book Groups */}
-                  <FormRow label="B-Book Groups" hint={masterNode ? `${bBookGroups.length} B-Book group${bBookGroups.length !== 1 ? 's' : ''} on ${masterNode.node_name}` : 'loading…'}>
+                  <FormRow label={isCtTarget ? 'Groups' : 'B-Book Groups'} hint={targetNode ? (isCtTarget ? `${bBookGroups.length} group${bBookGroups.length !== 1 ? 's' : ''} on ${targetNode.node_name} · book B is set per position in cTrader` : `${bBookGroups.length} B-Book group${bBookGroups.length !== 1 ? 's' : ''} on ${targetNode.node_name}`) : 'loading…'}>
                     {bBookGroups.length > 0 ? (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {bBookGroups.map(g => {
@@ -1928,7 +2028,7 @@ export function HedgeRulesPage() {
                     ) : (
                       <div style={{ padding: '6px 10px', borderRadius: 4, border: `1px solid ${BORDER}`, backgroundColor: BG_FIELD }}>
                         <span style={{ fontSize: 11, color: TEXT_MUT }}>
-                          {masterNode ? 'No B-Book groups assigned on this server' : 'Loading…'}
+                          {targetNode ? (isCtTarget ? 'No groups on this server' : 'No B-Book groups assigned on this server') : 'Loading…'}
                         </span>
                       </div>
                     )}
@@ -2002,8 +2102,8 @@ export function HedgeRulesPage() {
                       chips={draftRule.symbols}
                       onChange={v => setRule({ symbols: v })}
                       placeholder="Type a symbol name and press Enter…"
-                      suggestions={mt5Symbols}
-                      validEntries={mt5Symbols}
+                      suggestions={isCtTarget ? ctSymbols : mt5Symbols}
+                      validEntries={isCtTarget ? ctSymbols : mt5Symbols}
                     />
                     {draftRule.symbols.length === 0 && (
                       <div style={{ marginTop: 5, fontSize: 10, color: TEXT_MUT }}>
@@ -2081,7 +2181,7 @@ export function HedgeRulesPage() {
                   </div>
 
                   <FormRow label="Condition Type">
-                    <select value={draftRule.condition_type} onChange={e => setRule({ condition_type: e.target.value as ConditionType })} style={selectStyle}>
+                    <select value={draftRule.condition_type} disabled={isCtTarget} title={isCtTarget ? 'Not available on cTrader (no P&L source)' : undefined} onChange={e => setRule({ condition_type: e.target.value as ConditionType })} style={{ ...selectStyle, opacity: isCtTarget ? 0.5 : 1, cursor: isCtTarget ? 'not-allowed' : 'pointer' }}>
                       {CONDITION_TYPES.map(c => (
                         <option key={c.value} value={c.value}>{c.label}</option>
                       ))}
@@ -2118,18 +2218,22 @@ export function HedgeRulesPage() {
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {(['ALWAYS', 'SCHEDULE', 'NEWS_EVENT', 'PNL_TRIGGER', 'MANUAL'] as ActivationType[]).map(t => {
                         const isActive = draftRule.activation_type === t;
+                        const blocked  = isCtTarget && t === 'PNL_TRIGGER';
                         return (
                           <button
                             key={t}
+                            disabled={blocked}
+                            title={blocked ? 'Not available on cTrader (no P&L source)' : undefined}
                             onClick={() => {
+                              if (blocked) return;
                               setRule({ activation_type: t });
                               if (t !== 'NEWS_EVENT') {
                                 setCalPickerOpen(false);
                               }
                             }}
                             style={{
-                              padding: '5px 12px', borderRadius: 4, cursor: 'pointer',
-                              fontSize: 11,
+                              padding: '5px 12px', borderRadius: 4, cursor: blocked ? 'not-allowed' : 'pointer',
+                              fontSize: 11, opacity: blocked ? 0.4 : 1,
                               border: `1px solid ${isActive ? TEAL : BORDER}`,
                               backgroundColor: isActive ? BG_FIELD : BG_FIELD,
                               color: isActive ? TEAL : TEXT_SEC,
