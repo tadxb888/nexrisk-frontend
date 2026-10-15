@@ -1899,6 +1899,15 @@ function FlowCards({ fv, upto, scope }: { fv: FlowView; upto: number; scope: Pla
   );
 }
 
+/** Why the flow list is empty, in words: nothing traded, or only on the other platform. */
+function flowEmptyText(fv: FlowView, scope: PlatformScope): string {
+  const win = fmtWindow(fv.windowSec);
+  if (scope === 'ALL' || fv.hiddenByScope === 0) return `No client deal in the last ${win}.`;
+  const other = PLATFORM_LABEL[scope === 'MT5' ? 'CTRADER' : 'MT5'];
+  const n = fv.hiddenByScope;
+  return `No ${PLATFORM_LABEL[scope]} client deal in the last ${win}. ${n} instrument${n === 1 ? ' was' : 's were'} traded on ${other}: choose Both or ${other} to see ${n === 1 ? 'it' : 'them'}. The cards above cover both platforms.`;
+}
+
 function FlowList({
   fv, scope, scopeText, onSelect,
 }: { fv: FlowView; scope: PlatformScope; scopeText: string; onSelect: (symbol: string) => void }) {
@@ -1931,7 +1940,7 @@ function FlowList({
 
       {fv.symbols.length === 0 && (
         <div style={{ padding: '18px 16px', fontSize: 13, color: C.soft, lineHeight: 1.5 }}>
-          No client deal in the last {fmtWindow(fv.windowSec)}.
+          {flowEmptyText(fv, scope)}
         </div>
       )}
 
@@ -2730,6 +2739,18 @@ export function RiskRadarPage() {
                   <MapNotes view={view} mt5Check={mt5Check} />
                 )}
                 {layer === 'flow' && <FlowMapNotes fv={fv} running={flowRunning && shownFlow !== null} />}
+                {layer === 'flow' && shownFlow && fv.symbols.length === 0 && (
+                  <div
+                    style={{
+                      position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+                      background: '#080c12', border: `1px dashed ${C.grey}`, borderRadius: 8,
+                      padding: '14px 20px', textAlign: 'center', width: 420, pointerEvents: 'none', zIndex: 2,
+                      fontSize: 13, color: C.soft, lineHeight: 1.5,
+                    }}
+                  >
+                    {flowEmptyText(fv, scope)}
+                  </div>
+                )}
               </RadarMap>
             </div>
           </Panel>

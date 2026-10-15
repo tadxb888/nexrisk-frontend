@@ -82,6 +82,8 @@ export interface FlowView {
   platforms: Platform[];
   symbols: FlowSymbol[];
   bySymbol: Map<string, FlowSymbol>;
+  /** Instruments traded in the window that the platform chosen leaves out. */
+  hiddenByScope: number;
   /** Whole book, both platforms (the payload's totals). */
   totals: {
     flowUsd: number; flaggedUsd: number; bFlowUsd: number; bFlaggedUsd: number;
@@ -212,6 +214,7 @@ export function buildFlowView(payload: FlowPayload | null, scope: PlatformScope)
     platforms: (payload?.platforms ?? []).map(toPlatform).filter((p): p is Platform => p !== null),
     symbols,
     bySymbol: new Map(symbols.map((s) => [s.symbol, s] as const)),
+    hiddenByScope: all.length - symbols.length,
     totals: {
       flowUsd: num(tt?.flow_usd), flaggedUsd: num(tt?.flagged_flow_usd),
       bFlowUsd: num(tt?.b_flow_usd), bFlaggedUsd: num(tt?.b_flagged_flow_usd),
