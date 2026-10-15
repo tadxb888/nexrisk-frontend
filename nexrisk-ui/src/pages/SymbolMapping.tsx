@@ -1,5 +1,5 @@
 // ============================================================
-// Symbol Mapping — MT5 Symbol → LP Instrument
+// Symbol Mapping — MT5 / cTrader Symbol → LP Instrument
 // STP Phase 1 — AG Grid, sticky symbols + normalizers, in-row edit
 // ============================================================
 
@@ -47,9 +47,14 @@ interface LPMapping {
   lp_trades_in_units: boolean;
   min_size: number;
   lp_std_lot: number;
+  // cTrader rows only: units per lot of the symbol at the first hedge after
+  // the last save (null until then, and always null on MT5 rows).
+  units_per_lot?: number | null;
 }
-interface MT5Node      { node_id: number; node_name: string; connection_status: string; is_enabled: boolean; is_master?: boolean; }
-interface MT5Symbol    { symbol: string; description: string; digits: number; contract_size: number; calc_mode?: number; volume_min?: number; }
+type Platform = 'MT5' | 'CTRADER';
+interface MT5Node      { node_id: number; node_name: string; connection_status: string; is_enabled: boolean; is_master?: boolean; platform?: Platform; }
+// MT5 or cTrader symbol. cTrader: contract_size = units per lot; no calc_mode, no volume_min.
+interface MT5Symbol    { symbol: string; description: string; digits: number; contract_size: number; calc_mode?: number; volume_min?: number; archived?: boolean; }
 interface LPConfig     { lp_id: string; lp_name: string; enabled: boolean; credentials_set: boolean; }
 interface LPStatus     { state: string; trading_session?: { state: string }; md_session?: { state: string }; }
 interface LPInstrument { symbol: string; canonical_symbol?: string; description?: string; contract_multiplier?: number; price_precision?: number; min_trade_vol?: number; max_trade_vol?: number; round_lot?: number; has_trade_route?: boolean; instrument_group?: string; }
@@ -64,10 +69,13 @@ interface RowEdit {
   min_size: string; step_size: string; lp_std_lot: string;
 }
 interface SnapQuoteEnvelope {
+  platform?: Platform;
+  // For a cTrader node this block describes the cTrader symbol; price is `mid` only.
   mt5: {
     available: boolean;
     bid?: number | null;
     ask?: number | null;
+    mid?: number | null;
     last?: number;
     contract_size?: number;
     volume_min?: number;
@@ -116,6 +124,8 @@ type SnapQuote =
   | { status: 'error'; error: string };
 interface ReviewRow { mt5_symbol: string; lp_symbol: string; confidence: 'exact' | 'derived' | 'fallback'; trader_count: number; total_volume: number; }
 // ── Helpers ───────────────────────────────────────────────────
+const platformLabel = (p?: Platform) => p === 'CTRADER' ? 'cTrader' : 'MT5';
+const nodeLabel = (n?: MT5Node) => n ? `${n.node_name} (${platformLabel(n.platform)})` : '';
 function computeMultiplier(mt5cs?: number, lpCm?: number): number | undefined {
   if (!mt5cs || !lpCm) return undefined;
   const r = mt5cs / lpCm;
@@ -149,7 +159,7 @@ const iCls = 'bg-[#232225] border border-[#606060] rounded px-2 py-1 text-xs tex
 
 // ── Modals ────────────────────────────────────────────────────
 function AutoMapReview({ rows: init, nodes, lps, defaultNodeId, defaultLpId, onCommit, onClose }: {
-  rows: ReviewRow[]; nodes: { node_id: number; node_name: string }[]; lps: { lp_id: string; lp_name: string }[];
+  rows: ReviewRow[]; nodes: MT5Node[]; lps: { lp_id: string; lp_name: string }[];
   defaultNodeId: number | null; defaultLpId: string | null;
   onCommit: (rows: ReviewRow[], nodeId: number | null, lpId: string | null) => Promise<void>;
   onClose: () => void;
@@ -171,9 +181,9 @@ function AutoMapReview({ rows: init, nodes, lps, defaultNodeId, defaultLpId, onC
         </div>
         <div className="px-5 py-2 flex items-end gap-4 border-b border-[#404040]" style={{ backgroundColor: '#2a292c' }}>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-[#ccc] uppercase tracking-wider">MT5 Node</label>
-            <select value={nId ?? ''} onChange={e => setNId(Number(e.target.value))} className={iCls} style={{ width: 180, color: '#fff' }}>
-              {nodes.map(n => <option key={n.node_id} value={n.node_id}>{n.node_name}</option>)}
+            <label className="text-[10px] text-[#ccc] uppercase tracking-wider">Server</label>
+            <select value={nId ?? ''} onChange={e => setNId(Number(e.target.value))} className={iCls} style={{ width: 200, color: '#fff' }}>
+              {nodes.map(n => <option key={n.node_id} value={n.node_id}>{nodeLabel(n)}</option>)}
             </select>
           </div>
           <div className="flex flex-col gap-1">
@@ -187,7 +197,7 @@ function AutoMapReview({ rows: init, nodes, lps, defaultNodeId, defaultLpId, onC
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="border-b border-[#404040]" style={{ backgroundColor: '#1e1e20' }}>
-                <th className="px-4 py-2 text-left text-[#ccc] font-mono font-medium">MT5 Symbol</th>
+                <th className="px-4 py-2 text-left text-[#ccc] font-mono font-medium">Symbol</th>
                 <th className="px-4 py-2 text-left text-[#ccc] font-mono font-medium">LP Symbol</th>
                 <th className="px-4 py-2 text-center text-[#ccc] font-mono font-medium">Match</th>
               </tr>
@@ -244,7 +254,7 @@ function BulkModal({ onUpload, onClose, mt5Syms, nodeName, lpName, mappings }: {
   const fileRef = useRef<HTMLInputElement>(null);
 
   function downloadTemplate() {
-    const header1 = `Symbol mapping-MT5: ${nodeName || 'Unknown'} - LP: ${lpName || 'Unknown'},,,,,,,,`;
+    const header1 = `Symbol mapping-Server: ${nodeName || 'Unknown'} - LP: ${lpName || 'Unknown'},,,,,,,,`;
     const header2 = `MT5Symbol,Trades in Units,Trades in Lots,Price Normalizer,Size Normalizer,LPSymbol,Trades in Units,Trades in Lots,Min.Size`;
     const dataRows = mt5Syms.length > 0
       ? mt5Syms.map(s => {
@@ -321,7 +331,7 @@ function BulkModal({ onUpload, onClose, mt5Syms, nodeName, lpName, mappings }: {
           <div>
             <p className="text-[10px] text-[#ccc] uppercase tracking-wider mb-2">Step 1 — Download template</p>
             <div className="flex items-center justify-between p-3 rounded border border-[#404040]" style={{ backgroundColor: '#1e1e20' }}>
-              <span className="text-xs text-white">Pre-filled with <span className="text-white">{mt5Syms.length}</span> MT5 symbols from <span className="text-white">{nodeName || 'node'}</span></span>
+              <span className="text-xs text-white">Pre-filled with <span className="text-white">{mt5Syms.length}</span> symbols from <span className="text-white">{nodeName || 'node'}</span></span>
               <button onClick={downloadTemplate} className="text-xs px-2.5 py-1 rounded flex items-center gap-1"
                 style={{ backgroundColor: '#1a1e20', color: '#49b3b3', border: '1px solid #2a4040' }}>
                 <IcoUpload />Download
@@ -517,6 +527,21 @@ export function SymbolMappingPage() {
     queryFn:  () => api<{ nodes: MT5Node[] }>('/api/v1/mt5/nodes/status'),
     staleTime: 15_000, refetchInterval: 30_000,
   });
+  // cTrader nodes: seed only, never on a timer (live status is WebSocket).
+  const { data: ctNodeData } = useQuery({
+    queryKey: ['ctrader-node-status'],
+    queryFn:  () => api<{ nodes: MT5Node[] }>('/api/v1/ctrader/nodes/status'),
+    staleTime: 15_000, retry: 1,
+  });
+  // Every node of both platforms (C++ returns `id` on MT5 node objects — normalise
+  // once here). Node ids are unique across platforms.
+  const allNodes: MT5Node[] = [
+    ...(nodeData?.nodes ?? []).map((n: any) => ({ ...n, node_id: n.node_id ?? n.id, platform: 'MT5' as Platform })),
+    ...(ctNodeData?.nodes ?? []).map((n: any) => ({ ...n, node_id: n.node_id ?? n.id, platform: 'CTRADER' as Platform })),
+  ];
+  const nodeById     = (id: number | null | undefined) => id == null ? undefined : allNodes.find(n => n.node_id === id);
+  const selectedNode = nodeById(nodeId);
+  const selPlatform  = selectedNode?.platform;
   const { data: lpListData } = useQuery({
     queryKey: ['lp-list'],
     queryFn:  () => api<{ success: boolean; data: { lps: LPConfig[] } }>('/api/v1/fix/admin/lp'),
@@ -528,11 +553,18 @@ export function SymbolMappingPage() {
     staleTime: 60_000,
     enabled: nodeId === null,
   });
+  // Symbols of the selected node, by its platform. cTrader: archived symbols hidden.
   const { data: mt5SymNodeData, isFetching: loadingMt5Node } = useQuery({
-    queryKey: ['mt5-symbols-node', nodeId],
-    queryFn:  () => api<{ symbols: MT5Symbol[] }>(`/api/v1/mt5/nodes/${nodeId}/symbols`),
+    queryKey: ['node-symbols', selPlatform, nodeId],
+    queryFn:  async () => {
+      if (selPlatform === 'CTRADER') {
+        const r = await api<{ symbols: MT5Symbol[] }>(`/api/v1/ctrader/nodes/${nodeId}/symbols`);
+        return { symbols: (r.symbols ?? []).filter(s => !s.archived) };
+      }
+      return api<{ symbols: MT5Symbol[] }>(`/api/v1/mt5/nodes/${nodeId}/symbols`);
+    },
     staleTime: 60_000,
-    enabled: nodeId !== null,
+    enabled: nodeId !== null && selPlatform !== undefined,
   });
   const mt5SymData   = nodeId === null ? mt5SymAllData   : mt5SymNodeData;
   const loadingMt5   = nodeId === null ? loadingMt5All   : loadingMt5Node;
@@ -558,10 +590,11 @@ export function SymbolMappingPage() {
 
   // ── Derived ────────────────────────────────────────────────
   const mappings    = mappingData?.mappings ?? [];
-  // C++ returns `id` on node objects; MT5Node interface uses node_id — normalise once here
-  const connNodes   = (nodeData?.nodes ?? [])
-    .map((n: any) => ({ ...n, node_id: n.node_id ?? n.id }) as MT5Node)
-    .filter(n => n.connection_status === 'CONNECTED' && n.is_enabled);
+  // Server dropdown: connected MT5 nodes, plus the cTrader MASTER (only the
+  // MASTER's B-Book is hedged, so only it takes hedging mappings).
+  const connNodes   = allNodes
+    .filter(n => n.connection_status === 'CONNECTED' && n.is_enabled)
+    .filter(n => n.platform !== 'CTRADER' || n.is_master === true);
   const lps         = (lpListData?.data?.lps ?? []).filter(l => l.enabled);
   const mt5Syms     = mt5SymData?.symbols ?? [];
   const lpInstrs    = instrData?.data?.instruments ?? [];
@@ -607,7 +640,7 @@ export function SymbolMappingPage() {
     const info = mt5Syms.find(s => s.symbol === sym);
     const instr = autoMatch(sym, lpInstrs);
 
-    // MT5 always reports volume in lots (MetaTrader 5 standard)
+    // MT5 and cTrader both report volume in lots of the symbol
     if (info) {
       setAddMt5Lots('yes');
       setAddMt5Units('no');
@@ -632,10 +665,10 @@ export function SymbolMappingPage() {
   }
 
   async function handleAdd() {
-    if (!addMt5.trim())   { setAddErr('Select an MT5 symbol'); return; }
+    if (!addMt5.trim())   { setAddErr('Select a symbol'); return; }
     if (!addLpSym.trim()) { setAddErr('Enter LP symbol'); return; }
     if (!lpId)            { setAddErr('Select a Liquidity Provider'); return; }
-    if (nodeId === null)  { setAddErr('Select an MT5 node — mappings are per-node'); return; }
+    if (nodeId === null)  { setAddErr('Select a server — mappings are per-node'); return; }
     setAddBusy(true); setAddErr('');
     try {
       const toBool = (v: string) => v === 'yes' ? true : v === 'no' ? false : undefined;
@@ -788,7 +821,7 @@ export function SymbolMappingPage() {
     // current nodeId. If neither is set, abort with a clear error.
     const targetNodeId = reviewNodeId ?? nodeId;
     if (targetNodeId === null) {
-      throw new Error('Select an MT5 node before committing — mappings are per-node');
+      throw new Error('Select a server before committing — mappings are per-node');
     }
     await api<BulkResult>('/api/v1/symbol-mappings/import', { method: 'POST', body: JSON.stringify({
       node_id: targetNodeId,
@@ -802,7 +835,7 @@ export function SymbolMappingPage() {
 
   async function handleBulk(rows: BulkRow[], filename: string) {
     if (nodeId === null) {
-      throw new Error('Select an MT5 node before bulk uploading — mappings are per-node');
+      throw new Error('Select a server before bulk uploading — mappings are per-node');
     }
     const r = await api<BulkResult>('/api/v1/symbol-mappings/import', { method: 'POST', body: JSON.stringify({
       node_id: nodeId,
@@ -945,7 +978,7 @@ export function SymbolMappingPage() {
       <div className="px-4 py-2 border-b border-[#808080] flex items-center justify-between flex-shrink-0">
         <div>
           <h1 className="text-lg font-semibold text-white">Symbol Mapping</h1>
-          <p className="text-xs text-white">MT5 symbols → LP instruments — STP routing prerequisite</p>
+          <p className="text-xs text-white">MT5 and cTrader symbols → LP instruments — STP routing and hedging prerequisite</p>
         </div>
         <div className="flex items-center gap-4 text-xs">
           <span className="text-white">Mappings: <span className="font-mono text-white">{mappings.length}</span></span>
@@ -971,12 +1004,12 @@ export function SymbolMappingPage() {
       {canEdit && (
       <div className="px-4 py-2 border-b border-[#505050] flex items-center gap-3 flex-wrap flex-shrink-0" style={{ backgroundColor: '#2a292c' }}>
         <span className="text-[10px] text-[#ccc] uppercase tracking-wider font-medium whitespace-nowrap">Add Mapping</span>
-        <select value={nodeId ?? ''} onChange={e => setNodeId(e.target.value === '' ? null : Number(e.target.value))} className={iCls} style={{ width: 150, color: '#fff' }}>
+        <select value={nodeId ?? ''} onChange={e => setNodeId(e.target.value === '' ? null : Number(e.target.value))} className={iCls} style={{ width: 190, color: '#fff' }}>
           <option value="">All Servers</option>
-          {connNodes.map(n => <option key={n.node_id} value={n.node_id}>{n.node_name}</option>)}
+          {connNodes.map(n => <option key={n.node_id} value={n.node_id}>{nodeLabel(n)}</option>)}
         </select>
         <select value={addMt5} onChange={e => pickAddMt5(e.target.value)} disabled={mt5Syms.length === 0} className={iCls} style={{ width: 180, color: '#fff' }}>
-          <option value="">{loadingMt5 ? 'Loading…' : `MT5 Symbol${mt5Syms.length ? ` (${mt5Syms.length})` : ''}`}</option>
+          <option value="">{loadingMt5 ? 'Loading…' : `${nodeId === null ? 'MT5' : platformLabel(selPlatform)} Symbol${mt5Syms.length ? ` (${mt5Syms.length})` : ''}`}</option>
           {mt5Syms.map(s => <option key={s.symbol} value={s.symbol}>{s.symbol}</option>)}
         </select>
         <span className="text-[#505050]">→</span>
@@ -1027,7 +1060,7 @@ export function SymbolMappingPage() {
             <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
               {/* Group headers */}
               <tr style={{ backgroundColor: '#1e1e20' }}>
-                <th colSpan={5} style={{ padding: '3px 8px', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, letterSpacing: '0.05em', color: '#fff', textAlign: 'center', backgroundColor: '#1e1e20', borderBottom: '1px solid #3a3a3c', borderRight: '1px solid #3a3a3c' }}>MT5 Server</th>
+                <th colSpan={5} style={{ padding: '3px 8px', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, letterSpacing: '0.05em', color: '#fff', textAlign: 'center', backgroundColor: '#1e1e20', borderBottom: '1px solid #3a3a3c', borderRight: '1px solid #3a3a3c' }}>Trading Server</th>
                 <th colSpan={4} style={{ padding: '3px 8px', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, letterSpacing: '0.05em', color: '#fff', textAlign: 'center', backgroundColor: STICKY_BG, borderBottom: '1px solid #3a3a3c', borderRight: '1px solid #3a3a3c', position: 'sticky', left: 449, right: 170, zIndex: 4 }}>↔ Mapping</th>
                 <th colSpan={6} style={{ padding: '3px 8px', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, letterSpacing: '0.05em', color: '#fff', textAlign: 'center', backgroundColor: '#1e1e20', borderBottom: '1px solid #3a3a3c', borderRight: '1px solid #3a3a3c' }}>LP Server</th>
                 <th style={{ padding: '3px 8px', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, letterSpacing: '0.05em', color: '#fff', textAlign: 'center', backgroundColor: '#1e1e20', borderBottom: '1px solid #3a3a3c', position: 'sticky', right: 0, zIndex: 4 }}>Actions</th>
@@ -1039,7 +1072,7 @@ export function SymbolMappingPage() {
                 {th('Std Lot', { w: 88, right: true })}
                 {th('Units', { w: 68, center: true })}
                 {th('Lots', { w: 68, center: true, style: { borderRight: '2px solid #4a4a5a' } })}
-                {th('MT5 Symbol', { w: 120, sl: 449, style: { borderLeft: '2px solid #4a4a5a' } })}
+                {th('Symbol', { w: 120, sl: 449, style: { borderLeft: '2px solid #4a4a5a' } })}
                 {th('Size ×', { w: 72, center: true, sl: 569 })}
                 {th('Price ×', { w: 72, center: true, sl: 641 })}
                 {th('LP Symbol', { w: 120, sr: 170, style: { borderRight: '2px solid #4a4a5a' } })}
@@ -1061,7 +1094,13 @@ export function SymbolMappingPage() {
                 const isEd = editingId === m.id;
                 const isSv = savingId === m.id;
                 const sq   = snapQuotes.get(m.id);
-                const mt5Info = mt5Syms.find(s => s.symbol === m.mt5_symbol);
+                const rowNode = nodeById(m.node_id);
+                const rowCt   = rowNode?.platform === 'CTRADER';
+                // Lot size is per node: a cTrader row only reads the symbol list of
+                // its own node (never the MT5 "All Servers" list).
+                const mt5Info = rowCt && m.node_id !== nodeId ? undefined : mt5Syms.find(s => s.symbol === m.mt5_symbol);
+                const upl     = rowCt ? (m.units_per_lot ?? null) : null;
+                const uplDrift = upl != null && mt5Info?.contract_size != null && Math.abs(upl - mt5Info.contract_size) > 1e-9;
                 const lpInstr = lpInstrs.find(i => i.symbol === m.lp_symbol || i.canonical_symbol === m.lp_symbol);
                 const rowBg   = isEd ? '#1e1e28' : undefined;
                 const sBg     = isEd ? '#22222e' : STICKY_BG;
@@ -1077,18 +1116,27 @@ export function SymbolMappingPage() {
                       if (sq.status === 'loading') return <span style={{ color: '#888' }}>…</span>;
                       if (sq.status === 'error')   return <span style={{ color: '#666' }}>—</span>;
                       // cold or ready — MT5 side is settled either way
-                      const price = sq.data.mt5.ask ?? sq.data.mt5.bid;
-                      if (!sq.data.mt5.available || price == null) return <span style={{ color: '#666' }}>—</span>;
+                      const price = sq.data.mt5.ask ?? sq.data.mt5.bid ?? sq.data.mt5.mid;
+                      if (!sq.data.mt5.available || price == null)
+                        return <span title={sq.data.mt5.tick_unavailable ? 'No quote: the node has no open position in this symbol' : undefined} style={{ color: '#666' }}>—</span>;
                       return <span style={{ color: '#c09030', fontFamily: 'IBM Plex Mono, monospace' }}>{price.toFixed(5)}</span>;
                     })(), { w: 95, right: true, bg: rowBg })}
-                    {td(<span style={{ color: '#fff' }}>{connNodes.find(n => n.node_id === m.node_id)?.node_name ?? `node=${m.node_id}`}</span>, { w: 130, bg: rowBg })}
-                    {td(mt5Info?.contract_size != null ? <span style={{ color: '#fff' }}>{mt5Info.contract_size.toLocaleString()}</span> : <span style={{ color: '#666' }}>—</span>, { w: 88, right: true, bg: rowBg })}
-                    {td(isEd ? sel('mt5_trades_in_units') : yn(m.mt5_trades_in_units != null ? m.mt5_trades_in_units : (mt5Info?.calc_mode != null ? [2,6,7,8,10,12].includes(mt5Info.calc_mode) : undefined)), { w: 68, center: true, bg: rowBg })}
-                    {td(isEd ? sel('mt5_trades_in_lots')  : yn(m.mt5_trades_in_lots  != null ? m.mt5_trades_in_lots  : (mt5Info?.calc_mode != null ? [0,1,3,4,5,9,11].includes(mt5Info.calc_mode) : undefined)), { w: 68, center: true, bg: rowBg, style: { borderRight: '2px solid #4a4a5a' } })}
+                    {td(<span style={{ color: '#fff' }}>{rowNode ? nodeLabel(rowNode) : `node=${m.node_id}`}</span>, { w: 130, bg: rowBg })}
+                    {td((() => {
+                      const cs = mt5Info?.contract_size;
+                      if (cs == null && upl == null) return <span style={{ color: '#666' }}>—</span>;
+                      const shown = cs ?? upl!;
+                      const tip = upl == null ? undefined
+                        : uplDrift ? `First hedged at ${upl.toLocaleString()} units/lot; the symbol now has ${cs!.toLocaleString()}. Check Size × and save the mapping again.`
+                        : `First hedged at ${upl.toLocaleString()} units/lot`;
+                      return <span title={tip} style={{ color: upl == null ? '#fff' : uplDrift ? '#c09060' : '#49b3b3' }}>{shown.toLocaleString()}</span>;
+                    })(), { w: 88, right: true, bg: rowBg })}
+                    {td(isEd ? sel('mt5_trades_in_units') : yn(m.mt5_trades_in_units != null ? m.mt5_trades_in_units : rowCt ? false : (mt5Info?.calc_mode != null ? [2,6,7,8,10,12].includes(mt5Info.calc_mode) : undefined)), { w: 68, center: true, bg: rowBg })}
+                    {td(isEd ? sel('mt5_trades_in_lots')  : yn(m.mt5_trades_in_lots  != null ? m.mt5_trades_in_lots  : rowCt ? true : (mt5Info?.calc_mode != null ? [0,1,3,4,5,9,11].includes(mt5Info.calc_mode) : undefined)), { w: 68, center: true, bg: rowBg, style: { borderRight: '2px solid #4a4a5a' } })}
 
                     {/* STICKY CENTER */}
                     {td(<span style={{ color: '#fff', fontWeight: 600 }}>{m.mt5_symbol}</span>, { w: 120, sl: 449, style: { borderLeft: '2px solid #4a4a5a', backgroundColor: sBg } })}
-                    {td(isEd ? inp('volume_multiplier', true) : <span style={{ color: (m.volume_multiplier ?? 1) !== 1 ? '#c09030' : '#888' }}>×{m.volume_multiplier ?? 1}</span>, { w: 72, center: true, sl: 569, style: { backgroundColor: sBg } })}
+                    {td(isEd ? inp('volume_multiplier', true) : <span title={upl != null ? `First hedged at ${upl.toLocaleString()} units/lot` : rowCt ? 'Not used by a cTrader hedge since the last save' : undefined} style={{ color: (m.volume_multiplier ?? 1) !== 1 ? '#c09030' : '#888' }}>×{m.volume_multiplier ?? 1}</span>, { w: 72, center: true, sl: 569, style: { backgroundColor: sBg } })}
                     {td(isEd ? inp('price_multiplier', true) : <span style={{ color: (m.price_multiplier ?? 1) !== 1 ? '#c09030' : '#888' }}>×{m.price_multiplier ?? 1}</span>, { w: 72, center: true, sl: 641, style: { backgroundColor: sBg } })}
                     {td(
                       isEd
@@ -1174,7 +1222,7 @@ export function SymbolMappingPage() {
 
       {/* Modals */}
       {autoMapRows  && <AutoMapReview rows={autoMapRows} nodes={connNodes} lps={lps} defaultNodeId={nodeId} defaultLpId={lpId} onCommit={commitAutoMap} onClose={() => setAutoMapRows(null)} />}
-      {bulkOpen     && <BulkModal onUpload={handleBulk} onClose={() => setBulkOpen(false)} mt5Syms={mt5Syms} nodeName={connNodes.find(n => n.node_id === nodeId)?.node_name ?? ''} lpName={selectedLP?.lp_name ?? ''} mappings={mappings} />}
+      {bulkOpen     && <BulkModal onUpload={handleBulk} onClose={() => setBulkOpen(false)} mt5Syms={mt5Syms} nodeName={nodeLabel(selectedNode)} lpName={selectedLP?.lp_name ?? ''} mappings={mappings} />}
       {historyOpen  && <ImportLogModal onClose={() => setHistoryOpen(false)} />}
       {deleteTarget && <DeleteConfirm m={deleteTarget} onConfirm={handleDelete} onClose={() => setDeleteTarget(null)} />}
     </div>
