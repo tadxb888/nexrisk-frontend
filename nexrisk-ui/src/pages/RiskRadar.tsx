@@ -3564,24 +3564,6 @@ function LiqLegend({ lv }: { lv: LiqView }) {
   );
 }
 
-function LiqMapNotes({ lv }: { lv: LiqView }) {
-  // The group switch already says how many of each there are; only the test
-  // view needs saying out loud, so nobody mistakes it for the real league.
-  const notes: ReactNode[] = [];
-  if (lv.group === 'test') {
-    notes.push(<MapNote key="test" tone={C.blueSoft}>Test LPs (name ending in *): ranked and compared only with each other.</MapNote>);
-  }
-  if (notes.length === 0) return null;
-  return (
-    <div
-      style={{ position: 'absolute', left: 10, bottom: 30, maxWidth: 'calc(100% - 20px)', display: 'flex', flexDirection: 'column', gap: 6, zIndex: 2 }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {notes}
-    </div>
-  );
-}
-
 /** History figures for a period other than live, refreshed every minute. */
 function useLiqPeriod(period: LiqPeriod, symbol: string | null, enabled: boolean) {
   const [state, setState] = useState<{ key: string; data: LiquidityPayload | null; loading: boolean; error: string | null }>(
@@ -3953,9 +3935,6 @@ export function RiskRadarPage() {
                       ? `No ${liqGroup === 'test' ? 'test LP' : 'LP'} filled ${liqSymbol} in the ${periodText(lv.period)}.`
                       : `No ${liqGroup === 'test' ? 'test LPs' : 'real LPs'} in the ${periodText(lv.period)}.`}
                   </div>
-                )}
-                {layer === 'liquidity' && liqReady && (
-                  <LiqMapNotes lv={lv} />
                 )}
                 <div
                   style={{
