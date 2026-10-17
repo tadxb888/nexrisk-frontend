@@ -401,7 +401,7 @@ function MarkoutPanel({
   if (!loading && section && !mk) {
     return (
       <Panel title="Markout" subtitle="Price move after each client fill.">
-        <p className="px-5 py-4 m-0 text-text-secondary" style={{ fontSize: 12.5 }}>The backend does not offer markout settings.</p>
+        <p className="px-5 py-4 m-0 text-text-secondary" style={{ fontSize: 12.5 }}>Markout settings are not available.</p>
       </Panel>
     );
   }

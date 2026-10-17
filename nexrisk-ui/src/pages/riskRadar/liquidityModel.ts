@@ -476,7 +476,7 @@ export function buildLiqMap(dimensions: string[], lpIds: string[]): InstrumentMa
   const regions = layoutRegions(names);
   coming.forEach((d, i) => {
     const r = regions[dimensions.length + i];
-    if (r) r.pending = `${d.question} Coming with the next backend release.`;
+    if (r) r.pending = d.question;
   });
   const positions = new Map<string, MapPosition>();
   const regionOfKey = new Map<string, string>();

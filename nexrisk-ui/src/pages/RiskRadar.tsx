@@ -3391,8 +3391,7 @@ function LiqDetail({
         <Para key={l} color={r.level === 'LOW' ? C.soft : C.text}>{l}</Para>
       ))}
       <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2, lineHeight: 1.45 }}>
-        Its level is its worst dimension; two dimensions at High make it Critical. Whether it is getting worse
-        arrives with the next backend release, once 30 days of history are stored.
+        Its level is its worst dimension; two dimensions at High make it Critical.
       </div>
 
       {r.dims.map((d) => (
@@ -3918,7 +3917,7 @@ export function RiskRadarPage() {
                     <div style={{ fontSize: 12.5, color: C.soft, marginTop: 6, lineHeight: 1.5 }}>
                       {liqPeriod !== 'live' && liqHist.error
                         ? liqHist.error
-                        : 'One region per measure, one dot per LP. The map lights up when the service publishes its LP figures.'}
+                        : 'One region per measure, one dot per LP. The map fills in as soon as LP figures arrive.'}
                     </div>
                   </div>
                 )}
