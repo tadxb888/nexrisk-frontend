@@ -10,6 +10,7 @@
 //   PUT  /api/v1/settings/flow-toxicity/window     config.write
 //   PUT  /api/v1/settings/flow-toxicity/classes    config.write  (replaces the whole set)
 //   PUT  /api/v1/settings/flow-toxicity/bands      config.write
+//   PUT  /api/v1/settings/flow-toxicity/markout    config.write  (phase 2, API v1.1)
 //
 // Every PUT returns the whole section, which replaces the page's copy.
 // Changes apply live: the radar shows them in its next figures.
@@ -105,12 +106,14 @@ export function FlowToxicityPage() {
         <div className="flex flex-col gap-3.5">
           <WindowPanel section={section} loading={loading} onSaved={applied} />
           <BandsPanel section={section} loading={loading} onSaved={applied} />
+          <MarkoutPanel section={section} loading={loading} onSaved={applied} />
           <Panel title="How the radar uses these" subtitle="Per instrument, both platforms, both books.">
             <div className="px-5 py-3.5 flex flex-col gap-2 text-text-secondary leading-snug" style={{ fontSize: 13 }}>
               <p className="m-0"><span className="text-text-primary">Flow</span> — client deals in the window, in USD notional.</p>
               <p className="m-0"><span className="text-text-primary">Flagged</span> — an account whose latest classification is a toxic class below, with at least that class's confidence and, when set, that risk level.</p>
               <p className="m-0"><span className="text-text-primary">Colour</span> — the share of the instrument's B-Book flow from flagged accounts, against the bands. Toxic flow sent to the A-Book is hedged and does not colour.</p>
               <p className="m-0">Accounts not classified are never flagged; the radar shows their flow apart.</p>
+              <p className="m-0"><span className="text-text-primary">Markout</span> — for each fill, the price move the client's way 1, 5 and 30 s later. Positive costs the broker. The radar can colour by the B-Book markout at 5 s instead of the toxic share.</p>
             </div>
           </Panel>
         </div>
@@ -362,6 +365,106 @@ function BandsPanel({
         {field('Warning', w, setW, C.amber)}
         {field('High', h, setH, '#d08850')}
         {field('Critical', c, setC, C.red)}
+      </div>
+      <div className="px-5 py-3.5 flex justify-between items-center gap-3">
+        <FeedbackLines feedback={feedback} />
+        <SaveButton onClick={save} enabled={dirty && !saving && !loading} label={saving ? 'Saving…' : 'Save'} />
+      </div>
+    </Panel>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Markout (phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MarkoutPanel({
+  section, loading, onSaved,
+}: { section: FlowToxicitySettings | null; loading: boolean; onSaved: (r: FlowSettingsSaveResult) => void }) {
+  const mk = section?.markout;
+  const lim = section?.limits;
+  const [w, setW] = useState('');
+  const [h, setH] = useState('');
+  const [c, setC] = useState('');
+  const [fills, setFills] = useState('');
+  const [age, setAge] = useState('');
+  const [days, setDays] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback>(null);
+
+  useEffect(() => {
+    if (!mk) return;
+    setW(String(mk.markout_bands.warning_bps)); setH(String(mk.markout_bands.high_bps)); setC(String(mk.markout_bands.critical_bps));
+    setFills(String(mk.min_fills)); setAge(String(mk.max_quote_age_sec)); setDays(String(mk.ctrader_symbol_days));
+  }, [mk?.markout_bands.warning_bps, mk?.markout_bands.high_bps, mk?.markout_bands.critical_bps, mk?.min_fills, mk?.max_quote_age_sec, mk?.ctrader_symbol_days]);
+
+  if (!loading && section && !mk) {
+    return (
+      <Panel title="Markout" subtitle="Price move after each client fill.">
+        <p className="px-5 py-4 m-0 text-text-secondary" style={{ fontSize: 12.5 }}>The backend does not offer markout settings.</p>
+      </Panel>
+    );
+  }
+
+  const nw = Number(w), nh = Number(h), nc = Number(c), nf = Number(fills), na = Number(age), nd = Number(days);
+  const dirty = !!mk && (nw !== mk.markout_bands.warning_bps || nh !== mk.markout_bands.high_bps || nc !== mk.markout_bands.critical_bps
+    || nf !== mk.min_fills || na !== mk.max_quote_age_sec || nd !== mk.ctrader_symbol_days);
+
+  const intIn = (v: number, lo?: number, hi?: number) => Number.isInteger(v) && (lo === undefined || v >= lo) && (hi === undefined || v <= hi);
+
+  async function save() {
+    if (saving || !mk) return;
+    const problems: string[] = [];
+    if (![nw, nh, nc].every((x) => Number.isFinite(x)) || !(nw > 0 && nw < nh && nh <= nc)) problems.push('Levels must satisfy 0 < Warning < High ≤ Critical, in bps.');
+    if (!intIn(nf, lim?.min_fills_min, lim?.min_fills_max)) problems.push(`Minimum fills must be a whole number${lim?.min_fills_min !== undefined ? ` from ${lim.min_fills_min} to ${lim.min_fills_max}` : ''}.`);
+    if (!intIn(na, lim?.max_quote_age_sec_min, lim?.max_quote_age_sec_max)) problems.push(`Quote age must be a whole number of seconds${lim?.max_quote_age_sec_min !== undefined ? ` from ${lim.max_quote_age_sec_min} to ${lim.max_quote_age_sec_max}` : ''}.`);
+    if (!intIn(nd, lim?.ctrader_symbol_days_min, lim?.ctrader_symbol_days_max)) problems.push(`cTrader symbol days must be a whole number${lim?.ctrader_symbol_days_min !== undefined ? ` from ${lim.ctrader_symbol_days_min} to ${lim.ctrader_symbol_days_max}` : ''}.`);
+    if (problems.length) { setFeedback({ tone: 'error', lines: problems }); return; }
+    setSaving(true);
+    setFeedback(null);
+    const r = await flowApi.settings.setMarkout({
+      markout_bands: { warning_bps: nw, high_bps: nh, critical_bps: nc },
+      min_fills: nf, max_quote_age_sec: na, ctrader_symbol_days: nd,
+    });
+    setSaving(false);
+    setFeedback(feedbackOf(r));
+    onSaved(r);
+  }
+
+  const input = (label: string, value: string, setter: (v: string) => void, suffix: string, helper?: string, swatch?: string) => (
+    <div className="flex flex-col gap-1.5">
+      <span className="flex items-center gap-1.5 text-text-secondary font-medium" style={{ fontSize: 13 }}>
+        {swatch && <span style={{ width: 8, height: 8, borderRadius: 2, background: swatch, display: 'inline-block' }} />}
+        {label}
+      </span>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="text" inputMode="decimal" value={value} disabled={loading}
+          onChange={(e) => { setter(e.target.value); setFeedback(null); }}
+          aria-label={label}
+          className="rounded px-3 py-1.5 font-mono w-full text-text-primary border focus:outline-none focus:border-accent"
+          style={{ background: C.field, borderColor: C.fieldBorder, fontSize: 13, minHeight: 34 }}
+        />
+        <span className="text-text-secondary" style={{ fontSize: 12 }}>{suffix}</span>
+      </div>
+      {helper && <span className="text-text-secondary" style={{ fontSize: 11.5 }}>{helper}</span>}
+    </div>
+  );
+
+  return (
+    <Panel
+      title="Markout"
+      subtitle="How far the price moves the clients' way after their fills. The radar colours by the B-Book markout at 5 s when 'Colour by: Markout' is chosen."
+    >
+      <div className="px-5 pt-3.5 pb-1 grid grid-cols-3 gap-3">
+        {input('Warning', w, setW, 'bps', undefined, C.amber)}
+        {input('High', h, setH, 'bps', undefined, '#d08850')}
+        {input('Critical', c, setC, 'bps', undefined, C.red)}
+      </div>
+      <div className="px-5 pt-3 pb-1 grid grid-cols-3 gap-3">
+        {input('Minimum fills', fills, setFills, 'fills', 'Below it: "too few fills"')}
+        {input('Quote age', age, setAge, 's', 'Oldest quote that still counts')}
+        {input('cTrader symbols', days, setDays, 'days', 'Traded this recently: kept priced')}
       </div>
       <div className="px-5 py-3.5 flex justify-between items-center gap-3">
         <FeedbackLines feedback={feedback} />

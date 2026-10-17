@@ -1,36 +1,42 @@
 // ============================================
-// Risk Radar — Flow toxicity layer model (phase 1)
+// Risk Radar — Flow toxicity layer model (phases 1 and 2)
 //
 // Turns one radar.flow.symbols payload into what the page shows. Pure
 // functions only, like model.ts.
 //
-// THE MEASURE (docs/NexRisk_Risk_Radar_Flow_API.md v1.0):
-//   per instrument, over the backend's rolling window (default 60 min),
-//   client flow in USD notional, both platforms, and the part of it from
-//   accounts whose latest classification is toxic (the broker's
-//   `toxic_classes`, each with its own minimum confidence and, for news,
-//   a minimum risk-matrix level).
-//   Colour = b_toxic_share: toxic flow the broker keeps in the B-Book, as a
-//   share of its B-Book flow. Toxic flow sent to the A-Book is hedged.
+// TWO MEASURES (docs/NexRisk_Risk_Radar_Flow_API.md v1.1), one colour at a time:
+//
+//   Toxic share (phase 1, profile-based)
+//     per instrument, over the backend's rolling window, the share of its
+//     B-Book flow (USD notional, both platforms) from accounts whose latest
+//     classification is toxic: b_toxic_share against `bands` (%).
+//
+//   Markout (phase 2, price-based)
+//     for every client deal, how far the mid moved the client's way 1 / 5 /
+//     30 s after the fill; positive = against the broker. Volume-weighted in
+//     bps: b_markout_bps["5"] against `markout_bands` (bps). Below `min_fills`
+//     deals the backend sends null: "not enough fills", never a guess.
 //
 // NOTHING IS GUESSED:
-//   no_b_flow     — flow in the window, but none of it in the B-Book: the
-//                   share has no denominator, so no colour;
-//   unclassified  — accounts with no classification (or INSUFFICIENT_DATA /
-//                   UNKNOWN) are never flagged; their flow is shown apart so
-//                   "not classified" is never read as "clean".
+//   no_b_flow     — flow in the window, none of it in the B-Book: no share;
+//   thin          — markout mode, B-Book flow but fewer markouts than min_fills;
+//   unclassified  — accounts with no classification are never flagged; their
+//                   flow is shown apart so "not classified" never reads "clean".
 //
 // PLATFORMS:
-//   The colour is always measured on both platforms together: the payload
-//   gives the cTrader part of the flow, not of the B-Book flow. The MT5 /
-//   cTrader views show the instruments that platform traded, with that
-//   platform's own flow beside the whole figure.
+//   The colour is measured on both platforms together: the payload gives the
+//   cTrader part of the flow only. The MT5 / cTrader views show the
+//   instruments that platform traded, with its own flow beside the whole.
 // ============================================
 
-import type { FlowPayload, FlowSymbolRow } from '@/services/api';
+import type { FlowPayload, FlowSymbolRow, FlowHorizons } from '@/services/api';
 import { bandOf, heatOf, type Band, type Platform, type PlatformScope, type Thresholds } from './model';
 
-export type FlowState = 'rated' | 'no_b_flow';
+export type FlowMode = 'share' | 'markout';
+export type FlowState = 'rated' | 'no_b_flow' | 'thin';
+
+export const HORIZONS = ['1', '5', '30'] as const;
+export type Horizon = typeof HORIZONS[number];
 
 export interface FlowClassPart {
   cls: string;
@@ -41,18 +47,30 @@ export interface FlowClassPart {
   toxicClass: boolean;
 }
 
+/** Markout figures per horizon; null = not measured (or below min_fills for bps). */
+export interface Markout {
+  usd: Record<Horizon, number | null>;
+  bps: Record<Horizon, number | null>;
+  bUsd: Record<Horizon, number | null>;
+  bBps: Record<Horizon, number | null>;
+  flaggedUsd: Record<Horizon, number | null>;
+  fills: Record<Horizon, number>;
+}
+
 export interface FlowSymbol {
   symbol: string;
+  /** In the colour mode chosen. */
   state: FlowState;
   band: Band | null;
   heat: number;
-  /** 1-based rank by flagged B-Book flow among instruments that have some. */
+  /** 1-based rank, in the colour mode chosen, among instruments that have something against the broker. */
   rank: number | null;
 
   /** b_toxic_share, 0..1; null without B-Book flow. */
   bShare: number | null;
   /** toxic_share, all books, 0..1; null without flow. */
   share: number | null;
+  shareBand: Band | null;
 
   flowUsd: number;
   flaggedUsd: number;
@@ -68,15 +86,26 @@ export interface FlowSymbol {
   /** unclassified flow ÷ flow, 0..1; null without flow. */
   unclassifiedShare: number | null;
 
+  markout: Markout;
+  /** b_markout_bps["5"] in its band; null when not measured. */
+  markoutBand: Band | null;
+
   /** Per platform: all-books flow and its flagged part. */
   parts: Array<{ platform: Platform; flowUsd: number; flaggedUsd: number }>;
   byClass: FlowClassPart[];
 }
 
 export interface FlowView {
+  mode: FlowMode;
   asOf: number | null;
   windowSec: number | null;
+  /** Toxic-share bands (fractions). */
   thresholds: Thresholds;
+  /** Markout bands (bps). */
+  markoutThresholds: Thresholds;
+  minFills: number | null;
+  /** The payload carries markout figures (backend 1.1 and later). */
+  hasMarkout: boolean;
   /** The toxic set in force, as the backend echoes it. */
   toxicClasses: Array<{ cls: string; minConfidence: number | null; minRiskLevel: string | null }>;
   platforms: Platform[];
@@ -91,11 +120,14 @@ export interface FlowView {
     fills: number; flaggedFills: number; unpricedFills: number;
     accounts: number; flaggedAccounts: number; unclassifiedAccounts: number;
     unclassifiedUsd: number;
+    markout: Markout;
   };
+  /** Book band in the colour mode chosen. */
   bookBand: Band | null;
   bandCounts: Record<Band, number>;
   rated: number;
   noBFlow: number;
+  thin: number;
 }
 
 function num(v: unknown): number {
@@ -112,6 +144,10 @@ function parseTime(text: unknown): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/** The backend's documented defaults (placeholders until Ross sets them). */
+export const DEFAULT_FLOW_THRESHOLDS: Thresholds = { warning: 0.10, high: 0.25, critical: 0.40 };
+export const DEFAULT_MARKOUT_THRESHOLDS: Thresholds = { warning: 0.5, high: 1, critical: 2 };
+
 export function flowThresholds(payload: FlowPayload | null): Thresholds {
   const b = payload?.bands;
   if (!b) return DEFAULT_FLOW_THRESHOLDS;
@@ -119,9 +155,12 @@ export function flowThresholds(payload: FlowPayload | null): Thresholds {
   return w > 0 && w < h && h <= c ? { warning: w, high: h, critical: c } : DEFAULT_FLOW_THRESHOLDS;
 }
 
-/** The backend's documented defaults (placeholders until Ross sets them). */
-export const DEFAULT_FLOW_THRESHOLDS: Thresholds = { warning: 0.10, high: 0.25, critical: 0.40 };
-
+export function markoutThresholds(payload: FlowPayload | null): Thresholds {
+  const b = payload?.markout_bands;
+  if (!b) return DEFAULT_MARKOUT_THRESHOLDS;
+  const w = num(b.warning_bps), h = num(b.high_bps), c = num(b.critical_bps);
+  return w > 0 && w < h && h <= c ? { warning: w, high: h, critical: c } : DEFAULT_MARKOUT_THRESHOLDS;
+}
 
 function toPlatform(v: unknown): Platform | null {
   if (v === 'MT5') return 'MT5';
@@ -129,8 +168,33 @@ function toPlatform(v: unknown): Platform | null {
   return null;
 }
 
-function rowOf(r: FlowSymbolRow, t: Thresholds, toxic: Set<string>): FlowSymbol {
+function horizonsOpt(h: FlowHorizons | null | undefined): Record<Horizon, number | null> {
+  return { '1': optNum(h?.['1']), '5': optNum(h?.['5']), '30': optNum(h?.['30']) };
+}
+
+function horizonsNum(h: FlowHorizons | null | undefined): Record<Horizon, number> {
+  return { '1': num(h?.['1']), '5': num(h?.['5']), '30': num(h?.['30']) };
+}
+
+function markoutOf(r: Partial<FlowSymbolRow> | null | undefined): Markout {
+  return {
+    usd: horizonsOpt(r?.markout_usd),
+    bps: horizonsOpt(r?.markout_bps),
+    bUsd: horizonsOpt(r?.b_markout_usd),
+    bBps: horizonsOpt(r?.b_markout_bps),
+    flaggedUsd: horizonsOpt(r?.flagged_markout_usd),
+    fills: horizonsNum(r?.markout_fills),
+  };
+}
+
+/** A markout is a reading only above 0: at or below 0 the price moved the broker's way. */
+function markoutLevel(bps: number | null): number {
+  return bps !== null && bps > 0 ? bps : 0;
+}
+
+function rowOf(r: FlowSymbolRow, mode: FlowMode, t: Thresholds, mt: Thresholds, toxic: Set<string>): FlowSymbol {
   const flowUsd = num(r.flow_usd);
+  const bFlowUsd = num(r.b_flow_usd);
   const bShare = optNum(r.b_toxic_share);
   const ctFlow = num(r.flow_usd_ctrader);
   const ctFlagged = num(r.flagged_flow_usd_ctrader);
@@ -143,29 +207,35 @@ function rowOf(r: FlowSymbolRow, t: Thresholds, toxic: Set<string>): FlowSymbol 
     .map(([cls, v]) => ({ cls, flowUsd: num(v?.flow_usd), fills: num(v?.fills), accounts: num(v?.accounts), toxicClass: toxic.has(cls) }))
     .sort((a, b) => b.flowUsd - a.flowUsd || a.cls.localeCompare(b.cls));
 
+  const markout = markoutOf(r);
+  const mBps = markout.bBps['5'];
+  const markoutBand = mBps === null ? null : bandOf(markoutLevel(mBps), mt);
+  const shareBand = bShare === null ? null : bandOf(bShare, t);
+
+  let state: FlowState;
+  let band: Band | null;
+  let heat: number;
+  if (mode === 'share') {
+    state = bShare === null ? 'no_b_flow' : 'rated';
+    band = shareBand;
+    heat = bShare === null ? 0 : heatOf(bShare, t);
+  } else {
+    state = bFlowUsd <= 0 ? 'no_b_flow' : mBps === null ? 'thin' : 'rated';
+    band = state === 'rated' ? markoutBand : null;
+    heat = state === 'rated' ? heatOf(markoutLevel(mBps), mt) : 0;
+  }
+
   const unclassifiedUsd = num(r.unclassified_flow_usd);
   return {
-    symbol: r.symbol,
-    state: bShare === null ? 'no_b_flow' : 'rated',
-    band: bShare === null ? null : bandOf(bShare, t),
-    heat: bShare === null ? 0 : heatOf(bShare, t),
-    rank: null,
-    bShare,
-    share: optNum(r.toxic_share),
-    flowUsd,
-    flaggedUsd,
-    bFlowUsd: num(r.b_flow_usd),
-    bFlaggedUsd: num(r.b_flagged_flow_usd),
-    fills: num(r.fills),
-    flaggedFills: num(r.flagged_fills),
-    unpricedFills: num(r.unpriced_fills),
-    accounts: num(r.accounts),
-    flaggedAccounts: num(r.flagged_accounts),
-    unclassifiedAccounts: num(r.unclassified_accounts),
-    unclassifiedUsd,
+    symbol: r.symbol, state, band, heat, rank: null,
+    bShare, share: optNum(r.toxic_share), shareBand,
+    flowUsd, flaggedUsd, bFlowUsd, bFlaggedUsd: num(r.b_flagged_flow_usd),
+    fills: num(r.fills), flaggedFills: num(r.flagged_fills), unpricedFills: num(r.unpriced_fills),
+    accounts: num(r.accounts), flaggedAccounts: num(r.flagged_accounts),
+    unclassifiedAccounts: num(r.unclassified_accounts), unclassifiedUsd,
     unclassifiedShare: flowUsd > 0 ? unclassifiedUsd / flowUsd : null,
-    parts,
-    byClass,
+    markout, markoutBand,
+    parts, byClass,
   };
 }
 
@@ -173,39 +243,54 @@ function inScope(s: FlowSymbol, scope: PlatformScope): boolean {
   return scope === 'ALL' || s.parts.some((p) => p.platform === scope);
 }
 
-export function buildFlowView(payload: FlowPayload | null, scope: PlatformScope): FlowView {
+/** What ranks an instrument in the mode chosen: toxic B-Book flow, or B-Book markout against the broker at 5 s. */
+export function rankValue(s: FlowSymbol, mode: FlowMode): number {
+  if (mode === 'share') return s.bFlaggedUsd;
+  return s.state === 'rated' ? Math.max(0, s.markout.bUsd['5'] ?? 0) : 0;
+}
+
+export function buildFlowView(payload: FlowPayload | null, scope: PlatformScope, mode: FlowMode = 'share'): FlowView {
   const t = flowThresholds(payload);
+  const mt = markoutThresholds(payload);
   const toxicEntries = Object.entries(payload?.toxic_classes ?? {});
   const toxic = new Set(toxicEntries.map(([k]) => k));
   const all = (payload?.by_symbol ?? [])
     .filter((r) => r && typeof r.symbol === 'string' && r.symbol)
-    .map((r) => rowOf(r, t, toxic));
+    .map((r) => rowOf(r, mode, t, mt, toxic));
   const symbols = all.filter((s) => inScope(s, scope));
 
-  // Most flagged B-Book flow first, then instruments with B-Book flow and
-  // nothing flagged (by flow), then those with no B-Book flow.
+  // Most against the broker first, then the rest with a reading (by flow),
+  // then the thin ones, then those with no B-Book flow.
+  const order: Record<FlowState, number> = { rated: 0, thin: 1, no_b_flow: 2 };
   symbols.sort((a, b) =>
-    Number(b.bFlaggedUsd > 0) - Number(a.bFlaggedUsd > 0) ||
-    b.bFlaggedUsd - a.bFlaggedUsd ||
-    Number(a.state === 'no_b_flow') - Number(b.state === 'no_b_flow') ||
+    Number(rankValue(b, mode) > 0) - Number(rankValue(a, mode) > 0) ||
+    rankValue(b, mode) - rankValue(a, mode) ||
+    order[a.state] - order[b.state] ||
     b.flowUsd - a.flowUsd ||
     a.symbol.localeCompare(b.symbol),
   );
 
   const bandCounts: Record<Band, number> = { low: 0, warning: 0, high: 0, critical: 0 };
-  let rank = 0, rated = 0, noBFlow = 0;
+  let rank = 0, rated = 0, noBFlow = 0, thin = 0;
   for (const s of symbols) {
-    if (s.bFlaggedUsd > 0) s.rank = ++rank;
+    if (rankValue(s, mode) > 0) s.rank = ++rank;
     if (s.band) bandCounts[s.band]++;
-    if (s.state === 'rated') rated++; else noBFlow++;
+    if (s.state === 'rated') rated++; else if (s.state === 'thin') thin++; else noBFlow++;
   }
 
   const tt = payload?.totals;
   const bShare = optNum(tt?.b_toxic_share);
+  const totalMarkout = markoutOf(tt);
+  const bookMk = totalMarkout.bBps['5'];
+  const hasMarkout = !!payload && (payload.markout_bands !== undefined || (!!tt && 'markout_fills' in tt));
   return {
+    mode,
     asOf: parseTime(payload?.as_of),
     windowSec: optNum(payload?.window_sec),
     thresholds: t,
+    markoutThresholds: mt,
+    minFills: optNum(payload?.min_fills),
+    hasMarkout,
     toxicClasses: toxicEntries.map(([cls, v]) => ({
       cls,
       minConfidence: optNum(v?.min_confidence),
@@ -222,11 +307,15 @@ export function buildFlowView(payload: FlowPayload | null, scope: PlatformScope)
       fills: num(tt?.fills), flaggedFills: num(tt?.flagged_fills), unpricedFills: num(tt?.unpriced_fills),
       accounts: num(tt?.accounts), flaggedAccounts: num(tt?.flagged_accounts),
       unclassifiedAccounts: num(tt?.unclassified_accounts), unclassifiedUsd: num(tt?.unclassified_flow_usd),
+      markout: totalMarkout,
     },
-    bookBand: bShare === null ? null : bandOf(bShare, t),
+    bookBand: mode === 'share'
+      ? (bShare === null ? null : bandOf(bShare, t))
+      : (bookMk === null ? null : bandOf(markoutLevel(bookMk), mt)),
     bandCounts,
     rated,
     noBFlow,
+    thin,
   };
 }
 
@@ -235,10 +324,29 @@ export function bookShareOf(payload: FlowPayload): number {
   return optNum(payload.totals?.b_toxic_share) ?? 0;
 }
 
+/** Whole-book B-Book markout at 5 s, bps; 0 when not measured. */
+export function bookMarkoutOf(payload: FlowPayload): number {
+  return optNum(payload.totals?.b_markout_bps?.['5']) ?? 0;
+}
+
 /** One instrument's B-Book toxic share in a payload; 0 when absent. */
 export function shareOf(payload: FlowPayload, symbol: string): number {
   const r = payload.by_symbol?.find((x) => x.symbol === symbol);
   return optNum(r?.b_toxic_share) ?? 0;
+}
+
+/** One instrument's B-Book markout at 5 s, bps; 0 when absent. */
+export function markoutOfSymbol(payload: FlowPayload, symbol: string): number {
+  const r = payload.by_symbol?.find((x) => x.symbol === symbol);
+  return optNum(r?.b_markout_bps?.['5']) ?? 0;
+}
+
+/** "+0.42 bps" / "−0.10 bps" / "—". */
+export function fmtBps(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  const sign = v > 0 ? '+' : v < 0 ? '−' : '';
+  const a = Math.abs(v);
+  return `${sign}${a < 10 ? a.toFixed(2) : a.toFixed(1)} bps`;
 }
 
 /** "60 min", "4 h", "24 h". */

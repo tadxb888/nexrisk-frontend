@@ -3962,6 +3962,25 @@ export interface FlowToxicClass {
 
 export interface FlowBands { warning_pct: number; high_pct: number; critical_pct: number }
 
+/** Markout bands, bps of the 5 s B-Book markout (phase 2). */
+export interface FlowMarkoutBands { warning_bps: number; high_bps: number; critical_bps: number }
+
+/** Per horizon, seconds after the fill: "1", "5", "30". null = not measured. */
+export type FlowHorizons = Partial<Record<'1' | '5' | '30', number | null>>;
+
+/** Phase 2 markout figures, on every row and in the totals (API v1.1 §5).
+ *  Positive = the price moved the client's way after the fill = against the broker. */
+export interface FlowMarkoutFigures {
+  markout_usd?: FlowHorizons;
+  /** Volume-weighted; null below min_fills deals. */
+  markout_bps?: FlowHorizons;
+  b_markout_usd?: FlowHorizons;
+  /** The map colours on b_markout_bps["5"]. */
+  b_markout_bps?: FlowHorizons;
+  flagged_markout_usd?: FlowHorizons;
+  markout_fills?: FlowHorizons;
+}
+
 export interface FlowFigures {
   flow_usd: number;
   flagged_flow_usd: number;
@@ -3983,7 +4002,7 @@ export interface FlowFigures {
   flagged_flow_usd_ctrader: number;
 }
 
-export interface FlowSymbolRow extends FlowFigures {
+export interface FlowSymbolRow extends FlowFigures, FlowMarkoutFigures {
   symbol: string;
   /** Classified accounts only; Σ flow_usd + unclassified_flow_usd = flow_usd. */
   by_class: Record<string, { flow_usd: number; fills: number; accounts: number }>;
@@ -3995,7 +4014,10 @@ export interface FlowPayload {
   toxic_classes: Record<string, FlowToxicClass>;
   bands: FlowBands;
   platforms: string[];
-  totals: FlowFigures;
+  totals: FlowFigures & FlowMarkoutFigures;
+  /** Phase 2 settings in force. */
+  markout_bands?: FlowMarkoutBands;
+  min_fills?: number;
   /** Largest flow first; symbols with no deal in the window are left out. */
   by_symbol: FlowSymbolRow[];
 }
@@ -4022,6 +4044,13 @@ export interface FlowAccountRow {
   realized_unpriced_deals: number;
   median_hold_sec: number | null;
   last_fill: string | null;
+  /** Phase 2, per horizon; no min_fills on accounts. */
+  markout_usd?: FlowHorizons;
+  markout_bps?: FlowHorizons;
+  markout_fills?: FlowHorizons;
+  /** From the fill price: includes the spread the client paid. */
+  effective_markout_usd?: FlowHorizons;
+  effective_markout_bps?: FlowHorizons;
 }
 
 export interface FlowAccountsData {
@@ -4036,9 +4065,26 @@ export interface FlowToxicitySettings {
   window_sec: number;
   toxic_classes: Record<string, FlowToxicClass>;
   bands: FlowBands;
+  /** Phase 2 (API v1.1). */
+  markout?: FlowMarkoutSettings;
   classes_available: string[];
   risk_levels_available: string[];
-  limits: { window_sec_min: number; window_sec_max: number };
+  limits: {
+    window_sec_min: number; window_sec_max: number;
+    min_fills_min?: number; min_fills_max?: number;
+    max_quote_age_sec_min?: number; max_quote_age_sec_max?: number;
+    ctrader_symbol_days_min?: number; ctrader_symbol_days_max?: number;
+  };
+}
+
+export interface FlowMarkoutSettings {
+  markout_bands: FlowMarkoutBands;
+  /** Below this many markouts at a horizon, markout_bps is null. */
+  min_fills: number;
+  /** Oldest quote that still counts as the price at a moment. */
+  max_quote_age_sec: number;
+  /** cTrader symbols traded in the last this many days stay subscribed for quotes. */
+  ctrader_symbol_days: number;
 }
 
 export type FlowSettingsSaveResult =
@@ -4097,6 +4143,8 @@ export const flowApi = {
     setWindow: (window_sec: number) => putFlowSettings('window', { window_sec }),
     setClasses: (toxic_classes: Record<string, FlowToxicClass>) => putFlowSettings('classes', { toxic_classes }),
     setBands: (bands: FlowBands) => putFlowSettings('bands', bands),
+    /** Any subset of the markout settings. */
+    setMarkout: (m: Partial<FlowMarkoutSettings>) => putFlowSettings('markout', m),
   },
 };
 

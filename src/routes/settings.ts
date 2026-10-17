@@ -1449,6 +1449,15 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  /** PUT /api/v1/settings/flow-toxicity/markout — any of { markout_bands, min_fills, max_quote_age_sec, ctrader_symbol_days } */
+  fastify.put(
+    '/settings/flow-toxicity/markout',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/flow-toxicity/markout', request.body, reply, bearerFromSession(request));
+    }
+  );
+
   /**
    * GET /api/v1/settings/fixbridge/status  (§ G4 — live)
    * Queries the bridge over its command channel + core service client view.

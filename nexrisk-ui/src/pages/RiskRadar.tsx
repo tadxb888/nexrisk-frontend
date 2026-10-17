@@ -73,13 +73,20 @@ import { usePermission } from '@/stores/usePermission';
 import { buildMap, groupsFromTree, hashSymbol, type InstrumentMap } from './riskRadar/instrumentMap';
 import { RadarIcon } from './riskRadar/RadarIcon';
 import {
+  HORIZONS,
   buildFlowView,
+  bookMarkoutOf,
   bookShareOf,
   classLabel,
+  fmtBps,
   fmtWindow,
+  markoutOfSymbol,
+  rankValue,
   shareOf,
+  type FlowMode,
   type FlowSymbol,
   type FlowView,
+  type Markout,
 } from './riskRadar/flowModel';
 import { HeatRenderer, rampGradientCss, type HeatBlob } from './riskRadar/heatField';
 import {
@@ -151,6 +158,20 @@ function loadScope(): PlatformScope {
     if (v === 'ALL' || v === 'MT5' || v === 'CTRADER') return v;
   } catch { /* storage unavailable: default */ }
   return 'ALL';
+}
+
+const FLOW_MODE_KEY = 'taiga.riskRadar.flowColour';
+
+function loadFlowMode(): FlowMode {
+  try {
+    const v = window.localStorage.getItem(FLOW_MODE_KEY);
+    if (v === 'share' || v === 'markout') return v;
+  } catch { /* storage unavailable: default */ }
+  return 'share';
+}
+
+function saveFlowMode(mode: FlowMode) {
+  try { window.localStorage.setItem(FLOW_MODE_KEY, mode); } catch { /* not remembered */ }
 }
 
 function saveScope(scope: PlatformScope) {
@@ -1760,26 +1781,41 @@ function exposureItems(view: RadarView): MapItem[] {
 function flowItems(fv: FlowView, others: string[]): MapItem[] {
   const strong = (t: string) => <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{t}</span>;
   const win = fmtWindow(fv.windowSec);
+  const mk = fv.mode === 'markout';
   const out: MapItem[] = fv.symbols.map((s) => {
-    const lit = s.state === 'rated' && s.bFlaggedUsd > 0;
-    const hover: ReactNode = s.state === 'no_b_flow'
-      ? <>No B-Book flow in the last {win}: all {strong(fmtUsd(s.flowUsd))} went to the A-Book. Toxic share, all books: {strong(fmtShare(s.share))}.</>
-      : lit
+    const m5 = s.markout.bBps['5'];
+    const lit = mk ? s.state === 'rated' && (m5 ?? 0) > 0 : s.state === 'rated' && s.bFlaggedUsd > 0;
+    let hover: ReactNode;
+    let aria: string;
+    if (s.state === 'no_b_flow') {
+      hover = <>No B-Book flow in the last {win}: all {strong(fmtUsd(s.flowUsd))} went to the A-Book.</>;
+      aria = `${s.symbol}: no B-Book flow`;
+    } else if (mk && s.state === 'thin') {
+      hover = <>Not enough fills for a markout: {strong(String(s.markout.fills['5']))} B-Book and A-Book deals with a price at 5 s{fv.minFills !== null ? `, ${fv.minFills} needed` : ''}.</>;
+      aria = `${s.symbol}: not enough fills for a markout`;
+    } else if (mk) {
+      hover = lit
+        ? <>B-Book markout at 5 s: {strong(fmtBps(m5))}, {strong(fmtUsd(s.markout.bUsd['5']))} against the broker over {s.markout.fills['5']} fills.</>
+        : <>B-Book markout at 5 s: {strong(fmtBps(m5))}: the price moved the broker's way after the fills.</>;
+      aria = `${s.symbol}: markout ${fmtBps(m5)} at 5 s`;
+    } else {
+      hover = lit
         ? <>{strong(fmtShare(s.bShare))} of B-Book flow is toxic: {strong(fmtUsd(s.bFlaggedUsd))} of {fmtUsd(s.bFlowUsd)}, {s.flaggedAccounts} flagged account{s.flaggedAccounts === 1 ? '' : 's'}.</>
         : <>No toxic flow: {strong(fmtUsd(s.bFlowUsd))} B-Book flow, none from flagged accounts{s.unclassifiedUsd > 0 ? `; ${fmtUsd(s.unclassifiedUsd)} from accounts not classified` : ''}.</>;
+      aria = lit
+        ? `${s.symbol}: ${s.band ? BAND_BY_ID[s.band].label : ''} ${fmtShare(s.bShare)} toxic B-Book flow, ${fmtUsd(s.bFlaggedUsd)}`
+        : `${s.symbol}: no toxic flow`;
+    }
     return {
       symbol: s.symbol,
       heat: s.heat,
-      marker: s.state === 'no_b_flow' ? 'ring' : lit ? 'dot' : 'dim',
+      marker: s.state === 'rated' ? (lit ? 'dot' : 'dim') : 'ring',
       color: s.band ? BAND_BY_ID[s.band].color : C.blueSoft,
       band: lit ? s.band : null,
       lit,
       critical: lit && s.band === 'critical',
-      label: lit || s.state === 'no_b_flow' ? 'normal' : 'none',
-      aria: s.state === 'no_b_flow'
-        ? `${s.symbol}: no B-Book flow`
-        : lit ? `${s.symbol}: ${s.band ? BAND_BY_ID[s.band].label : ''} ${fmtShare(s.bShare)} toxic B-Book flow, ${fmtUsd(s.bFlaggedUsd)}`
-        : `${s.symbol}: no toxic flow`,
+      label: lit || s.state !== 'rated' ? 'normal' : 'none',
+      aria,
       hover,
     };
   });
@@ -1832,33 +1868,54 @@ function toxicSetText(fv: FlowView): string {
 }
 
 function FlowCards({ fv, upto, scope }: { fv: FlowView; upto: number; scope: PlatformScope }) {
-  const shares = flowHistory.slice(0, upto + 1).map((s) => bookShareOf(s.payload));
-  const trend = trendOf(flowHistory, upto, (s) => bookShareOf(s.payload));
+  const mk = fv.mode === 'markout';
+  const pick = (s: FlowSample) => (mk ? bookMarkoutOf(s.payload) : bookShareOf(s.payload));
+  const values = flowHistory.slice(0, upto + 1).map(pick);
+  const trend = mk ? null : trendOf(flowHistory, upto, pick);
   const sparkColor = trend?.dir === 'building' ? C.up : trend?.dir === 'easing' ? C.down : C.blueSoft;
   const t = fv.totals;
   const top = fv.symbols.find((s) => s.rank === 1) ?? null;
   const win = fmtWindow(fv.windowSec);
   const bookDef = fv.bookBand ? BAND_BY_ID[fv.bookBand] : null;
   const whole = scope === 'ALL' ? '' : ' · both platforms';
+  const m = t.markout;
 
   return (
     <div style={{ display: 'flex', gap: 12 }}>
-      <Card
-        accent={bookDef?.color ?? C.blue}
-        label={`Toxic share of B-Book flow${whole}`}
-        aside={<Sparkline values={shares} width={132} height={42} color={sparkColor} />}
-      >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <CardValue>{fmtShare(t.bShare, 1)}</CardValue>
-          {fv.bookBand && <BandBadge band={fv.bookBand} />}
-          {trend && t.bShare !== null && <TrendChip trend={trend} />}
-        </div>
-        <CardNote>
-          {t.bShare === null
-            ? `No B-Book flow in the last ${win}`
-            : `${fmtUsd(t.bFlaggedUsd)} toxic of ${fmtUsd(t.bFlowUsd)} B-Book flow · last ${win}`}
-        </CardNote>
-      </Card>
+      {mk ? (
+        <Card
+          accent={bookDef?.color ?? C.blue}
+          label={`B-Book markout at 5 s${whole}`}
+          aside={<Sparkline values={values} width={132} height={42} color={sparkColor} />}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <CardValue>{fmtBps(m.bBps['5'])}</CardValue>
+            {fv.bookBand && <BandBadge band={fv.bookBand} />}
+          </div>
+          <CardNote>
+            {m.bBps['5'] === null
+              ? `Not enough fills: ${m.fills['5']} with a markout${fv.minFills !== null ? `, ${fv.minFills} needed` : ''} · last ${win}`
+              : `${fmtUsd(m.bUsd['5'])} against the broker · 1 s ${fmtBps(m.bBps['1'])} · 30 s ${fmtBps(m.bBps['30'])}`}
+          </CardNote>
+        </Card>
+      ) : (
+        <Card
+          accent={bookDef?.color ?? C.blue}
+          label={`Toxic share of B-Book flow${whole}`}
+          aside={<Sparkline values={values} width={132} height={42} color={sparkColor} />}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <CardValue>{fmtShare(t.bShare, 1)}</CardValue>
+            {fv.bookBand && <BandBadge band={fv.bookBand} />}
+            {trend && t.bShare !== null && <TrendChip trend={trend} />}
+          </div>
+          <CardNote>
+            {t.bShare === null
+              ? `No B-Book flow in the last ${win}`
+              : `${fmtUsd(t.bFlaggedUsd)} toxic of ${fmtUsd(t.bFlowUsd)} B-Book flow · last ${win}`}
+          </CardNote>
+        </Card>
+      )}
 
       <Card accent={t.flaggedAccounts > 0 ? '#ff8a14' : C.blue} label={`Flagged accounts${whole}`} aside={<FlowSettingsLink />}>
         <CardValue>
@@ -1872,9 +1929,9 @@ function FlowCards({ fv, upto, scope }: { fv: FlowView; upto: number; scope: Pla
         </CardNote>
       </Card>
 
-      <Card accent={top?.band ? BAND_BY_ID[top.band].color : C.grey} label="Most toxic B-Book flow">
+      <Card accent={top?.band ? BAND_BY_ID[top.band].color : C.grey} label={mk ? 'Largest markout against the broker' : 'Most toxic B-Book flow'}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <CardValue>{top ? fmtUsd(top.bFlaggedUsd) : '—'}</CardValue>
+          <CardValue>{top ? fmtUsd(rankValue(top, fv.mode)) : '—'}</CardValue>
           {top && <span className="font-mono" style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{top.symbol}</span>}
           {top?.band && <BandBadge band={top.band} />}
         </div>
@@ -1886,15 +1943,52 @@ function FlowCards({ fv, upto, scope }: { fv: FlowView; upto: number; scope: Pla
               <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{fv.bandCounts[b.id]}</span>
             </span>
           ))}
-          {fv.noBFlow > 0 && (
+          {(mk ? fv.thin : fv.noBFlow) > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${C.grey}` }} />
-              No B-Book flow
-              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{fv.noBFlow}</span>
+              {mk ? 'Too few fills' : 'No B-Book flow'}
+              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{mk ? fv.thin : fv.noBFlow}</span>
             </span>
           )}
         </div>
       </Card>
+    </div>
+  );
+}
+
+/** "Colour by" switch of the Flow toxicity layer. */
+function FlowModeSwitch({ mode, onChange, markoutAvailable }: { mode: FlowMode; onChange: (m: FlowMode) => void; markoutAvailable: boolean }) {
+  const opts: Array<{ id: FlowMode; label: string }> = [{ id: 'share', label: 'Toxic share' }, { id: 'markout', label: 'Markout 5 s' }];
+  return (
+    <div role="radiogroup" aria-label="Colour the flow layer by" style={{ display: 'flex', alignItems: 'center' }}>
+      <span style={{ fontSize: 12, color: C.soft, marginRight: 8 }}>Colour by</span>
+      {opts.map((o, i) => {
+        const on = o.id === mode;
+        const disabled = o.id === 'markout' && !markoutAvailable;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            disabled={disabled}
+            title={disabled ? 'The flow feed carries no markout figures' : undefined}
+            className="rr-btn"
+            onClick={() => onChange(o.id)}
+            style={{
+              padding: '6px 12px', cursor: disabled ? 'default' : 'pointer', fontSize: 13, fontWeight: 600,
+              background: on ? '#ffffff' : '#0f1620',
+              color: on ? '#05080d' : disabled ? C.grey : C.soft,
+              border: `1px solid ${on ? '#ffffff' : C.line}`,
+              marginLeft: i ? -1 : 0,
+              borderRadius: i === 0 ? '5px 0 0 5px' : '0 5px 5px 0',
+              position: 'relative', zIndex: on ? 1 : 0,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1911,10 +2005,12 @@ function flowEmptyText(fv: FlowView, scope: PlatformScope): string {
 function FlowList({
   fv, scope, scopeText, onSelect,
 }: { fv: FlowView; scope: PlatformScope; scopeText: string; onSelect: (symbol: string) => void }) {
-  const toxic = fv.symbols.filter((s) => s.rank !== null);
+  const mk = fv.mode === 'markout';
+  const ranked = fv.symbols.filter((s) => s.rank !== null);
   const clean = fv.symbols.filter((s) => s.rank === null && s.state === 'rated');
+  const thin = fv.symbols.filter((s) => s.state === 'thin');
   const noB = fv.symbols.filter((s) => s.state === 'no_b_flow');
-  const topUsd = toxic.length ? toxic[0].bFlaggedUsd : 0;
+  const topUsd = ranked.length ? rankValue(ranked[0], fv.mode) : 0;
   const rowProps = (symbol: string) => ({
     className: 'rr-row',
     role: 'button' as const,
@@ -1924,18 +2020,28 @@ function FlowList({
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(symbol); }
     },
   });
+  const names = (list: FlowSymbol[]) => list.map((s, i) => (
+    <span key={s.symbol}>
+      {i > 0 && ', '}
+      <span {...rowProps(s.symbol)} className="rr-row font-mono" style={{ color: C.soft }}>{s.symbol}</span>
+    </span>
+  ));
 
   return (
     <div style={{ padding: '14px 0 10px' }}>
       <div style={{ padding: '0 16px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>Toxic flow by instrument</div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{mk ? 'Markout by instrument' : 'Toxic flow by instrument'}</div>
         <div style={{ fontSize: 12, color: C.faint, marginTop: 2 }}>
-          B-Book flow from flagged accounts · last {fmtWindow(fv.windowSec)} · {scopeText}
-          {scope !== 'ALL' ? ' · shares on both platforms' : ''}. Largest first; select one for detail.
+          {mk
+            ? <>How far the price moved the clients' way 5 s after their B-Book fills · last {fmtWindow(fv.windowSec)} · {scopeText}</>
+            : <>B-Book flow from flagged accounts · last {fmtWindow(fv.windowSec)} · {scopeText}</>}
+          {scope !== 'ALL' ? ' · measured on both platforms' : ''}. Largest first; select one for detail.
         </div>
-        <div style={{ fontSize: 11.5, color: C.soft, marginTop: 6, lineHeight: 1.45 }}>
-          <span style={{ color: C.faint }}>Toxic: </span>{toxicSetText(fv)}
-        </div>
+        {!mk && (
+          <div style={{ fontSize: 11.5, color: C.soft, marginTop: 6, lineHeight: 1.45 }}>
+            <span style={{ color: C.faint }}>Toxic: </span>{toxicSetText(fv)}
+          </div>
+        )}
       </div>
 
       {fv.symbols.length === 0 && (
@@ -1944,20 +2050,21 @@ function FlowList({
         </div>
       )}
 
-      {toxic.length > 0 && (
+      {ranked.length > 0 && (
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
           <thead>
             <tr style={{ fontSize: 11, color: C.faint, textAlign: 'left' }}>
               <th style={{ padding: '4px 4px 4px 16px', fontWeight: 500, width: 26 }}>#</th>
               <th style={{ padding: 4, fontWeight: 500 }}>Instrument</th>
-              <th style={{ padding: 4, fontWeight: 500, textAlign: 'right' }}>Share</th>
-              <th style={{ padding: '4px 16px 4px 4px', fontWeight: 500, textAlign: 'right' }}>Toxic flow</th>
+              <th style={{ padding: 4, fontWeight: 500, textAlign: 'right' }}>{mk ? '5 s' : 'Share'}</th>
+              <th style={{ padding: '4px 16px 4px 4px', fontWeight: 500, textAlign: 'right' }}>{mk ? 'Against broker' : 'Toxic flow'}</th>
             </tr>
           </thead>
           <tbody>
-            {toxic.map((s) => {
+            {ranked.map((s) => {
               const def = s.band ? BAND_BY_ID[s.band] : null;
               const bar = def?.color ?? C.blueSoft;
+              const v = rankValue(s, fv.mode);
               return (
                 <tr key={s.symbol} {...rowProps(s.symbol)} style={{ borderTop: `1px solid ${C.line}` }}>
                   <td className="font-mono" style={{ padding: '6px 4px 6px 16px', fontSize: 12, color: C.faint }}>{s.rank}</td>
@@ -1967,15 +2074,15 @@ function FlowList({
                       <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.symbol}</span>
                     </div>
                     <div style={{ height: 3, background: '#141d28', borderRadius: 2, marginTop: 4 }}>
-                      <div style={{ height: 3, borderRadius: 2, background: bar, width: `${topUsd > 0 ? Math.max(3, (s.bFlaggedUsd / topUsd) * 100) : 0}%` }} />
+                      <div style={{ height: 3, borderRadius: 2, background: bar, width: `${topUsd > 0 ? Math.max(3, (v / topUsd) * 100) : 0}%` }} />
                     </div>
                   </td>
                   <td className="font-mono" style={{ padding: '6px 4px', fontSize: 13, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {fmtShare(s.bShare)}
+                    {mk ? fmtBps(s.markout.bBps['5']) : fmtShare(s.bShare)}
                     <span style={{ display: 'block', fontSize: 10.5, color: C.faint, fontFamily: 'inherit' }}>{def?.label ?? ''}</span>
                   </td>
                   <td className="font-mono" style={{ padding: '6px 16px 6px 4px', fontSize: 13, fontWeight: 600, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {fmtUsd(s.bFlaggedUsd)}
+                    {fmtUsd(v)}
                   </td>
                 </tr>
               );
@@ -1986,25 +2093,17 @@ function FlowList({
 
       {clean.length > 0 && (
         <div style={{ padding: '12px 16px 0', fontSize: 12, color: C.faint, lineHeight: 1.5 }}>
-          No toxic B-Book flow ({clean.length}):{' '}
-          {clean.map((s, i) => (
-            <span key={s.symbol}>
-              {i > 0 && ', '}
-              <span {...rowProps(s.symbol)} className="rr-row font-mono" style={{ color: C.soft }}>{s.symbol}</span>
-            </span>
-          ))}
+          {mk ? 'Price moved the broker\'s way' : 'No toxic B-Book flow'} ({clean.length}): {names(clean)}
         </div>
       )}
-
+      {thin.length > 0 && (
+        <div style={{ padding: '10px 16px 0', fontSize: 12, color: C.faint, lineHeight: 1.5 }}>
+          ○ Not enough fills for a markout{fv.minFills !== null ? ` (under ${fv.minFills})` : ''} ({thin.length}): {names(thin)}
+        </div>
+      )}
       {noB.length > 0 && (
         <div style={{ padding: '10px 16px 0', fontSize: 12, color: C.faint, lineHeight: 1.5 }}>
-          ○ No B-Book flow, A-Book only ({noB.length}):{' '}
-          {noB.map((s, i) => (
-            <span key={s.symbol}>
-              {i > 0 && ', '}
-              <span {...rowProps(s.symbol)} className="rr-row font-mono" style={{ color: C.soft }}>{s.symbol}</span>
-            </span>
-          ))}
+          ○ No B-Book flow, A-Book only ({noB.length}): {names(noB)}
         </div>
       )}
     </div>
@@ -2112,6 +2211,12 @@ function FlowAccounts({ symbol, fv }: { symbol: string; fv: FlowView }) {
                       {a.matrix_risk_level && <span style={{ color: C.faint }}> · {a.matrix_risk_level}</span>}
                     </div>
                     {reason && <div style={{ fontSize: 11, color: '#ffb020', paddingLeft: 13 }}>{reason}</div>}
+                    {a.markout_bps && (
+                      <div className="font-mono" style={{ fontSize: 10.5, color: C.faint, paddingLeft: 13 }}>
+                        markout 1 s {fmtBps(a.markout_bps['1'] ?? null)} · 30 s {fmtBps(a.markout_bps['30'] ?? null)}
+                        {a.effective_markout_bps && <> · eff. 1 s {fmtBps(a.effective_markout_bps['1'] ?? null)}</>}
+                      </div>
+                    )}
                   </td>
                   <td className="font-mono" style={{ padding: '5px 0', fontSize: 12.5, color: C.text, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {fmtUsd(a.flow_usd)}
@@ -2148,23 +2253,76 @@ function FlowAccounts({ symbol, fv }: { symbol: string; fv: FlowView }) {
   );
 }
 
+/** Markout at 1 / 5 / 30 s for one instrument (both books and the B-Book). */
+function MarkoutTable({ m, minFills }: { m: Markout; minFills: number | null }) {
+  const cell = { padding: '6px 0', fontSize: 12.5, textAlign: 'right' as const, whiteSpace: 'nowrap' as const };
+  const tone = (v: number | null) => (v === null ? C.soft : v > 0 ? '#ff5c5c' : v < 0 ? '#3ddc57' : C.text);
+  return (
+    <>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ fontSize: 11, color: C.faint, textAlign: 'right' }}>
+            <th style={{ textAlign: 'left', fontWeight: 500, padding: '2px 0' }}>After</th>
+            <th style={{ fontWeight: 500, padding: '2px 0' }}>B-Book</th>
+            <th style={{ fontWeight: 500, padding: '2px 0' }}>All books</th>
+            <th style={{ fontWeight: 500, padding: '2px 0' }}>Flagged</th>
+            <th style={{ fontWeight: 500, padding: '2px 0' }}>Fills</th>
+          </tr>
+        </thead>
+        <tbody>
+          {HORIZONS.map((h) => {
+            const thin = m.bBps[h] === null && minFills !== null && m.fills[h] < minFills;
+            return (
+              <tr key={h} style={{ borderTop: `1px solid ${C.line}` }}>
+                <td style={{ padding: '6px 0', fontSize: 12.5, color: C.soft }}>{h} s</td>
+                <td className="font-mono" style={{ ...cell, color: tone(m.bBps[h]) }}>
+                  {thin ? <span style={{ color: C.faint, fontFamily: 'inherit' }}>too few</span> : fmtBps(m.bBps[h])}
+                  <span style={{ display: 'block', fontSize: 10.5, color: C.faint }}>{fmtUsd(m.bUsd[h])}</span>
+                </td>
+                <td className="font-mono" style={{ ...cell, color: tone(m.bps[h]) }}>
+                  {fmtBps(m.bps[h])}
+                  <span style={{ display: 'block', fontSize: 10.5, color: C.faint }}>{fmtUsd(m.usd[h])}</span>
+                </td>
+                <td className="font-mono" style={{ ...cell, color: C.text }}>{fmtUsd(m.flaggedUsd[h])}</td>
+                <td className="font-mono" style={{ ...cell, color: C.soft }}>{m.fills[h]}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: C.faint, marginTop: 4, lineHeight: 1.45 }}>
+        Red = the price moved the clients' way after their fills, against the broker. A fill's markout arrives about
+        30 s after it, so the latest half-minute is not in it{minFills !== null ? `; under ${minFills} fills reads "too few"` : ''}.
+      </div>
+    </>
+  );
+}
+
 function FlowDetail({
   s, fv, upto, scope, scopeText, region, onClose,
 }: {
   s: FlowSymbol; fv: FlowView; upto: number; scope: PlatformScope;
   scopeText: string; region: string; onClose: () => void;
 }) {
-  const trend = s.state === 'rated' ? trendOf(flowHistory, upto, (x) => shareOf(x.payload, s.symbol)) : null;
-  const series = flowHistory.slice(0, upto + 1).map((x) => shareOf(x.payload, s.symbol));
+  const mk = fv.mode === 'markout';
+  const pick = (x: FlowSample) => (mk ? markoutOfSymbol(x.payload, s.symbol) : shareOf(x.payload, s.symbol));
+  const trend = s.state === 'rated' && !mk ? trendOf(flowHistory, upto, pick) : null;
+  const series = flowHistory.slice(0, upto + 1).map(pick);
   const since = flowHistory.length ? flowHistory[0].t : null;
   const aToxic = Math.max(0, s.flaggedUsd - s.bFlaggedUsd);
   const total = s.flowUsd || 1;
+  const markoutBlock = (
+    <>
+      <SectionTitle>Markout <span style={{ color: C.faint, fontWeight: 400 }}>· price move after the fills</span></SectionTitle>
+      <MarkoutTable m={s.markout} minFills={fv.minFills} />
+    </>
+  );
 
   return (
     <div style={{ padding: '14px 16px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12, color: C.faint }}>{region} · toxic flow · {scopeText}</div>
+          <div style={{ fontSize: 12, color: C.faint }}>{region} · {mk ? 'markout' : 'toxic flow'} · {scopeText}</div>
           <div className="font-mono" style={{ fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1.2 }}>{s.symbol}</div>
         </div>
         <button
@@ -2181,6 +2339,7 @@ function FlowDetail({
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '10px 0 8px' }}>
         {s.state === 'rated' && s.band && <BandBadge band={s.band} large />}
         {s.state === 'no_b_flow' && <GreyBadge text="NO B-BOOK FLOW" />}
+        {s.state === 'thin' && <GreyBadge text="TOO FEW FILLS" />}
         {trend && <TrendChip trend={trend} large />}
       </div>
 
@@ -2197,6 +2356,11 @@ function FlowDetail({
         <Para color={C.faint}>The shares are measured on both platforms: the B-Book flow is not split per platform.</Para>
       )}
 
+      {mk && s.state === 'thin' && (
+        <Para>Fewer than {fv.minFills} B-Book fills have a markout yet, so the instrument is not coloured. The figures below fill in as fills arrive.</Para>
+      )}
+      {mk && markoutBlock}
+      {mk && <SectionTitle>Toxic share</SectionTitle>}
       <Row label="Toxic share, B-Book" note={`${fmtUsd(s.bFlaggedUsd)} of ${fmtUsd(s.bFlowUsd)} B-Book flow`}>{fmtShare(s.bShare, 1)}</Row>
       <Row label="Toxic share, all books" note={`${fmtUsd(s.flaggedUsd)} of ${fmtUsd(s.flowUsd)} flow`}>{fmtShare(s.share, 1)}</Row>
       <Row label="Toxic flow to the A-Book" note="hedged at the LP">{fmtUsd(aToxic)}</Row>
@@ -2205,6 +2369,8 @@ function FlowDetail({
       </Row>
       <Row label="Accounts" note={`${s.flaggedAccounts} flagged · ${s.unclassifiedAccounts} not classified`}>{s.accounts}</Row>
       <Row label="Flow not classified" note={s.unclassifiedShare !== null ? `${fmtShare(s.unclassifiedShare)} of the flow` : undefined}>{fmtUsd(s.unclassifiedUsd)}</Row>
+
+      {fv.hasMarkout && !mk && markoutBlock}
 
       {s.parts.length > 0 && (
         <>
@@ -2256,7 +2422,7 @@ function FlowDetail({
       {s.state === 'rated' && (
         <>
           <SectionTitle>
-            Toxic share, B-Book{' '}
+            {mk ? 'Markout at 5 s, B-Book' : 'Toxic share, B-Book'}{' '}
             <span style={{ color: C.faint, fontWeight: 400 }}>· observed{since !== null ? ` since ${fmtUtcTime(since)}` : ''}</span>
           </SectionTitle>
           <Sparkline
@@ -2274,13 +2440,14 @@ function FlowDetail({
 }
 
 function FlowLegend({ fv }: { fv: FlowView }) {
-  const t = fv.thresholds;
-  const pct = (v: number) => `${Math.round(v * 100)}%`;
-  const ranges = [`under ${pct(t.warning)}`, `${pct(t.warning)}–${pct(t.high)}`, `${pct(t.high)}–${pct(t.critical)}`, `${pct(t.critical)} and over`];
+  const mk = fv.mode === 'markout';
+  const t = mk ? fv.markoutThresholds : fv.thresholds;
+  const fmt = (v: number) => (mk ? `${v} bps` : `${Math.round(v * 100)}%`);
+  const ranges = [`under ${fmt(t.warning)}`, `${fmt(t.warning)}–${fmt(t.high)}`, `${fmt(t.high)}–${fmt(t.critical)}`, `${fmt(t.critical)} and over`];
   return (
     <Panel style={{ width: 470, flexShrink: 0, padding: '9px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.text, fontWeight: 600 }}>
-        <span>Toxic share of B-Book flow</span>
+        <span>{mk ? 'B-Book markout at 5 s, against the broker' : 'Toxic share of B-Book flow'}</span>
         <span style={{ color: C.faint, fontWeight: 400 }}>last {fmtWindow(fv.windowSec)}</span>
       </div>
       <div style={{ height: 8, borderRadius: 4, margin: '6px 0 4px', background: rampGradientCss(), boxShadow: '0 0 12px rgba(255, 120, 0, 0.25)' }} />
@@ -2293,8 +2460,8 @@ function FlowLegend({ fv }: { fv: FlowView }) {
         ))}
       </div>
       <div style={{ display: 'flex', gap: 14, marginTop: 5, fontSize: 11, color: C.faint, whiteSpace: 'nowrap' }}>
-        <span><span style={{ color: C.soft }}>○</span> no B-Book flow</span>
-        <span><span style={{ color: '#5d6b7c' }}>●</span> no toxic flow, or no flow</span>
+        <span><span style={{ color: C.soft }}>○</span> {mk ? 'too few fills / no B-Book' : 'no B-Book flow'}</span>
+        <span><span style={{ color: '#5d6b7c' }}>●</span> {mk ? 'broker\'s way, or no flow' : 'no toxic flow, or no flow'}</span>
         <span>The dot is the reading</span>
       </div>
     </Panel>
@@ -2317,6 +2484,20 @@ function FlowMapNotes({ fv, running }: { fv: FlowView; running: boolean }) {
     }
     if (t.unpricedFills > 0) {
       notes.push(<MapNote key="unpriced" tone={C.soft}>{t.unpricedFills} fill{t.unpricedFills === 1 ? ' has' : 's have'} no USD value and {t.unpricedFills === 1 ? 'is' : 'are'} left out of the flow.</MapNote>);
+    }
+    if (fv.mode === 'markout' && t.flowUsd > 0 && t.markout.fills['5'] === 0) {
+      notes.push(
+        <MapNote key="nomk" tone="#ffb020">
+          No deal in the window has a markout: it needs a price at the fill and 5 s later. Deals made before the
+          markout was switched on, or on a platform whose prices are not reaching it, have none.
+        </MapNote>,
+      );
+    } else if (fv.mode === 'markout' && fv.thin > 0) {
+      notes.push(
+        <MapNote key="thin" tone={C.soft}>
+          {fv.thin} instrument{fv.thin === 1 ? ' has' : 's have'} too few fills for a markout{fv.minFills !== null ? ` (under ${fv.minFills})` : ''}: drawn ○, not coloured.
+        </MapNote>,
+      );
     }
     if (fv.toxicClasses.length === 0) {
       notes.push(<MapNote key="none" tone="#ffb020" action={<FlowSettingsLink />}>No class is set as toxic, so nothing is flagged.</MapNote>);
@@ -2444,7 +2625,9 @@ export function RiskRadarPage() {
   // Flow toxicity: the payload of the moment shown (replay picks the one in force then).
   const flowIndex = replaying ? flowIndexAt(replayT as number) : flowHistory.length - 1;
   const shownFlow = replaying ? (flowIndex >= 0 ? flowHistory[flowIndex].payload : null) : flow;
-  const fv = useMemo(() => buildFlowView(shownFlow, scope), [shownFlow, scope]);
+  const [flowMode, setFlowMode] = useState<FlowMode>(loadFlowMode);
+  const chooseFlowMode = useCallback((m: FlowMode) => { setFlowMode(m); saveFlowMode(m); }, []);
+  const fv = useMemo(() => buildFlowView(shownFlow, scope, flowMode), [shownFlow, scope, flowMode]);
   const selectedFlow = selected ? fv.bySymbol.get(selected) ?? null : null;
   const flowRunning = flowSeeded !== false || flow !== null;
 
@@ -2636,6 +2819,9 @@ export function RiskRadarPage() {
                     {missing.map((p) => PLATFORM_LABEL[p]).join(' and ')} not in the feed · showing{' '}
                     {shownAlone.map((p) => PLATFORM_LABEL[p]).join(' and ')} only
                   </div>
+                )}
+                {layer === 'flow' && shownFlow && (
+                  <FlowModeSwitch mode={flowMode} onChange={chooseFlowMode} markoutAvailable={fv.hasMarkout} />
                 )}
                 <div role="radiogroup" aria-label="Trading platform" style={{ display: 'flex', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: C.soft, marginRight: 8 }}>Platform</span>
