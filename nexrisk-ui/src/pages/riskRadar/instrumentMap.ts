@@ -25,6 +25,8 @@ export interface Region {
   /** The folder name exactly as the broker wrote it. */
   name: string;
   rect: { x: number; y: number; w: number; h: number };
+  /** A region whose measure is not published yet: drawn empty, with this text. */
+  pending?: string;
 }
 
 export interface MapPosition {

@@ -47,7 +47,17 @@ export const DIMENSIONS: DimensionDef[] = [
   { id: 'availability', label: 'Availability', question: 'Is it there in trading hours?' },
 ];
 
-const DIM_BY_ID = new Map(DIMENSIONS.map((d) => [d.id, d] as const));
+/**
+ * Dimensions designed but not in the backend's payload yet (phase 2 / 3).
+ * They keep their region on the map, empty and marked "coming", so the map
+ * already has its final shape.
+ */
+export const COMING_DIMENSIONS: DimensionDef[] = [
+  { id: 'pricing',      label: 'Pricing',      question: 'Is its price stream worth taking?' },
+  { id: 'counterparty', label: 'Counterparty', question: 'How much of us does it hold?' },
+];
+
+const DIM_BY_ID = new Map([...DIMENSIONS, ...COMING_DIMENSIONS].map((d) => [d.id, d] as const));
 
 export function dimensionLabel(id: string): string {
   return DIM_BY_ID.get(id)?.label ?? id.charAt(0).toUpperCase() + id.slice(1).replace(/_/g, ' ');
@@ -455,11 +465,19 @@ export function mapKey(dimension: string, lpId: string): string {
 // point in every region, so it sits at the same spot in each.
 const lpOrder: string[] = [];
 
-/** The map: one region per dimension, every LP at the same place in each. */
+/**
+ * The map: one region per dimension, every LP at the same place in each. The
+ * dimensions not published yet follow as empty regions marked "coming".
+ */
 export function buildLiqMap(dimensions: string[], lpIds: string[]): InstrumentMap {
   for (const id of [...lpIds].sort()) if (!lpOrder.includes(id)) lpOrder.push(id);
-  const names = dimensions.map(dimensionLabel);
+  const coming = COMING_DIMENSIONS.filter((d) => !dimensions.includes(d.id));
+  const names = [...dimensions.map(dimensionLabel), ...coming.map((d) => d.label)];
   const regions = layoutRegions(names);
+  coming.forEach((d, i) => {
+    const r = regions[dimensions.length + i];
+    if (r) r.pending = `${d.question} Coming with the next backend release.`;
+  });
   const positions = new Map<string, MapPosition>();
   const regionOfKey = new Map<string, string>();
   dimensions.forEach((dim, i) => {

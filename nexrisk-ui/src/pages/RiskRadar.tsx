@@ -1053,11 +1053,24 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
           const w = f.rect.w * size.w, h = f.rect.h * size.h;
           const lw = Math.min(captionWidth(f.name), Math.max(40, w - 16));
           return (
-            <g key={f.id} pointerEvents="none">
+            <g key={f.id} pointerEvents="none" opacity={f.pending ? 0.75 : 1}>
               <rect
                 x={x} y={y} width={w} height={h} rx={16}
-                fill="none" stroke="rgba(150, 180, 215, 0.26)" strokeWidth={1} strokeDasharray="4 5"
+                fill={f.pending ? 'rgba(20, 28, 38, 0.35)' : 'none'}
+                stroke={f.pending ? 'rgba(150, 180, 215, 0.16)' : 'rgba(150, 180, 215, 0.26)'}
+                strokeWidth={1} strokeDasharray="4 5"
               />
+              {f.pending && (
+                <>
+                  <text x={x + w / 2} y={y + h / 2 - 4} textAnchor="middle" className="font-mono"
+                    style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', fill: C.faint }}>
+                    COMING
+                  </text>
+                  <foreignObject x={x + 16} y={y + h / 2 + 4} width={Math.max(40, w - 32)} height={40}>
+                    <div style={{ fontSize: 11.5, color: C.faint, textAlign: 'center', lineHeight: 1.35 }}>{f.pending}</div>
+                  </foreignObject>
+                </>
+              )}
               <rect x={x + 8} y={y + 6} width={lw} height={22} rx={4} fill="rgba(7, 11, 17, 0.86)" stroke="rgba(150, 180, 215, 0.42)" />
               <text
                 x={x + 8 + lw / 2} y={y + 21} textAnchor="middle" className="font-mono"
