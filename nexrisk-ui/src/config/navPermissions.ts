@@ -106,6 +106,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/settings/risk-limits', label: 'Risk Limits', module: 'settings' },
       // Toxic classes, window and bands of the Risk Radar's Flow toxicity layer.
       { path: '/settings/flow-toxicity', label: 'Flow Toxicity', module: 'settings' },
+      // Thresholds and gates of the Risk Radar's Liquidity layer (LP verdicts).
+      { path: '/settings/liquidity', label: 'Liquidity', module: 'settings' },
     ],
   },
 ];

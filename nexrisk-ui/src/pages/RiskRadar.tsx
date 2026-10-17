@@ -61,7 +61,14 @@ import {
   riskRadarApi,
   riskLimitsApi,
   flowApi,
+  liquidityApi,
   type DailyMovesData,
+  type LiqGroup,
+  type LiqLevel,
+  type LiqOrder,
+  type LiqOrdersData,
+  type LiqPeriod,
+  type LiquidityPayload,
   type FlowAccountRow,
   type FlowAccountsData,
   type FlowPayload,
@@ -89,6 +96,34 @@ import {
   type Markout,
 } from './riskRadar/flowModel';
 import { HeatRenderer, rampGradientCss, type HeatBlob } from './riskRadar/heatField';
+import {
+  DIMENSIONS,
+  GROUP_LABEL,
+  PERIODS,
+  bandOf,
+  bestLpFor,
+  buildLiqMap,
+  buildLiqView,
+  cellOf,
+  defaultGroup,
+  dimensionLabel,
+  fmtCount,
+  fmtFrac,
+  fmtMetric,
+  fmtMs,
+  fmtX,
+  heatOfLevel,
+  levelRank,
+  mapKey,
+  metricDef,
+  ordersCsv,
+  periodText,
+  thresholdText,
+  verdictLines,
+  type LiqView,
+  type LpRow,
+  type MetricRow,
+} from './riskRadar/liquidityModel';
 import {
   BANDS,
   BAND_BY_ID,
@@ -245,6 +280,24 @@ function flowIndexAt(t: number): number {
   return best < 0 ? (flowHistory.length ? 0 : -1) : best;
 }
 
+// The liquidity payloads (live, the last hour), recorded the same way.
+interface LiqSample { t: number; payload: LiquidityPayload }
+const liqHistory: LiqSample[] = [];
+
+function recordLiq(payload: LiquidityPayload, t: number): boolean {
+  const last = liqHistory[liqHistory.length - 1];
+  if (last && t - last.t < SAMPLE_EVERY_MS) return false;
+  liqHistory.push({ t, payload });
+  while (liqHistory.length > 1 && t - liqHistory[0].t > HISTORY_WINDOW_MS) liqHistory.shift();
+  return true;
+}
+
+function liqIndexAt(t: number): number {
+  let best = -1;
+  for (let i = 0; i < liqHistory.length; i++) if (liqHistory[i].t <= t) best = i;
+  return best < 0 ? (liqHistory.length ? 0 : -1) : best;
+}
+
 type SocketState = 'connecting' | 'open' | 'closed';
 
 function useRadarFeed() {
@@ -261,6 +314,13 @@ function useRadarFeed() {
   /** The seed answered: null = not yet, false = 503 / error (layer not running). */
   const [flowSeeded, setFlowSeeded] = useState<boolean | null>(null);
   const flowLive = useRef(false);
+  const [liq, setLiq] = useState<LiquidityPayload | null>(
+    () => (liqHistory.length ? liqHistory[liqHistory.length - 1].payload : null),
+  );
+  const [liqLiveAt, setLiqLiveAt] = useState<number | null>(null);
+  /** The seed answered: null = not yet, false = 503 / error (layer not running). */
+  const [liqSeeded, setLiqSeeded] = useState<boolean | null>(null);
+  const liqLive = useRef(false);
   const [, setHistoryVersion] = useState(0);
   const liveSeen = useRef(false);
   const monthLive = useRef(false);
@@ -305,6 +365,21 @@ function useRadarFeed() {
       })
       .catch(() => { if (!cancelled) setFlowSeeded(false); });
 
+    // Liquidity: seed, then the topic. 503 = the layer is starting or not running.
+    const acceptLiq = (d: LiquidityPayload, live: boolean) => {
+      const now = Date.now();
+      setLiq(d);
+      if (live) setLiqLiveAt(now);
+      if (recordLiq(d, parseTime(d.as_of) ?? now)) setHistoryVersion((v) => v + 1);
+    };
+    liquidityApi.get()
+      .then((d) => {
+        if (cancelled) return;
+        setLiqSeeded(true);
+        if (!liqLive.current && d && Array.isArray(d.lps)) acceptLiq(d, false);
+      })
+      .catch(() => { if (!cancelled) setLiqSeeded(false); });
+
     const stop = connectRiskRadarWebSocket(
       (d) => {
         if (cancelled) return;
@@ -324,12 +399,18 @@ function useRadarFeed() {
         setFlowSeeded(true);
         acceptFlow(f, true);
       },
+      (l) => {
+        if (cancelled) return;
+        liqLive.current = true;
+        setLiqSeeded(true);
+        acceptLiq(l, true);
+      },
     );
 
     return () => { cancelled = true; stop(); };
   }, []);
 
-  return { snapshot, socket, lastLiveAt, realizedMtd, flow, flowLiveAt, flowSeeded };
+  return { snapshot, socket, lastLiveAt, realizedMtd, flow, flowLiveAt, flowSeeded, liq, liqLiveAt, liqSeeded };
 }
 
 /** Adverse move per symbol, read once. null until it arrives. */
@@ -692,7 +773,7 @@ function ExposureCards({
 
 const PENDING_CARDS: Record<Exclude<Layer, 'exposure'>, string[]> = {
   flow: ['Adverse markout', 'Flagged accounts', 'Confidence'],
-  liquidity: ['Degraded routes', 'Reject rate', 'Stale quotes'],
+  liquidity: ['LPs at risk', 'Worst LP', 'Rejected by the LPs'],
 };
 
 const EXPOSURE_CARDS = ['Book risk', 'Loss capacity left this month', 'Largest instrument risk'];
@@ -764,8 +845,9 @@ function placeSymbols(
     if (pos) boxes.push({ x: pos.x * w - 6, y: pos.y * h - 6, w: 12, h: 12 });
   }
 
+  const gk = (s: MapItem) => s.group ?? s.symbol;
   const ordered = [...items].sort(
-    (a, b) => Number(pinned.has(b.symbol)) - Number(pinned.has(a.symbol)),
+    (a, b) => Number(pinned.has(gk(b))) - Number(pinned.has(gk(a))),
   );
   let labelled = 0;
 
@@ -775,10 +857,10 @@ function placeSymbols(
     const x = pos.x * w;
     const y = pos.y * h;
     // 'always' items (a data gap to notice) are always named.
-    const wants = pinned.has(s.symbol) || s.label === 'always' || (s.label === 'normal' && labelled < LABEL_LIMIT);
+    const wants = pinned.has(gk(s)) || s.label === 'always' || (s.label === 'normal' && labelled < LABEL_LIMIT);
     let label: Placed['label'] = null;
     if (wants) {
-      const lw = labelWidth(s.symbol);
+      const lw = labelWidth(s.name ?? s.symbol);
       const candidates = [
         { x: x + 10, y: y - LABEL_H / 2 },
         { x: x - 10 - lw, y: y - LABEL_H / 2 },
@@ -792,7 +874,7 @@ function placeSymbols(
         label = box;
         break;
       }
-      if (!label && pinned.has(s.symbol)) {
+      if (!label && pinned.has(gk(s))) {
         label = { x: Math.max(2, Math.min(w - lw - 2, x + 10)), y: Math.max(2, Math.min(h - LABEL_H - 2, y - LABEL_H / 2)), w: lw, h: LABEL_H };
       }
       if (label) { boxes.push(label); if (s.label !== 'always') labelled++; }
@@ -934,13 +1016,17 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
+  const gk = (s: MapItem) => s.group ?? s.symbol;
+  const hoverItem = hovered ? items.find((s) => s.symbol === hovered) ?? null : null;
+  const hoverGroup = hoverItem ? gk(hoverItem) : null;
+
   const placed = useMemo(
-    () => (size.w > 0 ? placeSymbols(items, imap, size.w, size.h, [selected, hovered]) : []),
-    [items, imap, size, selected, hovered],
+    () => (size.w > 0 ? placeSymbols(items, imap, size.w, size.h, [selected, hoverGroup]) : []),
+    [items, imap, size, selected, hoverGroup],
   );
 
   // The inspector already describes the selected instrument.
-  const hoveredItem = hovered && hovered !== selected ? placed.find((p) => p.s.symbol === hovered) ?? null : null;
+  const hoveredItem = hovered && hoverGroup !== selected ? placed.find((p) => p.s.symbol === hovered) ?? null : null;
 
   return (
     <div
@@ -984,8 +1070,8 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
         })}
 
         {placed.map(({ s, x, y, label }) => {
-          const isSel = s.symbol === selected;
-          const isHover = s.symbol === hovered;
+          const isSel = gk(s) === selected;
+          const isHover = hoverGroup !== null && gk(s) === hoverGroup;
           const lit = active && s.lit;
           const critical = lit && s.critical;
           const dim = !active || s.marker === 'dim';
@@ -995,11 +1081,11 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
               className="rr-node"
               role="button"
               tabIndex={0}
-              aria-label={active ? s.aria : `${s.symbol}: no measurement on this layer`}
+              aria-label={active ? s.aria : `${s.name ?? s.symbol}: no measurement on this layer`}
               aria-pressed={isSel}
-              onClick={(e) => { e.stopPropagation(); onSelect(isSel ? null : s.symbol); }}
+              onClick={(e) => { e.stopPropagation(); onSelect(isSel ? null : gk(s)); }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(isSel ? null : s.symbol); }
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(isSel ? null : gk(s)); }
               }}
               onMouseEnter={() => setHovered(s.symbol)}
               onMouseLeave={() => setHovered((h) => (h === s.symbol ? null : h))}
@@ -1007,6 +1093,12 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
               onBlur={() => setHovered((h) => (h === s.symbol ? null : h))}
             >
               <circle cx={x} cy={y} r={15} fill="transparent" className="rr-focus" />
+              {isHover && !isSel && s.group !== undefined && (
+                <circle cx={x} cy={y} r={10} fill="none" stroke="rgba(255, 255, 255, 0.7)" strokeWidth={1.5} strokeDasharray="3 2" pointerEvents="none" />
+              )}
+              {active && s.faded && (
+                <circle cx={x} cy={y} r={8.5} fill="none" stroke={C.grey} strokeWidth={1.4} strokeDasharray="2 2" pointerEvents="none" />
+              )}
               {critical && <circle cx={x} cy={y} r={6} fill="none" stroke="#ffffff" strokeWidth={1.5} className="rr-pulse" pointerEvents="none" />}
               {isSel && <circle cx={x} cy={y} r={10} fill="none" stroke="#ffffff" strokeWidth={2} />}
 
@@ -1024,6 +1116,7 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
                   fill={dim ? '#5d6b7c' : s.color}
                   stroke={dim ? 'none' : '#ffffff'}
                   strokeWidth={1.8}
+                  opacity={s.faded ? 0.45 : 1}
                 />
               )}
 
@@ -1040,7 +1133,7 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
                     x={label.x + label.w / 2} y={label.y + 14} textAnchor="middle" className="font-mono"
                     style={{ fontSize: 12, fontWeight: 600, fill: lit || isSel ? '#ffffff' : '#aeb9c7' }}
                   >
-                    {s.symbol}
+                    {s.name ?? s.symbol}
                   </text>
                 </g>
               )}
@@ -1067,7 +1160,7 @@ function RadarMap({ items, imap, active, selected, onSelect, children }: RadarMa
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <span className="font-mono" style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{hoveredItem.s.symbol}</span>
+            <span className="font-mono" style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{hoveredItem.s.name ?? hoveredItem.s.symbol}</span>
             {active && hoveredItem.s.band && <BandBadge band={hoveredItem.s.band} />}
           </div>
           <div style={{ fontSize: 12, color: C.soft, marginTop: 5, lineHeight: 1.45 }}>
@@ -1548,12 +1641,13 @@ const PENDING_TEXT: Record<Exclude<Layer, 'exposure'>, { title: string; lead: st
   },
   liquidity: {
     title: 'Liquidity',
-    lead: 'Colours each instrument by how far execution conditions have slipped from its own normal.',
+    lead: 'Judges each of your LPs: is it a risk to you now? The LP feed is not running, or has not built its first figures.',
     items: [
-      'Spread, depth and quote age per route',
-      'Reject rate and fill latency',
-      'Route status: healthy, watch, degraded',
-      'Readings relative to each instrument’s baseline',
+      'Rejecting: reject rate, timeouts, volume filled',
+      'Slipping: fills against the quote at send',
+      'Slow: the LP’s own time, apart from Taiga’s',
+      'Availability: uptime, disconnects, stale quotes',
+      'The orders behind every figure',
     ],
   },
 };
@@ -1745,7 +1839,14 @@ function Legend({ layer, view }: { layer: Layer; view: RadarView }) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface MapItem {
+  /** Unique key of the dot (an instrument; on the Liquidity layer dimension|LP). */
   symbol: string;
+  /** Text on the label; the key when absent. */
+  name?: string;
+  /** What a click selects and a hover lights: dots sharing it light together. The key when absent. */
+  group?: string;
+  /** Drawn faded with a dashed ring (an LP that is disconnected). */
+  faded?: boolean;
   heat: number;
   /** dot = coloured reading · ring = measured, no colour (○) · diamond = cannot be measured (◇) · dim = nothing to show */
   marker: 'dot' | 'ring' | 'diamond' | 'dim';
@@ -2586,11 +2687,918 @@ function MapNotes({ view, mt5Check }: { view: RadarView; mt5Check: RiskRadarMt5B
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Liquidity layer — the broker's LPs judged against each other
+//
+// The subject is the LP. Every LP gets a verdict (its level now) from four
+// dimensions of evidence; the backend levels every metric from the broker's
+// thresholds, and ranks / medians are measured within the LP's group only
+// (real LPs never against test LPs). The map has one region per dimension and
+// every LP sits at the same place in each region.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LIQ_CARDS = ['LPs at risk', 'Worst LP', 'Rejected by the LPs'];
+
+const LIQ_GROUP_KEY = 'taiga.riskRadar.lpGroup';
+const LIQ_PERIOD_KEY = 'taiga.riskRadar.lpPeriod';
+
+function loadLiqGroup(): LiqGroup | null {
+  try {
+    const v = localStorage.getItem(LIQ_GROUP_KEY);
+    return v === 'real' || v === 'test' ? v : null;
+  } catch { return null; }
+}
+
+function loadLiqPeriod(): LiqPeriod {
+  try {
+    const v = localStorage.getItem(LIQ_PERIOD_KEY);
+    return PERIODS.some((p) => p.id === v) ? (v as LiqPeriod) : 'live';
+  } catch { return 'live'; }
+}
+
+function saveLiq(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch { /* per-viewer convenience only */ }
+}
+
+const LEVEL_WORD: Record<LiqLevel, string> = { LOW: 'Low', WARNING: 'Warning', HIGH: 'High', CRITICAL: 'Critical' };
+
+function levelColor(level: LiqLevel | null | undefined): string {
+  const b = bandOf(level);
+  return b ? BAND_BY_ID[b].color : C.grey;
+}
+
+function LevelBadge({ level, large }: { level: LiqLevel | null; large?: boolean }) {
+  const b = bandOf(level);
+  return b ? <BandBadge band={b} large={large} /> : <GreyBadge text="TOO FEW ORDERS" />;
+}
+
+/** A level square, or a hollow circle when there is too little to judge. */
+function LevelMark({ level, tooFew, size = 9, title }: { level: LiqLevel | null; tooFew?: boolean; size?: number; title?: string }) {
+  if (!level || tooFew) {
+    return (
+      <span
+        title={title ?? 'Too few orders to judge'}
+        style={{ display: 'inline-block', width: size, height: size, borderRadius: '50%', border: `1.5px solid ${C.grey}`, flexShrink: 0 }}
+      />
+    );
+  }
+  return (
+    <span
+      title={title ?? LEVEL_WORD[level]}
+      style={{ display: 'inline-block', width: size, height: size, borderRadius: 2, background: levelColor(level), flexShrink: 0 }}
+    />
+  );
+}
+
+function LiqSettingsLink() {
+  const navigate = useNavigate();
+  const { can } = usePermission();
+  if (!can('settings', 'VIEW')) return null;
+  return (
+    <button
+      type="button"
+      className="rr-btn"
+      onClick={() => navigate('/settings/liquidity')}
+      style={{
+        padding: '6px 11px', borderRadius: 5, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+        background: 'transparent', color: '#ffffff', border: `1px solid ${C.blueSoft}88`, whiteSpace: 'nowrap',
+      }}
+    >
+      Thresholds →
+    </button>
+  );
+}
+
+function groupWord(lv: LiqView): string {
+  return lv.group === 'test' ? 'test LPs' : 'LPs';
+}
+
+function LiqCards({ lv, onSelect }: { lv: LiqView; onSelect: (lpId: string) => void }) {
+  const n = lv.rows.length;
+  const atRisk = lv.counts.HIGH + lv.counts.CRITICAL;
+  const worstLevel: LiqLevel | null = lv.counts.CRITICAL ? 'CRITICAL' : lv.counts.HIGH ? 'HIGH' : lv.counts.WARNING ? 'WARNING' : lv.counts.LOW ? 'LOW' : null;
+  const t = lv.totals;
+  const atRiskShare = t.orders > 0 ? t.ordersAtRisk / t.orders : null;
+  const rejectShare = t.orders > 0 ? t.lpRejects / t.orders : null;
+  const worst = lv.worst;
+  const why = worst ? verdictLines(worst, lv.group, lv.minOrders)[0] ?? '' : '';
+  const per = ` · ${periodText(lv.period)}`;
+  const worstRejecter = [...lv.rows]
+    .filter((r) => r.dimById.get('rejecting')?.metrics.find((m) => m.key === 'reject_rate')?.m.value != null)
+    .sort((a, b) =>
+      (b.dimById.get('rejecting')!.metrics.find((m) => m.key === 'reject_rate')!.m.value ?? 0)
+      - (a.dimById.get('rejecting')!.metrics.find((m) => m.key === 'reject_rate')!.m.value ?? 0))[0] ?? null;
+  const wr = worstRejecter?.dimById.get('rejecting')?.metrics.find((m) => m.key === 'reject_rate')?.m ?? null;
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      <Card
+        accent={levelColor(worstLevel)}
+        label={`${lv.group === 'test' ? 'Test LPs' : 'LPs'} at risk${per}`}
+        aside={atRiskShare !== null && atRisk > 0 ? (
+          <div style={{ textAlign: 'right' }}>
+            <div className="font-mono" style={{ fontSize: 18, fontWeight: 600, color: C.text }}>{fmtFrac(atRiskShare)}</div>
+            <div style={{ fontSize: 11, color: C.faint, whiteSpace: 'nowrap' }} title="Share of the orders sent to LPs at High or Critical">of orders</div>
+          </div>
+        ) : undefined}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <CardValue>
+            {atRisk}
+            <span style={{ fontSize: 15, color: C.soft, fontWeight: 500 }}> of {n} High or Critical</span>
+          </CardValue>
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 3, flexWrap: 'nowrap', overflow: 'hidden' }}>
+          {BANDS.map((b) => (
+            <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: b.color }} />
+              {b.label}
+              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{lv.counts[b.id.toUpperCase() as LiqLevel]}</span>
+            </span>
+          ))}
+          {lv.tooFew > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${C.grey}` }} />
+              Too few orders
+              <span className="font-mono" style={{ color: C.text, fontWeight: 600 }}>{lv.tooFew}</span>
+            </span>
+          )}
+        </div>
+      </Card>
+
+      <Card accent={levelColor(worst?.level)} label={`Worst ${lv.group === 'test' ? 'test LP' : 'LP'}${per}`} aside={<LiqSettingsLink />}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
+          {worst ? (
+            <button
+              type="button"
+              className="rr-btn font-mono"
+              onClick={() => onSelect(worst.lpId)}
+              style={{ fontSize: 24, fontWeight: 600, color: C.text, background: 'none', border: 'none', padding: 0, cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            >
+              {worst.name}
+            </button>
+          ) : (
+            <CardValue>—</CardValue>
+          )}
+          {worst && <LevelBadge level={worst.level} />}
+        </div>
+        <CardNote>{worst ? why : n ? `No ${groupWord(lv)} has enough orders to judge yet` : `No ${groupWord(lv)} in the payload`}</CardNote>
+      </Card>
+
+      <Card accent={wr?.level ? levelColor(wr.level) : C.blue} label={`Rejected by the LPs${per}`}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <CardValue>{fmtFrac(rejectShare)}</CardValue>
+          <span style={{ fontSize: 13, color: C.soft, whiteSpace: 'nowrap' }}>
+            {fmtCount(t.lpRejects)} of {fmtCount(t.orders)} orders
+          </span>
+        </div>
+        <CardNote>
+          {worstRejecter && wr
+            ? `Most: ${worstRejecter.name} ${fmtFrac(wr.value)}`
+            : 'No LP with enough orders'}
+          {t.taigaRejects > 0 ? ` · ${fmtCount(t.taigaRejects)} more refused by Taiga, not counted against the LPs` : ''}
+        </CardNote>
+      </Card>
+    </div>
+  );
+}
+
+/** Group and period controls, in the map header. */
+function LiqControls({
+  lv, period, onGroup, onPeriod,
+}: { lv: LiqView; period: LiqPeriod; onGroup: (g: LiqGroup) => void; onPeriod: (p: LiqPeriod) => void }) {
+  const seg = (on: boolean, i: number, n: number): CSSProperties => ({
+    padding: '6px 11px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+    background: on ? '#ffffff' : '#0f1620',
+    color: on ? '#05080d' : C.soft,
+    border: `1px solid ${on ? '#ffffff' : C.line}`,
+    marginLeft: i ? -1 : 0,
+    borderRadius: i === 0 ? '5px 0 0 5px' : i === n - 1 ? '0 5px 5px 0' : 0,
+    position: 'relative', zIndex: on ? 1 : 0, whiteSpace: 'nowrap',
+  });
+  const groups: LiqGroup[] = ['real', 'test'];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div role="radiogroup" aria-label="Which LPs" style={{ display: 'flex', alignItems: 'center' }}>
+        {groups.map((g, i) => (
+          <button
+            key={g}
+            type="button"
+            role="radio"
+            aria-checked={lv.group === g}
+            className="rr-btn"
+            disabled={lv.groups[g] === 0 && lv.group !== g}
+            onClick={() => onGroup(g)}
+            style={{ ...seg(lv.group === g, i, groups.length), opacity: lv.groups[g] === 0 && lv.group !== g ? 0.45 : 1 }}
+          >
+            {GROUP_LABEL[g]} <span className="font-mono" style={{ fontWeight: 500 }}>{lv.groups[g]}</span>
+          </button>
+        ))}
+      </div>
+      <div role="radiogroup" aria-label="Period" style={{ display: 'flex', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: C.soft, marginRight: 8 }}>Period</span>
+        {PERIODS.map((p, i) => (
+          <button
+            key={p.id}
+            type="button"
+            role="radio"
+            aria-checked={period === p.id}
+            className="rr-btn"
+            onClick={() => onPeriod(p.id)}
+            style={seg(period === p.id, i, PERIODS.length)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function liqItems(lv: LiqView): MapItem[] {
+  const out: MapItem[] = [];
+  for (const dim of lv.dimensions) {
+    const dimName = dimensionLabel(dim);
+    for (const r of lv.rows) {
+      const cell = cellOf(r, dim);
+      const d = r.dimById.get(dim);
+      const lit = !cell.tooFew && cell.level !== null;
+      const worstMetric = d?.metrics
+        .filter((m) => m.m.value !== null && m.m.value !== undefined)
+        .sort((a, b) => levelRank(b.m.level) - levelRank(a.m.level))[0] ?? null;
+      const metricText = worstMetric
+        ? `${worstMetric.def.label}: ${fmtMetric(worstMetric.def.unit, worstMetric.m.value)}${worstMetric.m.x_peer_median != null ? `, ${fmtX(worstMetric.m.x_peer_median)} the median` : ''}.`
+        : 'Too few orders to judge.';
+      out.push({
+        symbol: mapKey(dim, r.lpId),
+        name: r.name,
+        group: r.lpId,
+        faded: r.state === 'DISCONNECTED',
+        heat: lit ? heatOfLevel(cell.level) : 0,
+        marker: lit ? 'dot' : 'ring',
+        color: levelColor(cell.level),
+        band: lit ? bandOf(cell.level) : null,
+        lit,
+        critical: lit && cell.level === 'CRITICAL',
+        label: lit && levelRank(cell.level) >= 2 ? 'always' : 'normal',
+        aria: lit
+          ? `${r.name}, ${dimName}: ${LEVEL_WORD[cell.level as LiqLevel]}. ${metricText}`
+          : `${r.name}, ${dimName}: too few orders to judge`,
+        hover: (
+          <>
+            <span style={{ color: C.text, fontWeight: 600 }}>{dimName}</span>
+            {lit ? ` · ${LEVEL_WORD[cell.level as LiqLevel]}. ` : '. '}
+            {metricText}
+            {r.state === 'DISCONNECTED' ? ' Disconnected now.' : ''}
+            <span style={{ display: 'block', color: C.faint, marginTop: 3 }}>
+              Overall {r.level ? LEVEL_WORD[r.level] : 'too few orders'} · click for the LP’s report
+            </span>
+          </>
+        ),
+      });
+    }
+  }
+  return out;
+}
+
+const DIM_SHORT: Record<string, string> = { rejecting: 'Rej', slipping: 'Slip', slow: 'Slow', availability: 'Avail' };
+
+function LiqList({
+  lv, period, instruments, symbol, onSymbol, onSelect, loading, error,
+}: {
+  lv: LiqView; period: LiqPeriod; instruments: string[]; symbol: string | null;
+  onSymbol: (s: string | null) => void; onSelect: (lpId: string) => void;
+  loading: boolean; error: string | null;
+}) {
+  const own = lv.rows.map((r) => r.brokerOwn).filter((x): x is MetricRow => !!x && x.m.value !== null)
+    .sort((a, b) => (b.m.value ?? 0) - (a.m.value ?? 0))[0] ?? null;
+  return (
+    <div style={{ padding: '14px 0 12px' }}>
+      <div style={{ padding: '0 16px' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>Your {lv.group === 'test' ? 'test LPs' : 'LPs'}, worst first</div>
+        <div style={{ fontSize: 12.5, color: C.soft, marginTop: 3, lineHeight: 1.45 }}>
+          {periodText(period)} · each LP’s level is its worst dimension, from your thresholds. Ranks only among your{' '}
+          {lv.group === 'test' ? 'test LPs' : 'real LPs'}.
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: C.soft }}>
+          Instrument
+          <select
+            value={symbol ?? ''}
+            onChange={(e) => onSymbol(e.target.value || null)}
+            style={{ flex: 1, background: '#0f1620', color: C.text, border: `1px solid ${C.line}`, borderRadius: 5, padding: '5px 8px', fontSize: 12.5 }}
+          >
+            <option value="">All instruments</option>
+            {(symbol && !instruments.includes(symbol) ? [symbol, ...instruments] : instruments).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </label>
+        {symbol && (
+          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 5, lineHeight: 1.4 }}>
+            Figures, ranks and medians on {symbol} only, among the LPs that filled it.
+            {lv.dimensions.includes('availability') ? ' Availability stays the LP’s own.' : ''}
+          </div>
+        )}
+        {loading && <div style={{ fontSize: 12, color: C.faint, marginTop: 8 }}>Loading {periodText(period)}…</div>}
+        {error && <div style={{ fontSize: 12, color: '#ffb020', marginTop: 8 }}>{error}</div>}
+      </div>
+
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
+        <thead>
+          <tr style={{ fontSize: 11, color: C.faint, textAlign: 'left' }}>
+            <th style={{ padding: '4px 4px 4px 16px', fontWeight: 500, width: 22 }}>#</th>
+            <th style={{ padding: '4px 4px', fontWeight: 500 }}>LP</th>
+            {lv.dimensions.map((d) => (
+              <th key={d} style={{ padding: '4px 2px', fontWeight: 500, textAlign: 'center' }} title={dimensionLabel(d)}>
+                {DIM_SHORT[d] ?? dimensionLabel(d).slice(0, 4)}
+              </th>
+            ))}
+            <th style={{ padding: '4px 16px 4px 4px', fontWeight: 500, textAlign: 'right' }}>Orders</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lv.rows.map((r, i) => (
+            <tr
+              key={r.lpId}
+              className="rr-row"
+              tabIndex={0}
+              onClick={() => onSelect(r.lpId)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(r.lpId); } }}
+              aria-label={`${r.name}: ${r.level ? LEVEL_WORD[r.level] : 'too few orders'}`}
+              style={{ borderTop: `1px solid ${C.line}` }}
+            >
+              <td className="font-mono" style={{ padding: '8px 4px 8px 16px', fontSize: 12, color: C.faint }}>{i + 1}</td>
+              <td style={{ padding: '8px 4px', minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <LevelMark level={r.level} tooFew={r.level === null} />
+                  <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>
+                    {r.name}
+                  </span>
+                </div>
+                <div className="font-mono" style={{ fontSize: 10.5, color: r.level ? levelColor(r.level) : C.faint, marginTop: 2, paddingLeft: 15 }}>
+                  {r.level ? LEVEL_WORD[r.level] : 'Too few orders'}
+                  {r.state && r.state !== 'CONNECTED' && <span style={{ color: '#ffb020' }}> · {stateWord(r.state)}</span>}
+                </div>
+              </td>
+              {lv.dimensions.map((d) => {
+                const cell = cellOf(r, d);
+                return (
+                  <td key={d} style={{ padding: '8px 2px', textAlign: 'center' }}>
+                    <LevelMark level={cell.level} tooFew={cell.tooFew} size={11} title={`${dimensionLabel(d)}: ${cell.tooFew ? 'too few orders' : LEVEL_WORD[cell.level as LiqLevel]}`} />
+                  </td>
+                );
+              })}
+              <td className="font-mono" style={{ padding: '8px 16px 8px 4px', fontSize: 12.5, color: C.soft, textAlign: 'right' }}>{fmtCount(r.orders)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {lv.rows.length === 0 && !loading && (
+        <div style={{ padding: '12px 16px', fontSize: 12.5, color: C.soft }}>
+          {symbol ? `No ${groupWord(lv)} filled ${symbol} in this period.` : `No ${groupWord(lv)} in this period.`}
+        </div>
+      )}
+
+      {own && (
+        <div style={{ margin: '12px 16px 0', paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 12, color: C.soft, lineHeight: 1.45 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <LevelMark level={own.m.level} />
+            Taiga’s own time p95: <span className="font-mono" style={{ color: C.text }}>{fmtMs(own.m.value)}</span>
+          </span>
+          <div style={{ color: C.faint, fontSize: 11.5 }}>From deal seen to order sent, slowest LP route. Never counted against an LP.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function stateWord(state: string): string {
+  switch (state) {
+    case 'DISCONNECTED': return 'disconnected';
+    case 'DEGRADED': return 'market data down';
+    case 'UNKNOWN': return 'state unknown';
+    default: return state.toLowerCase();
+  }
+}
+
+function MetricLine({ row, group }: { row: MetricRow; group: LiqGroup }) {
+  const { def, m } = row;
+  const none = m.value === null || m.value === undefined;
+  const ctx: string[] = [];
+  if (!none) {
+    if (m.rank && m.ranked_of) ctx.push(`rank ${m.rank} of ${m.ranked_of}`);
+    if (m.x_peer_median != null && Number.isFinite(m.x_peer_median)) ctx.push(`${fmtX(m.x_peer_median)} the median of your ${group === 'test' ? 'test ' : ''}LPs`);
+  }
+  return (
+    <div style={{ padding: '7px 0', borderTop: `1px solid ${C.line}` }} title={def.hint}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: C.text, minWidth: 0 }}>
+          <LevelMark level={m.level} tooFew={none} />
+          {def.label}
+        </span>
+        <span className="font-mono" style={{ fontSize: 14, fontWeight: 600, color: none ? C.faint : C.text, whiteSpace: 'nowrap' }}>
+          {none ? 'too few orders' : fmtMetric(def.unit, m.value)}
+        </span>
+      </div>
+      {(ctx.length > 0 || m.thresholds) && (
+        <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2, paddingLeft: 16, lineHeight: 1.4 }}>
+          {ctx.join(' · ')}
+          {ctx.length > 0 && m.thresholds ? <br /> : null}
+          {thresholdText(def, m)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pct(p: { p50?: number | null; p95?: number | null; p99?: number | null } | undefined, k: 'p50' | 'p95' | 'p99'): string {
+  return fmtMs(p?.[k] ?? null);
+}
+
+function ReasonList({ title, items, note }: { title: string; items: Record<string, number> | undefined; note?: string }) {
+  const rows = Object.entries(items ?? {}).sort((a, b) => b[1] - a[1]);
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 12, color: C.soft }}>{title}</div>
+      {note && <div style={{ fontSize: 11.5, color: C.faint }}>{note}</div>}
+      {rows.map(([k, v]) => (
+        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderTop: `1px solid ${C.line}` }}>
+          <span className="font-mono" style={{ color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k}</span>
+          <span className="font-mono" style={{ color: C.soft }}>{fmtCount(v)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 30 days of daily values for the LP panel, read once per instrument filter.
+const liq30d = new Map<string, { at: number; data: LiquidityPayload }>();
+
+function useLiq30d(symbol: string | null, enabled: boolean): { data: LiquidityPayload | null; error: string | null } {
+  const key = symbol ?? '';
+  const cached = liq30d.get(key);
+  const [state, setState] = useState<{ key: string; data: LiquidityPayload | null; error: string | null }>(
+    { key, data: cached?.data ?? null, error: null },
+  );
+  useEffect(() => {
+    if (!enabled) return;
+    const c = liq30d.get(key);
+    if (c && Date.now() - c.at < 5 * 60_000) { setState({ key, data: c.data, error: null }); return; }
+    let cancelled = false;
+    liquidityApi.history('30d', symbol)
+      .then((d) => {
+        if (cancelled) return;
+        liq30d.set(key, { at: Date.now(), data: d });
+        setState({ key, data: d, error: null });
+      })
+      .catch((e) => { if (!cancelled) setState({ key, data: null, error: e instanceof Error ? e.message : 'Not available' }); });
+    return () => { cancelled = true; };
+  }, [key, symbol, enabled]);
+  return state.key === key ? { data: state.data, error: state.error } : { data: null, error: null };
+}
+
+const DAILY_KEYS = ['reject_rate', 'lp_slippage_spread_share', 'lp_latency_p95_ms', 'uptime_pct'];
+
+function LpDays({ lpId, symbol }: { lpId: string; symbol: string | null }) {
+  const { data, error } = useLiq30d(symbol, true);
+  const lp = data?.lps.find((l) => l.lp_id === lpId) ?? null;
+  const days = lp?.by_day ?? [];
+  return (
+    <>
+      <SectionTitle>Last 30 days <span style={{ color: C.faint, fontWeight: 400 }}>· one value per day</span></SectionTitle>
+      {error && <div style={{ fontSize: 12, color: C.faint }}>Daily history not available: {error}</div>}
+      {!error && !data && <div style={{ fontSize: 12, color: C.faint }}>Loading…</div>}
+      {data && days.length === 0 && <div style={{ fontSize: 12, color: C.faint }}>No daily figures yet for this LP.</div>}
+      {days.length > 0 && DAILY_KEYS.map((key) => {
+        const def = metricDef(key);
+        const vals = days.map((d) => d.values?.[key]).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        if (vals.length === 0) return null;
+        const last = [...days].reverse().find((d) => typeof d.values?.[key] === 'number');
+        return (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderTop: `1px solid ${C.line}` }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: C.text }}>{def.label}</div>
+              <div className="font-mono" style={{ fontSize: 11, color: C.faint }}>
+                {last ? `${last.day}: ${fmtMetric(def.unit, last.values[key])}` : ''}
+              </div>
+            </div>
+            <Sparkline values={vals} width={120} height={30} color={C.blueSoft} />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+const OUTCOMES: Array<{ id: 'rejected' | 'timeout' | 'slipped' | 'slow' | null; label: string }> = [
+  { id: 'rejected', label: 'Rejected' },
+  { id: 'timeout', label: 'Timeouts' },
+  { id: 'slipped', label: 'Slipped' },
+  { id: 'slow', label: 'Slow' },
+  { id: null, label: 'All' },
+];
+
+function hhmmss(t: string | null | undefined): string {
+  const ms = parseTime(t ?? null);
+  if (ms === null) return '—';
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
+function downloadText(name: string, text: string) {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function outcomeText(o: LiqOrder): string {
+  if (o.taiga_reject) return o.outcome === 'NOT_SENT' ? 'Not sent (Taiga)' : 'Refused by Taiga';
+  if (o.lp_reject) return 'Rejected by LP';
+  if (o.timed_out) return 'No answer';
+  switch (o.outcome) {
+    case 'FILLED': return 'Filled';
+    case 'PARTIAL': return 'Part filled';
+    case 'CANCELED': return 'Cancelled';
+    case 'EXPIRED': return 'Expired';
+    case 'PENDING': return 'Pending';
+    default: return String(o.outcome);
+  }
+}
+
+function LpOrders({ lpId, lpName, period, symbol }: { lpId: string; lpName: string; period: LiqPeriod; symbol: string | null }) {
+  const [outcome, setOutcome] = useState<'rejected' | 'timeout' | 'slipped' | 'slow' | null>('rejected');
+  const [data, setData] = useState<LiqOrdersData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    liquidityApi.orders(lpId, { period, outcome, symbol, limit: 200 })
+      .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch((e) => { if (!cancelled) { setData(null); setError(e instanceof Error ? e.message : 'Not available'); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [lpId, period, outcome, symbol, nonce]);
+
+  const orders = data?.orders ?? [];
+  return (
+    <>
+      <SectionTitle>
+        Evidence <span style={{ color: C.faint, fontWeight: 400 }}>· the orders behind the figures</span>
+      </SectionTitle>
+      <div role="radiogroup" aria-label="Which orders" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {OUTCOMES.map((o) => {
+          const on = o.id === outcome;
+          return (
+            <button
+              key={o.label}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              className="rr-btn"
+              onClick={() => setOutcome(o.id)}
+              style={{
+                padding: '3px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 11.5, fontWeight: 600,
+                background: on ? '#ffffff' : '#0f1620', color: on ? '#05080d' : C.soft, border: `1px solid ${on ? '#ffffff' : C.line}`,
+              }}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, fontSize: 11.5, color: C.faint }}>
+        <span>
+          {loading ? 'Loading…' : error ? `Not available: ${error}` : data ? `${fmtCount(data.total)} order${data.total === 1 ? '' : 's'} · ${periodText(period)}${data.returned < data.total ? `, ${data.returned} shown` : ''}` : ''}
+        </span>
+        <span style={{ display: 'inline-flex', gap: 10 }}>
+          <button type="button" className="rr-btn" onClick={() => setNonce((n) => n + 1)} style={{ background: 'none', border: 'none', color: C.blueSoft, cursor: 'pointer', fontSize: 11.5, padding: 0 }}>
+            Refresh
+          </button>
+          <button
+            type="button"
+            className="rr-btn"
+            disabled={orders.length === 0}
+            onClick={() => downloadText(`${lpName.replace(/[^A-Za-z0-9_-]+/g, '_')}-${outcome ?? 'all'}-${period}${symbol ? `-${symbol}` : ''}.csv`, ordersCsv(orders))}
+            style={{ background: 'none', border: 'none', color: orders.length ? C.blueSoft : C.faint, cursor: orders.length ? 'pointer' : 'default', fontSize: 11.5, padding: 0 }}
+          >
+            Export CSV
+          </button>
+        </span>
+      </div>
+      {orders.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
+          <thead>
+            <tr style={{ fontSize: 10.5, color: C.faint, textAlign: 'left' }}>
+              <th style={{ fontWeight: 500, padding: '2px 0' }}>Sent (UTC)</th>
+              <th style={{ fontWeight: 500, padding: '2px 4px' }}>Order</th>
+              <th style={{ fontWeight: 500, padding: '2px 0', textAlign: 'right' }}>LP time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.slice(0, 200).map((o) => (
+              <tr key={o.clord_id} style={{ borderTop: `1px solid ${C.line}`, verticalAlign: 'top' }}>
+                <td className="font-mono" style={{ padding: '5px 0', fontSize: 11.5, color: C.soft, whiteSpace: 'nowrap' }}>{hhmmss(o.times?.sent ?? o.times?.built)}</td>
+                <td style={{ padding: '5px 4px', fontSize: 12, color: C.text, minWidth: 0 }}>
+                  <span className="font-mono">{o.symbol}</span>{' '}
+                  <span style={{ color: C.faint }}>{o.side} {fmtCount(o.qty)}</span>
+                  <div style={{ fontSize: 11, color: o.lp_reject ? '#ff8a14' : o.taiga_reject ? C.faint : C.soft }}>
+                    {outcomeText(o)}
+                    {o.reason ? ` · ${o.reason}` : ''}
+                    {o.slippage?.spread_share != null ? ` · slip ${fmtFrac(o.slippage.spread_share)} of spread` : ''}
+                  </div>
+                </td>
+                <td className="font-mono" style={{ padding: '5px 0', fontSize: 11.5, color: C.soft, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {fmtMs(o.latency_ms?.lp ?? null)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function LiqDetail({
+  r, lv, live, period, symbol, onSymbol, onClose,
+}: {
+  r: LpRow; lv: LiqView; live: LiquidityPayload | null; period: LiqPeriod; symbol: string | null;
+  onSymbol: (s: string | null) => void; onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const f = r.figures;
+  const lines = verdictLines(r, lv.group, lv.minOrders);
+  const liveRow = live?.lps.find((l) => l.lp_id === r.lpId) ?? null;
+  const symbols = !symbol ? [...(liveRow?.by_symbol ?? [])].sort((a, b) =>
+    levelRank(b.verdict?.level) - levelRank(a.verdict?.level) || a.symbol.localeCompare(b.symbol)) : [];
+  const av = f.availability;
+  const qs = f.quote_source ?? {};
+
+  return (
+    <div style={{ padding: '14px 16px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: C.faint }}>
+            {r.isTest ? 'Test LP' : 'LP'}{r.providerType ? ` · ${r.providerType}` : ''} · {periodText(period)}{symbol ? ` · ${symbol}` : ''}
+          </div>
+          <div className="font-mono" style={{ fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1.2, wordBreak: 'break-all' }}>{r.name}</div>
+        </div>
+        <button
+          type="button"
+          className="rr-btn"
+          onClick={onClose}
+          aria-label="Close LP"
+          style={{ background: 'transparent', border: 'none', color: C.soft, fontSize: 20, lineHeight: 1, cursor: 'pointer', padding: 4 }}
+        >
+          ×
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '10px 0 8px', alignItems: 'center' }}>
+        <LevelBadge level={r.level} large />
+        {r.state && r.state !== 'CONNECTED' && <GreyBadge text={stateWord(r.state).toUpperCase()} />}
+        {r.openHedges !== null && (
+          <span style={{ fontSize: 12, color: C.soft }}>{r.openHedges} open hedge{r.openHedges === 1 ? '' : 's'}</span>
+        )}
+      </div>
+
+      <SectionTitle>Is this LP a risk now?</SectionTitle>
+      {lines.map((l) => (
+        <Para key={l} color={r.level === 'LOW' ? C.soft : C.text}>{l}</Para>
+      ))}
+      <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2, lineHeight: 1.45 }}>
+        Its level is its worst dimension; two dimensions at High make it Critical. Whether it is getting worse
+        arrives with the next backend release, once 30 days of history are stored.
+      </div>
+
+      {r.dims.map((d) => (
+        <div key={d.id}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, margin: '16px 0 4px' }}>
+            <span style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>
+              {d.label}{' '}
+              <span style={{ color: C.faint, fontWeight: 400, fontSize: 12 }}>{DIMENSIONS.find((x) => x.id === d.id)?.question ?? ''}</span>
+            </span>
+            <LevelMark level={d.level} tooFew={d.level === null} size={10} />
+          </div>
+          {d.metrics.map((m) => <MetricLine key={m.key} row={m} group={lv.group} />)}
+
+          {d.id === 'rejecting' && (
+            <>
+              <Row label="Orders" note={`${fmtCount(f.fills)} filled · ${fmtCount(f.partials)} part filled · ${fmtCount(f.timeouts)} no answer`}>
+                {fmtCount(f.orders)}
+              </Row>
+              <ReasonList title={`Rejected by the LP (${fmtCount(f.lp_rejects)})`} items={f.lp_rejects_by_reason} />
+              <ReasonList
+                title={`Refused by Taiga (${fmtCount(f.taiga_rejects)})`}
+                note="Refused by the bridge before sending, or not sent: not the LP’s, never in its figures."
+                items={f.taiga_rejects_by_reason}
+              />
+            </>
+          )}
+
+          {d.id === 'slipping' && (f.slippage_fills ?? 0) > 0 && (
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 6, lineHeight: 1.45 }}>
+              Measured on {fmtCount(f.slippage_fills)} fills: {fmtCount(qs.OWN ?? 0)} against the LP’s own quote at send,{' '}
+              {fmtCount(qs.FEED ?? 0)} against a feed LP’s quote (this LP sends no prices for them). Share of the spread at send.
+              {f.lp_slippage_bps != null ? ` Average ${f.lp_slippage_bps.toFixed(2)} bps of mid.` : ''}
+            </div>
+          )}
+
+          {d.id === 'slow' && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6 }}>
+              <thead>
+                <tr style={{ fontSize: 10.5, color: C.faint, textAlign: 'right' }}>
+                  <th style={{ fontWeight: 500, textAlign: 'left', padding: '2px 0' }}>Whose time</th>
+                  <th style={{ fontWeight: 500, padding: '2px 0' }}>p50</th>
+                  <th style={{ fontWeight: 500, padding: '2px 0' }}>p95</th>
+                  <th style={{ fontWeight: 500, padding: '2px 0' }}>p99</th>
+                </tr>
+              </thead>
+              <tbody style={{ fontSize: 12 }}>
+                {[
+                  { k: 'Taiga: deal seen → sent', p: f.taiga_latency_ms },
+                  { k: 'LP: sent → acknowledged', p: f.lp_ack_ms },
+                  { k: 'LP: sent → answer', p: f.lp_latency_ms },
+                  { k: 'Client deal → answer', p: f.end_to_end_ms },
+                ].map((x) => (
+                  <tr key={x.k} style={{ borderTop: `1px solid ${C.line}`, textAlign: 'right', color: C.text }}>
+                    <td style={{ textAlign: 'left', padding: '4px 0', color: C.soft, fontSize: 11.5 }}>{x.k}</td>
+                    <td className="font-mono" style={{ paddingLeft: 4 }}>{pct(x.p, 'p50')}</td>
+                    <td className="font-mono" style={{ paddingLeft: 4 }}>{pct(x.p, 'p95')}</td>
+                    <td className="font-mono" style={{ paddingLeft: 4 }}>{pct(x.p, 'p99')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {d.id === 'slow' && (
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 4, lineHeight: 1.45 }}>
+              LPs are judged on their own time only. Rejects answered in {fmtMs(f.reject_latency_p50_ms ?? null)}, fills in{' '}
+              {fmtMs(f.fill_latency_p50_ms ?? null)} (p50).
+            </div>
+          )}
+
+          {d.id === 'availability' && av && (
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 6, lineHeight: 1.45 }}>
+              Up {av.up_hours != null ? av.up_hours.toFixed(1) : '—'} of {av.observed_hours != null ? av.observed_hours.toFixed(1) : '—'} trading hours
+              observed · {fmtCount(av.disconnects ?? 0)} disconnect{av.disconnects === 1 ? '' : 's'} · {av.md_stale_minutes != null ? av.md_stale_minutes.toFixed(1) : '—'} stale-quote
+              minutes. {f.hours_source === 'ALWAYS'
+                ? 'Test LP: counted as always open.'
+                : 'Trading hours: Sunday 22:00 to Friday 22:00 UTC. Time with the bridge stopped is not counted.'}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {symbols.length > 0 && (
+        <>
+          <SectionTitle>Instruments <span style={{ color: C.faint, fontWeight: 400 }}>· last hour, worst first</span></SectionTitle>
+          {symbols.map((s) => {
+            const rr = s.dimensions?.rejecting?.metrics?.reject_rate?.value ?? null;
+            const lat = s.dimensions?.slow?.metrics?.lp_latency_p95_ms?.value ?? null;
+            const best = levelRank(s.verdict?.level) >= 1 ? bestLpFor(live, lv.group, s.symbol, r.lpId) : null;
+            return (
+              <button
+                key={s.symbol}
+                type="button"
+                className="rr-row"
+                onClick={() => onSymbol(s.symbol)}
+                style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', borderTop: `1px solid ${C.line}`, padding: '6px 0', cursor: 'pointer' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <LevelMark level={s.verdict?.level ?? null} tooFew={!s.verdict?.level} />
+                    <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.symbol}</span>
+                  </span>
+                  <span className="font-mono" style={{ fontSize: 11.5, color: C.soft }}>
+                    rej {fmtFrac(rr)} · p95 {fmtMs(lat)} · {fmtCount(s.figures?.orders)} ord
+                  </span>
+                </div>
+                {best && (
+                  <div style={{ fontSize: 11.5, color: C.faint, paddingLeft: 15, marginTop: 2 }}>
+                    Best on {s.symbol}: <span style={{ color: C.text }}>{best.name}</span> ({LEVEL_WORD[best.level]}
+                    {best.rejectRate != null ? `, rejects ${fmtFrac(best.rejectRate)}` : ''})
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </>
+      )}
+
+      <LpDays lpId={r.lpId} symbol={symbol} />
+
+      <LpOrders lpId={r.lpId} lpName={r.name} period={period} symbol={symbol} />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+        <button
+          type="button"
+          className="rr-btn"
+          onClick={() => navigate('/hedging-strategies')}
+          style={{ padding: '9px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, background: C.blue, color: '#ffffff', border: 'none' }}
+        >
+          Review routing →
+        </button>
+        <button
+          type="button"
+          className="rr-btn"
+          onClick={() => navigate('/liquidity-providers')}
+          style={{ padding: '9px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, background: 'transparent', color: '#ffffff', border: `1px solid ${C.blueSoft}88` }}
+        >
+          Liquidity providers
+        </button>
+        <div style={{ fontSize: 11.5, color: C.faint }}>These open the page for review. Nothing is executed from here.</div>
+      </div>
+    </div>
+  );
+}
+
+function LiqLegend({ lv }: { lv: LiqView }) {
+  return (
+    <Panel style={{ width: 470, flexShrink: 0, padding: '9px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.text, fontWeight: 600 }}>
+        <span>LP level in each dimension</span>
+        <span style={{ color: C.faint, fontWeight: 400 }}>{periodText(lv.period)} · your thresholds</span>
+      </div>
+      <div style={{ height: 8, borderRadius: 4, margin: '6px 0 4px', background: rampGradientCss(), boxShadow: '0 0 12px rgba(255, 120, 0, 0.25)' }} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        {BANDS.map((b, i) => (
+          <div key={b.id} style={{ fontSize: 11.5, color: C.text }}>
+            {b.label}
+            <span style={{ display: 'block', fontSize: 10.5, color: C.faint }}>
+              {['acceptable', 'watch it', 'act soon', 'act now'][i]}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 5, fontSize: 11, color: C.faint, whiteSpace: 'nowrap' }}>
+        <span><span style={{ color: C.soft }}>○</span> too few orders</span>
+        <span><span style={{ color: C.soft, opacity: 0.5 }}>●</span> faded: disconnected</span>
+        <span>Same LP, same place in each region</span>
+      </div>
+    </Panel>
+  );
+}
+
+function LiqMapNotes({ lv }: { lv: LiqView }) {
+  // The group switch already says how many of each there are; only the test
+  // view needs saying out loud, so nobody mistakes it for the real league.
+  const notes: ReactNode[] = [];
+  if (lv.group === 'test') {
+    notes.push(<MapNote key="test" tone={C.blueSoft}>Test LPs (name ending in *): ranked and compared only with each other.</MapNote>);
+  }
+  if (notes.length === 0) return null;
+  return (
+    <div
+      style={{ position: 'absolute', left: 10, bottom: 30, maxWidth: 'calc(100% - 20px)', display: 'flex', flexDirection: 'column', gap: 6, zIndex: 2 }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {notes}
+    </div>
+  );
+}
+
+/** History figures for a period other than live, refreshed every minute. */
+function useLiqPeriod(period: LiqPeriod, symbol: string | null, enabled: boolean) {
+  const [state, setState] = useState<{ key: string; data: LiquidityPayload | null; loading: boolean; error: string | null }>(
+    { key: '', data: null, loading: false, error: null },
+  );
+  const key = `${period}|${symbol ?? ''}`;
+  useEffect(() => {
+    if (!enabled || period === 'live') return;
+    let cancelled = false;
+    const load = () => {
+      setState((s) => ({ key, data: s.key === key ? s.data : null, loading: true, error: null }));
+      liquidityApi.history(period, symbol)
+        .then((d) => { if (!cancelled) setState({ key, data: d, loading: false, error: null }); })
+        .catch((e) => {
+          if (!cancelled) setState((s) => ({ key, data: s.key === key ? s.data : null, loading: false, error: `Could not load ${periodText(period)}: ${e instanceof Error ? e.message : 'error'}` }));
+        });
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [key, period, symbol, enabled]);
+  return state.key === key ? state : { key, data: null, loading: enabled && period !== 'live', error: null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Page
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function RiskRadarPage() {
-  const { snapshot, socket, lastLiveAt, realizedMtd, flow, flowLiveAt, flowSeeded } = useRadarFeed();
+  const { snapshot, socket, lastLiveAt, realizedMtd, flow, flowLiveAt, flowSeeded, liq, liqLiveAt, liqSeeded } = useRadarFeed();
   const moves = useDailyMoves();
   const limits = useRiskLimits();
   const largest1Day = useLargest1Day();
@@ -2631,19 +3639,43 @@ export function RiskRadarPage() {
   const selectedFlow = selected ? fv.bySymbol.get(selected) ?? null : null;
   const flowRunning = flowSeeded !== false || flow !== null;
 
+  // Liquidity: the LPs, one group at a time (real LPs are never compared with
+  // test LPs). Live = the last hour from the topic; other periods are read.
+  const [liqGroupChoice, setLiqGroupChoice] = useState<LiqGroup | null>(loadLiqGroup);
+  const [liqPeriod, setLiqPeriod] = useState<LiqPeriod>(loadLiqPeriod);
+  const [liqSymbol, setLiqSymbol] = useState<string | null>(null);
+  const liqHist = useLiqPeriod(liqPeriod, liqSymbol, layer === 'liquidity');
+  const liqIndex = replaying ? liqIndexAt(replayT as number) : liqHistory.length - 1;
+  const shownLiq: LiquidityPayload | null = liqPeriod !== 'live'
+    ? liqHist.data
+    : replaying ? (liqIndex >= 0 ? liqHistory[liqIndex].payload : null) : liq;
+  const liqGroup: LiqGroup = liqGroupChoice ?? defaultGroup(liq);
+  const lv = useMemo(() => buildLiqView(shownLiq, liqGroup, liqSymbol), [shownLiq, liqGroup, liqSymbol]);
+  const liqInstruments = useMemo(() => buildLiqView(liq, liqGroup, null).instruments, [liq, liqGroup]);
+  const selectedLp = selected ? lv.byId.get(selected) ?? null : null;
+  const chooseLiqGroup = useCallback((g: LiqGroup) => { setLiqGroupChoice(g); saveLiq(LIQ_GROUP_KEY, g); setSelected(null); }, []);
+  const chooseLiqPeriod = useCallback((p: LiqPeriod) => { setLiqPeriod(p); saveLiq(LIQ_PERIOD_KEY, p); }, []);
+  const liqReady = shownLiq !== null;
+
   // One map for every layer: same instruments, same places.
   const allSymbols = useMemo(() => {
     const set = new Set(view.symbols.map((s) => s.symbol));
     for (const s of fv.symbols) set.add(s.symbol);
     return [...set];
   }, [view, fv]);
-  const imap = useMemo(
+  const imapInstruments = useMemo(
     () => buildMap(tree.groupOf, tree.order, allSymbols),
     [tree, allSymbols],
   );
+  // The Liquidity layer has its own map: one region per dimension, one dot per LP in each.
+  const imapLiquidity = useMemo(
+    () => buildLiqMap(lv.dimensions, lv.rows.map((r) => r.lpId)),
+    [lv],
+  );
+  const imap = layer === 'liquidity' ? imapLiquidity : imapInstruments;
   const items = useMemo(
-    () => (layer === 'flow' ? flowItems(fv, allSymbols) : exposureItems(view)),
-    [layer, fv, view, allSymbols],
+    () => (layer === 'flow' ? flowItems(fv, allSymbols) : layer === 'liquidity' ? liqItems(lv) : exposureItems(view)),
+    [layer, fv, view, allSymbols, lv],
   );
 
   // What an empty map means, in words.
@@ -2704,19 +3736,28 @@ export function RiskRadarPage() {
 
   // Freshness — of the layer on screen.
   const onFlow = layer === 'flow';
-  const liveAt = onFlow ? flowLiveAt : lastLiveAt;
-  const hasData = onFlow ? flow !== null : snapshot !== null;
-  const shownAsOf = onFlow ? fv.asOf : view.asOf;
+  const onLiq = layer === 'liquidity';
+  const liveAt = onFlow ? flowLiveAt : onLiq ? liqLiveAt : lastLiveAt;
+  const hasData = onFlow ? flow !== null : onLiq ? liq !== null : snapshot !== null;
+  const shownAsOf = onFlow ? fv.asOf : onLiq ? lv.asOf : view.asOf;
   const liveFresh = socket === 'open' && liveAt !== null && now - liveAt < LIVE_STALE_MS;
   let chip: { color: string; text: string; blink?: boolean };
-  if (replaying) {
+  if (onLiq && liqPeriod !== 'live') {
+    chip = liqHist.data
+      ? { color: C.blueSoft, text: `${PERIODS.find((p) => p.id === liqPeriod)?.label} · as of ${fmtUtcTime(lv.asOf)}` }
+      : liqHist.error
+        ? { color: '#ff3b30', text: `${periodText(liqPeriod)} not available` }
+        : { color: C.grey, text: `Loading ${periodText(liqPeriod)}…` };
+  } else if (replaying) {
     chip = { color: '#ffb020', text: `Replay · ${fmtUtcTime(history[replayIndex].t)}` };
   } else if (!hasData) {
     chip = socket === 'closed'
       ? { color: '#ff3b30', text: 'Live updates offline' }
       : onFlow && flowSeeded === false
         ? { color: '#ffb020', text: 'Flow feed not running' }
-        : { color: C.grey, text: onFlow ? 'Waiting for flow data…' : 'Waiting for exposure data…' };
+        : onLiq && liqSeeded === false
+          ? { color: '#ffb020', text: 'Liquidity feed not running' }
+          : { color: C.grey, text: onFlow ? 'Waiting for flow data…' : onLiq ? 'Waiting for LP data…' : 'Waiting for exposure data…' };
   } else if (liveFresh) {
     chip = { color: '#3ddc57', text: `Live · as of ${fmtUtcTime(shownAsOf)}`, blink: true };
   } else if (socket === 'closed') {
@@ -2777,6 +3818,8 @@ export function RiskRadarPage() {
         {/* Summary cards */}
         {layer === 'flow' ? (
           shownFlow ? <FlowCards fv={fv} upto={flowIndex} scope={scope} /> : <PendingCards labels={FLOW_CARDS} />
+        ) : layer === 'liquidity' ? (
+          liqReady ? <LiqCards lv={lv} onSelect={setSelected} /> : <PendingCards labels={LIQ_CARDS} />
         ) : layer !== 'exposure' ? (
           <PendingCards labels={PENDING_CARDS[layer]} />
         ) : pendingPlatform ? (
@@ -2814,7 +3857,10 @@ export function RiskRadarPage() {
                 })}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
-                {missing.length > 0 && shownAlone.length > 0 && (
+                {layer === 'liquidity' && (
+                  <LiqControls lv={lv} period={liqPeriod} onGroup={chooseLiqGroup} onPeriod={chooseLiqPeriod} />
+                )}
+                {layer !== 'liquidity' && missing.length > 0 && shownAlone.length > 0 && (
                   <div style={{ fontSize: 12, color: '#ffb020', whiteSpace: 'nowrap' }}>
                     {missing.map((p) => PLATFORM_LABEL[p]).join(' and ')} not in the feed · showing{' '}
                     {shownAlone.map((p) => PLATFORM_LABEL[p]).join(' and ')} only
@@ -2823,7 +3869,7 @@ export function RiskRadarPage() {
                 {layer === 'flow' && shownFlow && (
                   <FlowModeSwitch mode={flowMode} onChange={chooseFlowMode} markoutAvailable={fv.hasMarkout} />
                 )}
-                <div role="radiogroup" aria-label="Trading platform" style={{ display: 'flex', alignItems: 'center' }}>
+                {layer !== 'liquidity' && <div role="radiogroup" aria-label="Trading platform" style={{ display: 'flex', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: C.soft, marginRight: 8 }}>Platform</span>
                   {SCOPES.map((o, i) => {
                     const on = o.id === scope;
@@ -2849,7 +3895,7 @@ export function RiskRadarPage() {
                       </button>
                     );
                   })}
-                </div>
+                </div>}
               </div>
             </div>
 
@@ -2857,25 +3903,46 @@ export function RiskRadarPage() {
               <RadarMap
                 items={items}
                 imap={imap}
-                active={layer === 'exposure' || (layer === 'flow' && shownFlow !== null)}
+                active={layer === 'exposure' || (layer === 'flow' && shownFlow !== null) || (layer === 'liquidity' && liqReady)}
                 selected={selected}
                 onSelect={setSelected}
               >
-                {layer === 'liquidity' && (
+                {layer === 'liquidity' && !liqReady && (
                   <div
                     style={{
                       position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
                       background: '#080c12', border: `1px dashed ${C.grey}`, borderRadius: 8,
-                      padding: '14px 20px', textAlign: 'center', width: 380, pointerEvents: 'none', zIndex: 2,
+                      padding: '14px 20px', textAlign: 'center', width: 400, pointerEvents: 'none', zIndex: 2,
                     }}
                   >
                     <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>
-                      {PENDING_TEXT[layer].title} — awaiting data feed
+                      {liqPeriod !== 'live'
+                        ? liqHist.error ? `${periodText(liqPeriod)} not available` : `Loading ${periodText(liqPeriod)}…`
+                        : liqSeeded === false ? 'Liquidity — awaiting data feed' : 'Waiting for LP data…'}
                     </div>
                     <div style={{ fontSize: 12.5, color: C.soft, marginTop: 6, lineHeight: 1.5 }}>
-                      Same instruments, same places. This layer lights up when its measures are published.
+                      {liqPeriod !== 'live' && liqHist.error
+                        ? liqHist.error
+                        : 'One region per measure, one dot per LP. The map lights up when the service publishes its LP figures.'}
                     </div>
                   </div>
+                )}
+                {layer === 'liquidity' && liqReady && lv.rows.length === 0 && (
+                  <div
+                    style={{
+                      position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+                      background: '#080c12', border: `1px dashed ${C.grey}`, borderRadius: 8,
+                      padding: '14px 20px', textAlign: 'center', width: 420, pointerEvents: 'none', zIndex: 2,
+                      fontSize: 13, color: C.soft, lineHeight: 1.5,
+                    }}
+                  >
+                    {liqSymbol
+                      ? `No ${liqGroup === 'test' ? 'test LP' : 'LP'} filled ${liqSymbol} in the ${periodText(lv.period)}.`
+                      : `No ${liqGroup === 'test' ? 'test LPs' : 'real LPs'} in the ${periodText(lv.period)}.`}
+                  </div>
+                )}
+                {layer === 'liquidity' && liqReady && (
+                  <LiqMapNotes lv={lv} />
                 )}
                 <div
                   style={{
@@ -2883,7 +3950,9 @@ export function RiskRadarPage() {
                     pointerEvents: 'none', textShadow: '0 0 6px #05080d',
                   }}
                 >
-                  {tree.source ? `Groups: symbol tree of ${tree.source}` : 'Symbol groups not loaded'}
+                  {layer === 'liquidity'
+                    ? `Regions: the measures · ${liqSymbol ? `${liqSymbol} only` : 'all instruments'}`
+                    : tree.source ? `Groups: symbol tree of ${tree.source}` : 'Symbol groups not loaded'}
                 </div>
                 {layer === 'exposure' && !snapshot && view.symbols.length === 0 && (
                   <div
@@ -2950,6 +4019,21 @@ export function RiskRadarPage() {
               ) : (
                 <FlowList fv={fv} scope={scope} scopeText={scopeLabel(scope)} onSelect={setSelected} />
               )
+            ) : layer === 'liquidity' ? (
+              !liqReady ? (
+                <PendingInspector layer="liquidity" />
+              ) : selectedLp ? (
+                <LiqDetail
+                  r={selectedLp} lv={lv} live={liq} period={liqPeriod} symbol={liqSymbol}
+                  onSymbol={(s) => setLiqSymbol(s)} onClose={() => setSelected(null)}
+                />
+              ) : (
+                <LiqList
+                  lv={lv} period={liqPeriod} instruments={liqInstruments} symbol={liqSymbol}
+                  onSymbol={setLiqSymbol} onSelect={setSelected}
+                  loading={liqPeriod !== 'live' && liqHist.loading} error={liqPeriod !== 'live' ? liqHist.error : null}
+                />
+              )
             ) : layer !== 'exposure' ? (
               <PendingInspector layer={layer} />
             ) : pendingPlatform ? (
@@ -2965,7 +4049,7 @@ export function RiskRadarPage() {
         {/* Timeline + legend */}
         <div style={{ display: 'flex', gap: 12 }}>
           <Timeline replayT={replaying ? replayT : null} playing={playing} onScrub={scrub} onPlay={togglePlay} />
-          {layer === 'flow' && shownFlow ? <FlowLegend fv={fv} /> : <Legend layer={layer} view={view} />}
+          {layer === 'flow' && shownFlow ? <FlowLegend fv={fv} /> : layer === 'liquidity' && liqReady ? <LiqLegend lv={lv} /> : <Legend layer={layer} view={view} />}
         </div>
       </div>
     </div>

@@ -1935,7 +1935,7 @@ export function connectPortfolioExposureWebSocket(
 export const RISK_RADAR_EXPOSURE_TOPIC = 'portfolio.exposure.symbols';
 /** Realised P&L month to date: the loss taken this month comes off the limit. */
 export const RISK_RADAR_MONTH_TOPIC = 'portfolio.summary.month';
-const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC, RISK_RADAR_MONTH_TOPIC, 'radar.flow.symbols'];
+const RISK_RADAR_TOPICS = [RISK_RADAR_EXPOSURE_TOPIC, RISK_RADAR_MONTH_TOPIC, 'radar.flow.symbols', 'radar.liquidity.lps'];
 
 /**
  * One-shot snapshot the Exposure layer opens with — same shape as the topic,
@@ -1982,6 +1982,7 @@ export function connectRiskRadarWebSocket(
   onStatus?: (status: 'open' | 'closed') => void,
   onMonth?: (data: PortfolioSummaryData) => void,
   onFlow?: (data: FlowPayload) => void,
+  onLiquidity?: (data: LiquidityPayload) => void,
 ): () => void {
   let ws: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2005,9 +2006,16 @@ export function connectRiskRadarWebSocket(
       const isExposure = raw.includes(RISK_RADAR_EXPOSURE_TOPIC);
       const isMonth = !isExposure && !!onMonth && raw.includes(RISK_RADAR_MONTH_TOPIC);
       const isFlow = !isExposure && !isMonth && !!onFlow && raw.includes('radar.flow.symbols');
-      if (!isExposure && !isMonth && !isFlow) return;
+      const isLiquidity = !isExposure && !isMonth && !isFlow && !!onLiquidity && raw.includes('radar.liquidity.lps');
+      if (!isExposure && !isMonth && !isFlow && !isLiquidity) return;
       try {
         const envelope = JSON.parse(raw);
+        if (isLiquidity) {
+          // Envelope {topic, timestamp_ms, data}, as the flow topic.
+          const data = envelope.topic === 'radar.liquidity.lps' ? envelope.data as LiquidityPayload | undefined : undefined;
+          if (data && Array.isArray(data.lps)) onLiquidity?.(data);
+          return;
+        }
         if (isFlow) {
           // The flow topic's envelope is {topic, timestamp_ms, data}: no SNAPSHOT type is promised.
           const data = envelope.topic === 'radar.flow.symbols' ? envelope.data as FlowPayload | undefined : undefined;
@@ -4145,6 +4153,224 @@ export const flowApi = {
     setBands: (bands: FlowBands) => putFlowSettings('bands', bands),
     /** Any subset of the markout settings. */
     setMarkout: (m: Partial<FlowMarkoutSettings>) => putFlowSettings('markout', m),
+  },
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Risk Radar — Liquidity layer (NexRisk_Risk_Radar_Liquidity_API.md v1.0, phase 1)
+//
+// One payload per period: live (the last hour, topic radar.liquidity.lps, at
+// most every 5 s) or history (today / 7d / mtd / 30d). Every LP carries its
+// verdict and four dimensions of metrics; each metric its value, level, rank
+// within the LP's group (real LPs and test LPs are never compared), peer
+// median and thresholds. value null = too few orders: no level, no rank.
+// Phase 2/3 fields (outlook, pricing, counterparty) are absent, not null.
+// ════════════════════════════════════════════════════════════════════════════
+
+export type LiqLevel = 'LOW' | 'WARNING' | 'HIGH' | 'CRITICAL';
+export type LiqDimensionId = 'rejecting' | 'slipping' | 'slow' | 'availability';
+export type LiqPeriod = 'live' | 'today' | '7d' | 'mtd' | '30d';
+export type LiqGroup = 'real' | 'test';
+
+export interface LiqThresholds { warning: number; high: number; critical: number; worse: 'HIGHER' | 'LOWER' }
+
+export interface LiqMetric {
+  value: number | null;
+  level: LiqLevel | null;
+  rank: number | null;
+  ranked_of: number | null;
+  peer_median: number | null;
+  x_peer_median: number | null;
+  thresholds?: LiqThresholds;
+}
+
+export interface LiqDimension { level: LiqLevel | null; metrics: Record<string, LiqMetric | undefined> }
+
+export interface LiqVerdict {
+  level: LiqLevel | null;
+  /** WORST_DIMENSION, TWO_DIMENSIONS_HIGH, DISCONNECTED_WITH_OPEN_HEDGES, TOO_FEW_ORDERS */
+  reasons: string[];
+  drivers: Array<{ dimension: LiqDimensionId; metric: string; level: LiqLevel; value: number | null }>;
+  dimensions_high: number;
+}
+
+export interface LiqPercentiles { p50?: number | null; p95?: number | null; p99?: number | null }
+
+export interface LiqFigures {
+  orders?: number;
+  enough_orders?: boolean;
+  lp_rejects?: number;
+  lp_rejects_by_reason?: Record<string, number>;
+  taiga_rejects?: number;
+  taiga_rejects_by_reason?: Record<string, number>;
+  timeouts?: number;
+  partials?: number;
+  fills?: number;
+  qty_requested?: number;
+  qty_filled?: number;
+  slippage_fills?: number;
+  lp_slippage_bps?: number | null;
+  quote_source?: { OWN?: number; FEED?: number };
+  spread_basis?: string;
+  lp_latency_ms?: LiqPercentiles;
+  lp_ack_ms?: LiqPercentiles;
+  taiga_latency_ms?: LiqPercentiles;
+  end_to_end_ms?: LiqPercentiles;
+  reject_latency_p50_ms?: number | null;
+  fill_latency_p50_ms?: number | null;
+  availability?: { observed_hours?: number; up_hours?: number; disconnects?: number; md_stale_minutes?: number };
+  hours_source?: 'DEFAULT' | 'ALWAYS' | string;
+}
+
+export interface LiqLpCore {
+  lp_id: string;
+  lp_name: string;
+  provider_type?: string;
+  is_test: boolean;
+  verdict: LiqVerdict;
+  dimensions: Partial<Record<LiqDimensionId, LiqDimension>>;
+  broker_own?: { taiga_latency_p95_ms?: LiqMetric };
+  figures: LiqFigures;
+}
+
+export interface LiqLpSymbol extends LiqLpCore { symbol: string }
+
+export interface LiqLp extends LiqLpCore {
+  /** Live only. */
+  state?: 'CONNECTED' | 'DEGRADED' | 'DISCONNECTED' | 'UNKNOWN';
+  sessions?: { TRADING?: string; MARKETDATA?: string };
+  open_hedges?: number;
+  by_symbol?: LiqLpSymbol[];
+  /** History only: the last 30 days. */
+  by_day?: Array<{ day: string; orders: number; values: Record<string, number | null> }>;
+}
+
+export interface LiquidityPayload {
+  period: LiqPeriod;
+  window_sec?: number;
+  as_of: string;
+  groups: Partial<Record<LiqGroup, number>>;
+  peer_medians?: Partial<Record<LiqGroup, Record<string, number | null>>>;
+  settings?: { min_orders?: number; max_quote_age_sec?: number };
+  symbol?: string | null;
+  lps: LiqLp[];
+}
+
+export type LiqOrderOutcome = 'FILLED' | 'PARTIAL' | 'REJECTED' | 'CANCELED' | 'EXPIRED'
+  | 'LOCAL_REJECT' | 'NOT_SENT' | 'NO_ANSWER' | 'PENDING';
+
+export interface LiqOrder {
+  clord_id: string;
+  symbol: string;
+  lp_symbol?: string;
+  source?: string;
+  side: 'BUY' | 'SELL' | string;
+  qty: number;
+  filled_qty: number;
+  avg_px: number | null;
+  outcome: LiqOrderOutcome | string;
+  lp_reject: boolean;
+  taiga_reject: boolean;
+  timed_out: boolean;
+  reason: string | null;
+  times: Partial<Record<'deal' | 'seen' | 'built' | 'sent' | 'ack' | 'answer' | 'timeout', string | null>>;
+  latency_ms: Partial<Record<'lp' | 'lp_ack' | 'taiga' | 'end_to_end', number | null>>;
+  quote: { source?: 'OWN' | 'FEED' | string; bid?: number | null; ask?: number | null; age_ms?: number | null } | null;
+  slippage: { price: number | null; spread_share: number | null; bps: number | null } | null;
+}
+
+export interface LiqOrdersData {
+  lp_id: string;
+  period: LiqPeriod;
+  outcome: string | null;
+  symbol: string | null;
+  total: number;
+  returned: number;
+  orders: LiqOrder[];
+  as_of?: string;
+}
+
+export interface LiquiditySettings {
+  gates: { min_orders: number; max_quote_age_sec: number };
+  thresholds: Record<string, LiqThresholds & { dimension?: string }>;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+function unwrapLiquiditySettings(body: unknown): LiquiditySettings | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  const inner = b.data && typeof b.data === 'object' ? (b.data as Record<string, unknown>) : null;
+  const section = inner && 'thresholds' in inner ? inner : 'thresholds' in b ? b : null;
+  return section as LiquiditySettings | null;
+}
+
+export type LiquiditySettingsSaveResult =
+  | { kind: 'ok';        data: LiquiditySettings | null; warnings: string[] }
+  | { kind: 'invalid';   errors: string[] }
+  | { kind: 'standby';   message: string }
+  | { kind: 'forbidden'; message: string }
+  | { kind: 'error';     status: number; message: string };
+
+async function putLiquiditySettings(path: 'thresholds' | 'gates', payload: unknown): Promise<LiquiditySettingsSaveResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/v1/settings/liquidity/${path}`, {
+      method:      'PUT',
+      cache:       'no-store',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify(payload),
+    });
+  } catch (e) {
+    return { kind: 'error', status: 0, message: e instanceof Error ? e.message : 'Network error' };
+  }
+  const body = await res.json().catch(() => ({} as Record<string, unknown>));
+  const text = (body as { message?: string; error?: string }).message ?? (body as { error?: string }).error;
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(riskLimitErrorText) : []);
+  if (res.ok) return { kind: 'ok', data: unwrapLiquiditySettings(body), warnings: list((body as { warnings?: unknown }).warnings) };
+  if (res.status === 400) {
+    const errs = list((body as { errors?: unknown }).errors);
+    return { kind: 'invalid', errors: errs.length ? errs : [text ?? 'The values were rejected.'] };
+  }
+  if (res.status === 409) return { kind: 'standby', message: text ?? 'This server is the Standby. Make the change on the active server.' };
+  if (res.status === 401 || res.status === 403) return { kind: 'forbidden', message: text ?? 'You do not have permission to change these settings.' };
+  return { kind: 'error', status: res.status, message: text ?? `HTTP ${res.status}` };
+}
+
+/** The payloads are sent raw; a {success, data} envelope is unwrapped all the same. */
+function unwrapLiq<T>(body: unknown, key: string): T {
+  const b = body as Record<string, unknown> | null;
+  if (b && typeof b === 'object' && !(key in b) && b.data && typeof b.data === 'object' && key in (b.data as object)) {
+    return b.data as T;
+  }
+  return body as T;
+}
+
+export const liquidityApi = {
+  /** Live payload (the last hour). Rejects on 503 while the layer starts. */
+  get: async () => unwrapLiq<LiquidityPayload>(await fetchAPI<unknown>('/api/v1/risk-radar/liquidity'), 'lps'),
+  history: async (period: Exclude<LiqPeriod, 'live'>, symbol?: string | null) =>
+    unwrapLiq<LiquidityPayload>(await fetchAPI<unknown>(
+      `/api/v1/risk-radar/liquidity/history?period=${period}${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ''}`,
+    ), 'lps'),
+  orders: async (lpId: string, o: { period: LiqPeriod; outcome?: 'rejected' | 'timeout' | 'slipped' | 'slow' | null; symbol?: string | null; limit?: number }) => {
+    const q = new URLSearchParams({ period: o.period });
+    if (o.outcome) q.set('outcome', o.outcome);
+    if (o.symbol) q.set('symbol', o.symbol);
+    if (o.limit) q.set('limit', String(o.limit));
+    return unwrapLiq<LiqOrdersData>(
+      await fetchAPI<unknown>(`/api/v1/risk-radar/liquidity/${encodeURIComponent(lpId)}/orders?${q.toString()}`), 'orders');
+  },
+  settings: {
+    get: async (): Promise<LiquiditySettings> => {
+      const s = unwrapLiquiditySettings(await fetchAPI<unknown>('/api/v1/settings/liquidity'));
+      if (!s) throw new Error('The liquidity settings came back in an unexpected shape');
+      return s;
+    },
+    setThresholds: (thresholds: Record<string, Partial<Pick<LiqThresholds, 'warning' | 'high' | 'critical'>>>) =>
+      putLiquiditySettings('thresholds', { thresholds }),
+    setGates: (gates: Partial<LiquiditySettings['gates']>) => putLiquiditySettings('gates', gates),
   },
 };
 

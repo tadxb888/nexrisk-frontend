@@ -176,6 +176,96 @@ export async function cockpitRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/v1/risk-radar/liquidity
+   * Risk Radar, Liquidity layer — the last radar.liquidity.lps payload: every
+   * LP's verdict and the metrics behind it over the last hour
+   * (docs/NexRisk_Risk_Radar_Liquidity_API.md v1.0). 503 while the layer
+   * starts; forwarded as is.
+   */
+  fastify.get(
+    '/risk-radar/liquidity',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const response = await nexriskApi.get<unknown>('/api/v1/risk-radar/liquidity');
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+      return reply.send(response.data);
+    }
+  );
+
+  const LIQ_PERIODS = new Set(['today', '7d', 'mtd', '30d']);
+  const LIQ_OUTCOMES = new Set(['rejected', 'timeout', 'slipped', 'slow']);
+  const validSymbol = (s: unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 64;
+
+  /**
+   * GET /api/v1/risk-radar/liquidity/history?period=today|7d|mtd|30d[&symbol=]
+   * The same figures over a period, plus 30 days of daily values per LP.
+   */
+  fastify.get(
+    '/risk-radar/liquidity/history',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const q = request.query as { period?: unknown; symbol?: unknown };
+      if (typeof q.period !== 'string' || !LIQ_PERIODS.has(q.period)) {
+        return reply.code(400).send({ success: false, error: 'period must be today, 7d, mtd or 30d' });
+      }
+      if (q.symbol !== undefined && !validSymbol(q.symbol)) {
+        return reply.code(400).send({ success: false, error: 'Invalid symbol' });
+      }
+      const query: Record<string, string> = { period: q.period };
+      if (q.symbol !== undefined) query.symbol = q.symbol as string;
+      const response = await nexriskApi.get<unknown>('/api/v1/risk-radar/liquidity/history', query);
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+      return reply.send(response.data);
+    }
+  );
+
+  /**
+   * GET /api/v1/risk-radar/liquidity/:lp_id/orders?period=…[&outcome=][&symbol=][&limit=]
+   * The orders behind an LP's figures: the evidence a broker takes to the LP.
+   */
+  fastify.get(
+    '/risk-radar/liquidity/:lp_id/orders',
+    { preHandler: [fastify.authenticate] }, // module access via moduleGate('cockpit')
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { lp_id } = request.params as { lp_id: string };
+      if (typeof lp_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$/.test(lp_id)) {
+        return reply.code(400).send({ success: false, error: 'Invalid LP id' });
+      }
+      const q = request.query as { period?: unknown; outcome?: unknown; symbol?: unknown; limit?: unknown };
+      if (typeof q.period !== 'string' || !(q.period === 'live' || LIQ_PERIODS.has(q.period))) {
+        return reply.code(400).send({ success: false, error: 'period must be live, today, 7d, mtd or 30d' });
+      }
+      const query: Record<string, string> = { period: q.period };
+      if (q.outcome !== undefined) {
+        if (typeof q.outcome !== 'string' || !LIQ_OUTCOMES.has(q.outcome)) {
+          return reply.code(400).send({ success: false, error: 'outcome must be rejected, timeout, slipped or slow' });
+        }
+        query.outcome = q.outcome;
+      }
+      if (q.symbol !== undefined) {
+        if (!validSymbol(q.symbol)) return reply.code(400).send({ success: false, error: 'Invalid symbol' });
+        query.symbol = q.symbol;
+      }
+      if (q.limit !== undefined) {
+        const n = Number(q.limit);
+        if (!Number.isInteger(n) || n < 1 || n > 2000) {
+          return reply.code(400).send({ success: false, error: 'limit must be 1 to 2000' });
+        }
+        query.limit = String(n);
+      }
+      const response = await nexriskApi.get<unknown>(`/api/v1/risk-radar/liquidity/${encodeURIComponent(lp_id)}/orders`, query);
+      if (!response.ok) {
+        return reply.code(response.status).send(response.error);
+      }
+      return reply.send(response.data);
+    }
+  );
+
+  /**
    * GET /api/v1/risk-radar/month-pnl
    * Realised P&L of the whole book, month to date, broker view — the loss the
    * book has already taken this month, which Risk Radar takes off the monthly

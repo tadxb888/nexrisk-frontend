@@ -73,6 +73,7 @@ import { LpProfilePage }         from '@/pages/settings/LpProfilePage';
 import { AlertingPage }          from '@/pages/settings/AlertingPage';
 import { RiskLimitsPage }        from '@/pages/settings/RiskLimitsPage';
 import { FlowToxicityPage }      from '@/pages/settings/FlowToxicityPage';
+import { LiquiditySettingsPage } from '@/pages/settings/LiquiditySettingsPage';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -179,6 +180,7 @@ function App() {
               <Route path="/settings/alerts"             element={<AlertingPage />} />
               <Route path="/settings/risk-limits"        element={<RiskLimitsPage />} />
               <Route path="/settings/flow-toxicity"      element={<FlowToxicityPage />} />
+              <Route path="/settings/liquidity"          element={<LiquiditySettingsPage />} />
 
               {/* Legacy 6-box settings routes — redirect to the new hub.
                   Each one will be replaced with a direct route to its new

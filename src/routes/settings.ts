@@ -1458,6 +1458,37 @@ export async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   );
 
+  // Liquidity (Risk Radar, Liquidity layer — NexRisk_Risk_Radar_Liquidity_API.md
+  // v1.0 §4): per-metric thresholds and the two gates. Same conventions as
+  // Flow Toxicity: 400 {errors[]} = nothing saved, 409 = Standby.
+
+  /** GET /api/v1/settings/liquidity */
+  fastify.get(
+    '/settings/liquidity',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.read')] },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      return proxyGetRaw('/api/v1/settings/liquidity', reply);
+    }
+  );
+
+  /** PUT /api/v1/settings/liquidity/thresholds — { thresholds: { metric: { warning?, high?, critical? } } } */
+  fastify.put(
+    '/settings/liquidity/thresholds',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/liquidity/thresholds', request.body, reply, bearerFromSession(request));
+    }
+  );
+
+  /** PUT /api/v1/settings/liquidity/gates — { min_orders?, max_quote_age_sec? } */
+  fastify.put(
+    '/settings/liquidity/gates',
+    { preHandler: [fastify.authenticate, fastify.requireCapability('config.write')] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      return proxyWriteRaw('PUT', '/api/v1/settings/liquidity/gates', request.body, reply, bearerFromSession(request));
+    }
+  );
+
   /**
    * GET /api/v1/settings/fixbridge/status  (§ G4 — live)
    * Queries the bridge over its command channel + core service client view.

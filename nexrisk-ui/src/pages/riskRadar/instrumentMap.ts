@@ -99,7 +99,7 @@ export function hashSymbol(s: string): number {
 
 // ── Regions ──────────────────────────────────────────────────
 
-function layoutRegions(names: string[]): Region[] {
+export function layoutRegions(names: string[]): Region[] {
   const n = names.length;
   if (n === 0) return [];
   const rows = n <= 3 ? 1 : n <= 10 ? 2 : 3;
@@ -140,7 +140,7 @@ function layoutRegions(names: string[]): Region[] {
 // the first one sits in the middle. The area keeps clear of the caption strip
 // at the top and of the region's lower edge.
 
-function halton(index: number, base: number): number {
+export function halton(index: number, base: number): number {
   let f = 1;
   let r = 0;
   for (let i = index; i > 0; i = Math.floor(i / base)) {

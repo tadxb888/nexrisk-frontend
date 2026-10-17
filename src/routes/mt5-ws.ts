@@ -224,6 +224,8 @@ function connectBackend() {
                'portfolio.exposure.symbols',
                // Risk Radar, Flow toxicity layer (NexRisk_Risk_Radar_Flow_API.md).
                'radar.flow.symbols',
+               // Risk Radar, Liquidity layer (NexRisk_Risk_Radar_Liquidity_API.md).
+               'radar.liquidity.lps',
                'quote',
                'system.health']
     }));
